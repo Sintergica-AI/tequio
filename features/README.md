@@ -5,6 +5,18 @@ Añade a Plane CE una wiki a nivel de organización y un gestor de archivos
 
 ## Qué agrega
 
+**Diagramas Mermaid en páginas**
+- Los bloques ` ```mermaid ` se renderizan como diagrama en el editor de páginas,
+  con un botón para alternar entre diagrama y código fuente.
+- Mermaid (~1 MB) se importa de forma dinámica: queda en chunks aparte que solo
+  se descargan la primera vez que se muestra un diagrama.
+- Se inicializa con `securityLevel: "strict"`, porque el contenido lo escriben
+  usuarios: sanea el marcado y desactiva los manejadores de clic.
+- Si la sintaxis falla se muestra el error de Mermaid y el código sigue accesible.
+- Vive en `packages/editor` (extensión `code`), así que `sync-web.sh` sincroniza
+  también ese paquete y el `pnpm-lock.yaml` (el Dockerfile instala con
+  `--frozen-lockfile`).
+
 **Wiki por organización** (`/<slug>/wiki`)
 - Entrada "Wiki" en el sidebar del workspace.
 - Listado con pestañas Public / Private / Archived, búsqueda, orden y filtros.

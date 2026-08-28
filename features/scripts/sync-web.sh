@@ -31,7 +31,10 @@ while IFS= read -r line; do
   else
     TO_COPY+=("$path")
   fi
-done < <(git status --porcelain -- 'apps/web' 'packages/i18n' 'packages/constants')
+done < <(git status --porcelain -- 'apps/web' 'packages/i18n' 'packages/constants' 'packages/editor' 'pnpm-lock.yaml')
+# pnpm-lock.yaml es imprescindible: el Dockerfile instala con
+# --frozen-lockfile, así que si package.json cambia y el lock no viaja,
+# el build falla.
 
 echo "=== ${#TO_COPY[@]} archivos a copiar, ${#TO_DELETE[@]} a borrar ==="
 
@@ -51,7 +54,7 @@ done
 # Poda: los archivos que nunca llegaron a git (untracked y luego borrados) no
 # aparecen en `git status`, así que se comparan directamente los directorios que
 # esta función posee. Sin esto quedaría código muerto que el build sigue compilando.
-OWNED_DIRS="apps/web/core/components/drive apps/web/core/components/pages/workspace"
+OWNED_DIRS="apps/web/core/components/drive apps/web/core/components/pages/workspace packages/editor/src/core/extensions/code"
 for d in $OWNED_DIRS; do
   [ -d "$SRC/$d" ] || continue
   local_files=$(cd "$SRC/$d" && ls -1 2>/dev/null | sort)
