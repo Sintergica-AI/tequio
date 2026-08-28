@@ -5,7 +5,11 @@ Este producto contiene código derivado de Plane
 (https://github.com/makeplane/plane), Copyright (c) 2023-present
 Plane Software, Inc. and contributors, licenciado bajo AGPL-3.0-only.
 
-Los archivos de esta extensión (patch/page_ext_*.py, patch/patch_ce.py)
-se distribuyen bajo AGPL-3.0-only, la misma licencia de la obra original.
+Los archivos de esta extensión se distribuyen bajo AGPL-3.0-only, la misma
+licencia de la obra original:
+  - patch/page_ext_*.py, patch/patch_ce.py
+  - features/backend/*.py
+  - features/live/workspace-page.service.ts
+  - features/web-live.patch (modificaciones sobre apps/web y apps/live)
 
 Texto completo de la licencia: https://www.gnu.org/licenses/agpl-3.0.txt

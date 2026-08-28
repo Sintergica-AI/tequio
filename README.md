@@ -1,12 +1,21 @@
 # plane-ce-api-extension
 
-Extensión para **Plane Community Edition v1.4.2** que expone *Pages* (wiki) y
-*features* en el **API público** (autenticación por `X-API-Key`), y corrige el
-asistente de IA integrado.
+Extensiones para **Plane Community Edition v1.4.2** self-hosted. Dos capas
+independientes que se apilan sobre las imágenes oficiales, **sin migraciones de
+base de datos**:
 
-Con esto el [servidor MCP oficial de Plane](https://github.com/makeplane/plane-mcp-server)
-puede gestionar páginas contra una instancia self-hosted de CE, algo que de
+| Capa | Carpeta | Qué añade |
+|---|---|---|
+| 1 · API pública | [`patch/`](patch/) | *Pages* y *features* en el API `X-API-Key` + fix del asistente de IA |
+| 2 · Wiki y archivos | [`features/`](features/) | Wiki por organización y gestor de archivos, con su interfaz web |
+
+La capa 1 hace que el
+[servidor MCP oficial de Plane](https://github.com/makeplane/plane-mcp-server)
+pueda gestionar páginas contra una instancia self-hosted de CE, algo que de
 fábrica solo funciona contra Plane Cloud / Commercial.
+
+La capa 2 añade dos funciones completas que en Plane son de la edición
+Commercial, incluyendo el frontend. Ver [`features/README.md`](features/README.md).
 
 ---
 

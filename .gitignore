@@ -4,3 +4,8 @@ __pycache__/
 plane.env
 variables.env
 .DS_Store
+
+# Configuración de despliegue con datos del servidor (host, puerto, llave).
+# Nunca debe subirse: usa deploy.env.example como plantilla.
+deploy.env
+features/scripts/deploy.env
