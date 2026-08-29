@@ -44,8 +44,24 @@ patch(
 )
 
 # ---------------------------------------------------------------------------
+# Finance module: register the app and mount its URLs
+# ---------------------------------------------------------------------------
+patch(
+    "/code/plane/settings/common.py",
+    '    "plane.authentication",\n    # Third-party things',
+    '    "plane.authentication",\n    "plane.finance",\n    # Third-party things',
+)
+patch(
+    "/code/plane/urls.py",
+    '    path("api/v1/", include("plane.api.urls")),',
+    '    path("api/", include("plane.finance.urls")),\n'
+    '    path("api/v1/", include("plane.api.urls")),',
+)
+
+# ---------------------------------------------------------------------------
 # Sanity: compile every file we touched or added
 # ---------------------------------------------------------------------------
+import glob
 import py_compile
 
 for f in (
@@ -55,6 +71,10 @@ for f in (
     "/code/plane/app/views/workspace_page_ext.py",
     "/code/plane/app/views/drive_ext.py",
     "/code/plane/app/serializers/workspace_page_ext.py",
+    "/code/plane/settings/common.py",
+    "/code/plane/urls.py",
+    *sorted(glob.glob("/code/plane/finance/*.py")),
+    *sorted(glob.glob("/code/plane/finance/migrations/*.py")),
 ):
     py_compile.compile(f, doraise=True)
     print(f"{OK} compiles {f}")

@@ -5,6 +5,25 @@ Añade a Plane CE una wiki a nivel de organización y un gestor de archivos
 
 ## Qué agrega
 
+**Módulo de Finanzas** (`/<slug>/finance` y pestaña Finanzas en cada proyecto)
+- Cada proyecto se trata como un cliente: perfil, contrataciones (iguala
+  recurrente o pago único), cobros y pagos. Monedas MXN/USD por contrato,
+  totales siempre separados, sin conversión.
+- Dashboard con KPIs, alertas de vencidos/próximos (calculadas al leer, sin
+  tareas programadas), gráfica de ingresos por mes y tabla de clientes.
+- Los cobros de iguala se generan solos al consultar: idempotente por
+  `(contrato, periodo)` con constraint único condicional, tope 24 periodos,
+  solo-crear (las ediciones manuales sobreviven).
+- Acceso restringido: admins del workspace + allowlist (`FinanceAccess`)
+  gestionada desde la pestaña Acceso. Quien no está ni ve el menú ni pasa
+  del 403; el ítem del sidebar se oculta por usuario.
+- **Primera capa con tablas propias**: app Django `plane.finance`
+  (`features/backend/finance/`) con migración `0001_initial` (5 tablas,
+  aditiva pura — la imagen anterior simplemente las ignora, rollback por
+  `pg_restore` del respaldo). `backend-rebuild.sh` respalda la BD con
+  `pg_dump` y corre el servicio `migrator` antes de recrear api/worker/beat;
+  sin ese orden, los servicios quedan colgados en `wait_for_migrations`.
+
 **Diagramas Mermaid en páginas**
 - Los bloques ` ```mermaid ` se renderizan como diagrama en el editor de páginas,
   con un botón para alternar entre diagrama y código fuente.

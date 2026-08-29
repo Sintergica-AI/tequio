@@ -10,8 +10,10 @@ KEY="$VPS_KEY"
 TAG="${1:-wiki-drive}"
 
 echo "=== Subiendo archivos del backend ==="
-ssh -i "$KEY" -p "$PORT" "$VPS" "mkdir -p /opt/sintergica-features/backend"
+ssh -i "$KEY" -p "$PORT" "$VPS" "mkdir -p /opt/sintergica-features/backend/finance/migrations && rm -f /opt/sintergica-features/backend/finance/*.py /opt/sintergica-features/backend/finance/migrations/*.py"
 scp -q -i "$KEY" -P "$PORT" "$PKG/backend/"*.py "$VPS:/opt/sintergica-features/backend/"
+scp -q -i "$KEY" -P "$PORT" "$PKG/backend/finance/"*.py "$VPS:/opt/sintergica-features/backend/finance/"
+scp -q -i "$KEY" -P "$PORT" "$PKG/backend/finance/migrations/"*.py "$VPS:/opt/sintergica-features/backend/finance/migrations/"
 scp -q -i "$KEY" -P "$PORT" "$PKG/scripts/backend-rebuild.sh" "$VPS:/opt/sintergica-features/"
 
 echo "=== Reconstruyendo y desplegando ==="

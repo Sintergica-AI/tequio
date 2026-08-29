@@ -17,6 +17,10 @@ TAG="${1:-wiki-drive}"
 run() { ssh -i "$KEY" -p "$PORT" -o BatchMode=yes "$VPS" "$@"; }
 
 cd "$SRC"
+# git status colapsa directorios enteramente nuevos a "?? dir/", lo que rompería
+# la copia archivo-por-archivo. `add -N` (intent-to-add) los expande a archivos
+# individuales sin preparar contenido.
+git add -A -N -- 'apps/web' 'packages/i18n' 'packages/constants' 'packages/editor' >/dev/null 2>&1 || true
 # status porcelain: XY <ruta>. La X/Y es "D" cuando el archivo se borró.
 # (bash 3.2 de macOS no tiene mapfile, así que se lee con un while)
 TO_COPY=()
