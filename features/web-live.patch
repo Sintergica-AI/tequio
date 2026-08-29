@@ -3276,12 +3276,178 @@ index 0000000..4fd69d6
 +    </div>
 +  );
 +};
+diff --git a/apps/web/core/components/finance/dashboard/insights-panel.tsx b/apps/web/core/components/finance/dashboard/insights-panel.tsx
+new file mode 100644
+index 0000000..38ff7ee
+--- /dev/null
++++ b/apps/web/core/components/finance/dashboard/insights-panel.tsx
+@@ -0,0 +1,160 @@
++/**
++ * Sintergica CE extension: finance insights (suggestions) panel.
++ * Derived from Plane CE code (AGPL-3.0-only).
++ */
++
++import { AlertTriangle, CalendarClock, CheckCircle2, Hourglass, PiggyBank, Receipt, TrendingDown, Users } from "lucide-react";
++import { observer } from "mobx-react";
++import Link from "next/link";
++// plane imports
++import { useTranslation } from "@plane/i18n";
++import { cn, renderFormattedDate } from "@plane/utils";
++// hooks
++import { useFinance } from "@/hooks/store/use-finance";
++// services
++import type { TCurrency, TFinanceInsight } from "@/services/finance.service";
++// local imports
++import { CurrencyAmount } from "../shared/currency-amount";
++import { formatMonthLabel } from "../shared/format-month";
++
++type TFinanceInsightsPanelProps = {
++  workspaceSlug: string;
++};
++
++const toNumber = (value: unknown): number => {
++  const parsed = typeof value === "number" ? value : Number(value);
++  return Number.isFinite(parsed) ? parsed : 0;
++};
++const toText = (value: unknown): string => (typeof value === "string" ? value : String(value ?? ""));
++
++const INSIGHT_ICONS: Record<TFinanceInsight["kind"], typeof AlertTriangle> = {
++  overdue_collection: AlertTriangle,
++  low_runway: Hourglass,
++  no_cash_snapshot: PiggyBank,
++  client_concentration: Users,
++  renewal_due: CalendarClock,
++  negative_margin: TrendingDown,
++  missing_expenses: Receipt,
++};
++
++const SEVERITY_CARD_CLASSNAME: Record<TFinanceInsight["severity"], string> = {
++  critical: "border-l-2 border-l-danger-strong",
++  warning: "border-l-2 border-l-warning-strong",
++  info: "border-l-2 border-l-strong",
++};
++
++const SEVERITY_ICON_CLASSNAME: Record<TFinanceInsight["severity"], string> = {
++  critical: "text-danger-primary",
++  warning: "text-warning-primary",
++  info: "text-tertiary",
++};
++
++const getInsightMessage = (
++  insight: TFinanceInsight,
++  t: (key: string, params?: Record<string, unknown>) => string
++): string => {
++  const data = insight.data ?? {};
++  switch (insight.kind) {
++    case "overdue_collection": {
++      const clients = Array.isArray(data.clients) ? data.clients : [];
++      const clientNames = clients
++        .map((client) => toText((client as Record<string, unknown>)?.name))
++        .filter((name) => name.length > 0)
++        .join(", ");
++      return t("finance.insights.overdue_collection", { count: toNumber(data.count), clients: clientNames });
++    }
++    case "low_runway":
++      return t("finance.insights.low_runway", { months: toNumber(data.months), currency: toText(data.currency) });
++    case "no_cash_snapshot":
++      return t("finance.insights.no_cash_snapshot");
++    case "client_concentration":
++      return t("finance.insights.client_concentration", {
++        client: toText(data.client),
++        share: toNumber(data.share),
++        currency: toText(data.currency),
++      });
++    case "renewal_due":
++      return t("finance.insights.renewal_due", {
++        contract: toText(data.contract),
++        client: toText(data.client),
++        date: renderFormattedDate(toText(data.end_date)) ?? toText(data.end_date),
++      });
++    case "negative_margin":
++      return t("finance.insights.negative_margin", {
++        month: formatMonthLabel(toText(data.month)),
++        currency: toText(data.currency),
++      });
++    case "missing_expenses":
++      return t("finance.insights.missing_expenses", { month: formatMonthLabel(toText(data.month)) });
++    default:
++      return "";
++  }
++};
++
++const getOverdueTotals = (insight: TFinanceInsight): { currency: TCurrency; amount: number }[] => {
++  const total = (insight.data?.total ?? {}) as Record<string, unknown>;
++  return (["MXN", "USD"] as TCurrency[])
++    .map((currency) => ({ currency, amount: toNumber(total[currency]) }))
++    .filter((entry) => entry.amount !== 0);
++};
++
++export const FinanceInsightsPanel = observer(function FinanceInsightsPanel(props: TFinanceInsightsPanelProps) {
++  const { workspaceSlug } = props;
++  // plane hooks
++  const { t } = useTranslation();
++  // store hooks
++  const finance = useFinance();
++  // derived values
++  const insights = finance.insightsByWorkspace[workspaceSlug]?.insights;
++
++  if (insights === undefined) return null;
++
++  return (
++    <div className="flex flex-col gap-2">
++      <h3 className="text-13 font-semibold text-primary">{t("finance.insights.title")}</h3>
++      {insights.length === 0 ? (
++        <div className="flex items-center gap-2 rounded-md bg-success-subtle px-3 py-2.5 text-13 text-success-primary">
++          <CheckCircle2 className="size-4 flex-shrink-0" />
++          <span>{t("finance.insights.empty")}</span>
++        </div>
++      ) : (
++        <div className="flex flex-col gap-2">
++          {insights.map((insight, index) => {
++            const Icon = INSIGHT_ICONS[insight.kind] ?? AlertTriangle;
++            const message = getInsightMessage(insight, t);
++            const overdueTotals = insight.kind === "overdue_collection" ? getOverdueTotals(insight) : [];
++            const projectId = insight.kind === "renewal_due" ? toText(insight.data?.project_id) : "";
++            const card = (
++              <div
++                className={cn(
++                  "flex items-start gap-3 rounded-md border border-subtle bg-surface-1 px-3 py-2.5",
++                  SEVERITY_CARD_CLASSNAME[insight.severity],
++                  projectId && "transition-colors hover:bg-layer-1"
++                )}
++              >
++                <Icon className={cn("mt-0.5 size-4 flex-shrink-0", SEVERITY_ICON_CLASSNAME[insight.severity])} />
++                <div className="flex min-w-0 flex-1 flex-col gap-1">
++                  <span className="text-13 text-primary">{message}</span>
++                  {overdueTotals.length > 0 && (
++                    <span className="flex flex-wrap items-center gap-x-3 text-13 font-medium text-primary">
++                      {overdueTotals.map((entry) => (
++                        <CurrencyAmount key={entry.currency} amount={entry.amount} currency={entry.currency} />
++                      ))}
++                    </span>
++                  )}
++                </div>
++              </div>
++            );
++            return projectId ? (
++              <Link key={`${insight.kind}-${index}`} href={`/${workspaceSlug}/projects/${projectId}/finance`}>
++                {card}
++              </Link>
++            ) : (
++              <div key={`${insight.kind}-${index}`}>{card}</div>
++            );
++          })}
++        </div>
++      )}
++    </div>
++  );
++});
 diff --git a/apps/web/core/components/finance/dashboard/kpi-row.tsx b/apps/web/core/components/finance/dashboard/kpi-row.tsx
 new file mode 100644
-index 0000000..a34b532
+index 0000000..aa00919
 --- /dev/null
 +++ b/apps/web/core/components/finance/dashboard/kpi-row.tsx
-@@ -0,0 +1,65 @@
+@@ -0,0 +1,102 @@
 +/**
 + * Sintergica CE extension: finance dashboard KPI tiles.
 + * Derived from Plane CE code (AGPL-3.0-only).
@@ -3291,12 +3457,13 @@ index 0000000..a34b532
 +import { useTranslation } from "@plane/i18n";
 +import { cn } from "@plane/utils";
 +// services
-+import type { TCurrency, TFinanceDashboard } from "@/services/finance.service";
++import type { TCurrency, TFinanceDashboard, TFinanceForecast } from "@/services/finance.service";
 +// local imports
 +import { CurrencyAmount } from "../shared/currency-amount";
 +
 +type TFinanceKpiRowProps = {
 +  dashboard: TFinanceDashboard;
++  forecast?: TFinanceForecast;
 +};
 +
 +const KpiTile = ({
@@ -3314,13 +3481,35 @@ index 0000000..a34b532
 +  </div>
 +);
 +
-+export const FinanceKpiRow = ({ dashboard }: TFinanceKpiRowProps) => {
++export const FinanceKpiRow = ({ dashboard, forecast }: TFinanceKpiRowProps) => {
 +  const { t } = useTranslation();
 +
 +  const usdTotals = dashboard.totals.USD;
 +  const hasUsd =
 +    !!usdTotals && (usdTotals.revenue_ytd !== 0 || usdTotals.outstanding !== 0 || usdTotals.overdue_amount !== 0);
 +  const currencies: TCurrency[] = hasUsd ? ["MXN", "USD"] : ["MXN"];
++
++  // forecast-derived tiles
++  const mrrCurrencies: TCurrency[] = forecast
++    ? (["MXN", "USD"] as TCurrency[]).filter((currency) => (forecast.mrr[currency] ?? 0) !== 0)
++    : [];
++  const activeForecastCurrencies: TCurrency[] = forecast
++    ? (["MXN", "USD"] as TCurrency[]).filter(
++        (currency) =>
++          (forecast.mrr[currency] ?? 0) !== 0 ||
++          (forecast.oneoff_run_rate[currency] ?? 0) !== 0 ||
++          (forecast.expense_run_rate[currency] ?? 0) !== 0
++      )
++    : [];
++  const runwayCurrencies: TCurrency[] = activeForecastCurrencies.length > 0 ? activeForecastCurrencies : ["MXN"];
++
++  const renderRunwayValue = (currency: TCurrency) => {
++    const runway = forecast?.runway_months?.[currency] ?? null;
++    if (runway === "infinite") return <span className="text-16">{t("finance.runway_infinite")}</span>;
++    if (typeof runway === "number")
++      return t("finance.runway_months", { months: Math.round(runway * 10) / 10 });
++    return <span className="text-13 font-medium text-placeholder">{t("finance.runway_unknown")}</span>;
++  };
 +
 +  return (
 +    <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
@@ -3344,6 +3533,20 @@ index 0000000..a34b532
 +        );
 +      })}
 +      <KpiTile label={t("finance.kpi.clients")}>{dashboard.clients.length}</KpiTile>
++      {forecast && (
++        <>
++          {mrrCurrencies.map((currency) => (
++            <KpiTile key={`mrr-${currency}`} label={`${t("finance.kpi_mrr")} (${currency})`}>
++              <CurrencyAmount amount={forecast.mrr[currency] ?? 0} currency={currency} />
++            </KpiTile>
++          ))}
++          {runwayCurrencies.map((currency) => (
++            <KpiTile key={`runway-${currency}`} label={`${t("finance.kpi_runway")} (${currency})`}>
++              {renderRunwayValue(currency)}
++            </KpiTile>
++          ))}
++        </>
++      )}
 +    </div>
 +  );
 +};
@@ -3415,6 +3618,229 @@ index 0000000..6f5d399
 +    </div>
 +  );
 +};
+diff --git a/apps/web/core/components/finance/forecast/forecast-root.tsx b/apps/web/core/components/finance/forecast/forecast-root.tsx
+new file mode 100644
+index 0000000..902fa30
+--- /dev/null
++++ b/apps/web/core/components/finance/forecast/forecast-root.tsx
+@@ -0,0 +1,217 @@
++/**
++ * Sintergica CE extension: cash-flow forecast tab.
++ * Derived from Plane CE code (AGPL-3.0-only).
++ */
++
++import { useMemo } from "react";
++import { observer } from "mobx-react";
++import { useTheme } from "next-themes";
++import useSWR from "swr";
++// plane imports
++import { CHART_COLOR_PALETTES } from "@plane/constants";
++import { useTranslation } from "@plane/i18n";
++import { BarChart } from "@plane/propel/charts/bar-chart";
++import type { TBarItem } from "@plane/types";
++import { Spinner } from "@plane/ui";
++import { cn } from "@plane/utils";
++// hooks
++import { useFinance } from "@/hooks/store/use-finance";
++// services
++import type { TCurrency, TFinanceForecast, TForecastMonth } from "@/services/finance.service";
++// local imports
++import { CurrencyAmount } from "../shared/currency-amount";
++import { formatMonthLabel } from "../shared/format-month";
++
++const CURRENCIES: TCurrency[] = ["MXN", "USD"];
++
++type TFinanceForecastRootProps = {
++  workspaceSlug: string;
++};
++
++const monthHasData = (month: TForecastMonth, currency: TCurrency): boolean => {
++  const cell = month[currency];
++  return !!cell && (cell.retainer_income !== 0 || cell.oneoff_income !== 0 || cell.expenses !== 0);
++};
++
++const getActiveCurrencies = (forecast: TFinanceForecast): TCurrency[] =>
++  CURRENCIES.filter(
++    (currency) =>
++      (forecast.mrr[currency] ?? 0) !== 0 ||
++      (forecast.oneoff_run_rate[currency] ?? 0) !== 0 ||
++      (forecast.expense_run_rate[currency] ?? 0) !== 0 ||
++      forecast.months.some((month) => monthHasData(month, currency))
++  );
++
++const RunRateTile = ({ label, children }: { label: string; children: React.ReactNode }) => (
++  <div className="flex flex-col gap-3 rounded-md border border-subtle bg-surface-1 p-4">
++    <div className="text-13 text-tertiary">{label}</div>
++    <div className="text-20 font-bold text-primary">{children}</div>
++  </div>
++);
++
++export const FinanceForecastRoot = observer(function FinanceForecastRoot(props: TFinanceForecastRootProps) {
++  const { workspaceSlug } = props;
++  // plane hooks
++  const { t } = useTranslation();
++  const { resolvedTheme } = useTheme();
++  // store hooks
++  const finance = useFinance();
++  // fetch (same key as the overview so SWR dedupes)
++  useSWR(`FINANCE_FORECAST_${workspaceSlug}`, () => finance.fetchForecast(workspaceSlug));
++  // derived values
++  const forecast = finance.forecastByWorkspace[workspaceSlug];
++  const currencies = forecast ? getActiveCurrencies(forecast) : [];
++
++  const chartData = useMemo(
++    () =>
++      (forecast?.months ?? []).map((month) => ({
++        month: formatMonthLabel(month.month),
++        MXN: month.MXN?.net ?? 0,
++        USD: month.USD?.net ?? 0,
++      })),
++    [forecast]
++  );
++
++  const bars: TBarItem<TCurrency>[] = useMemo(() => {
++    const palette = CHART_COLOR_PALETTES[0]?.[resolvedTheme === "dark" ? "dark" : "light"] ?? [];
++    return currencies.map((currency, index) => ({
++      key: currency,
++      label: currency,
++      // distinct stack ids → grouped bars, not stacked
++      stackId: currency,
++      fill: palette[index === 0 ? 0 : 3] ?? "#6172E8",
++      textClassName: "",
++      showPercentage: false,
++      showTopBorderRadius: () => true,
++      showBottomBorderRadius: () => true,
++    }));
++    // eslint-disable-next-line react-hooks/exhaustive-deps
++  }, [currencies.join(","), resolvedTheme]);
++
++  if (forecast === undefined)
++    return (
++      <div className="grid h-full w-full place-items-center">
++        <Spinner />
++      </div>
++    );
++
++  if (currencies.length === 0)
++    return (
++      <div className="grid h-full w-full place-items-center">
++        <p className="text-13 text-tertiary">{t("finance.forecast.empty")}</p>
++      </div>
++    );
++
++  return (
++    <div className="flex flex-col gap-6">
++      {/* run-rate summary */}
++      <div className="grid grid-cols-2 gap-3 md:grid-cols-3">
++        {currencies.map((currency) => (
++          <div key={currency} className="contents">
++            <RunRateTile label={`${t("finance.forecast.retainer_income")} (${currency})`}>
++              <CurrencyAmount amount={forecast.mrr[currency] ?? 0} currency={currency} />
++            </RunRateTile>
++            <RunRateTile label={`${t("finance.forecast.oneoff_income")} (${currency})`}>
++              <CurrencyAmount amount={forecast.oneoff_run_rate[currency] ?? 0} currency={currency} />
++            </RunRateTile>
++            <RunRateTile label={`${t("finance.forecast.expenses")} (${currency})`}>
++              <CurrencyAmount amount={forecast.expense_run_rate[currency] ?? 0} currency={currency} />
++            </RunRateTile>
++          </div>
++        ))}
++      </div>
++      {/* net flow chart */}
++      <div className="flex flex-col gap-2">
++        <h3 className="text-13 font-semibold text-primary">{t("finance.forecast.title")}</h3>
++        <div className="rounded-md border border-subtle bg-surface-1 p-4">
++          <BarChart
++            className="h-[300px] w-full"
++            data={chartData}
++            bars={bars}
++            xAxis={{ key: "month" }}
++            yAxis={{ key: currencies[0] }}
++          />
++        </div>
++      </div>
++      {/* month-by-month table */}
++      <div className="overflow-x-auto rounded-md border border-subtle bg-surface-1">
++        <table className="w-full min-w-[760px] text-13">
++          <thead>
++            <tr className="border-b border-subtle text-left text-11 font-medium text-tertiary">
++              <th className="px-3 py-2">{t("finance.pnl.month")}</th>
++              <th className="px-3 py-2">{t("finance.forecast.retainer_income")}</th>
++              <th className="px-3 py-2">{t("finance.forecast.oneoff_income")}</th>
++              <th className="px-3 py-2">{t("finance.forecast.expenses")}</th>
++              <th className="px-3 py-2">{t("finance.forecast.net")}</th>
++              <th className="px-3 py-2">{t("finance.forecast.projected_cash")}</th>
++            </tr>
++          </thead>
++          <tbody>
++            {forecast.months.map((month) => {
++              const monthCurrencies = currencies.filter((currency) => !!month[currency]);
++              return (
++                <tr key={month.month} className="border-b border-subtle align-top last:border-b-0">
++                  <td className="px-3 py-2 font-medium text-primary">{formatMonthLabel(month.month)}</td>
++                  <td className="px-3 py-2 text-secondary">
++                    {monthCurrencies.map((currency) => (
++                      <div key={currency}>
++                        <CurrencyAmount amount={month[currency]?.retainer_income ?? 0} currency={currency} />
++                      </div>
++                    ))}
++                  </td>
++                  <td className="px-3 py-2 text-secondary">
++                    {monthCurrencies.map((currency) => (
++                      <div key={currency}>
++                        <CurrencyAmount amount={month[currency]?.oneoff_income ?? 0} currency={currency} />
++                      </div>
++                    ))}
++                  </td>
++                  <td className="px-3 py-2 text-secondary">
++                    {monthCurrencies.map((currency) => (
++                      <div key={currency}>
++                        <CurrencyAmount amount={month[currency]?.expenses ?? 0} currency={currency} />
++                      </div>
++                    ))}
++                  </td>
++                  <td className="px-3 py-2 font-medium">
++                    {monthCurrencies.map((currency) => {
++                      const net = month[currency]?.net ?? 0;
++                      return (
++                        <div key={currency} className={cn(net < 0 ? "text-danger-primary" : "text-primary")}>
++                          <CurrencyAmount amount={net} currency={currency} />
++                        </div>
++                      );
++                    })}
++                  </td>
++                  <td className="px-3 py-2">
++                    {monthCurrencies.map((currency) => {
++                      const projectedCash = month[currency]?.projected_cash ?? null;
++                      if (projectedCash === null)
++                        return (
++                          <div key={currency} className="text-placeholder">
++                            —
++                          </div>
++                        );
++                      return (
++                        <div
++                          key={currency}
++                          className={cn(
++                            projectedCash < 0 ? "font-bold text-danger-primary" : "font-medium text-primary"
++                          )}
++                        >
++                          <CurrencyAmount amount={projectedCash} currency={currency} />
++                        </div>
++                      );
++                    })}
++                  </td>
++                </tr>
++              );
++            })}
++          </tbody>
++        </table>
++      </div>
++      {/* assumptions */}
++      <p className="text-11 text-tertiary">{t("finance.forecast.assumptions")}</p>
++    </div>
++  );
++});
 diff --git a/apps/web/core/components/finance/index.ts b/apps/web/core/components/finance/index.ts
 new file mode 100644
 index 0000000..9b0fb5e
@@ -5000,12 +5426,12 @@ index 0000000..d4d8157
 +});
 diff --git a/apps/web/core/components/finance/root.tsx b/apps/web/core/components/finance/root.tsx
 new file mode 100644
-index 0000000..bfb79a4
+index 0000000..c158b87
 --- /dev/null
 +++ b/apps/web/core/components/finance/root.tsx
-@@ -0,0 +1,92 @@
+@@ -0,0 +1,110 @@
 +/**
-+ * Sintergica CE extension: workspace finance root (dashboard + access tabs).
++ * Sintergica CE extension: workspace finance root (dashboard + statements + forecast + access tabs).
 + * Derived from Plane CE code (AGPL-3.0-only).
 + */
 +
@@ -5022,14 +5448,17 @@ index 0000000..bfb79a4
 +import { FinanceAccessRoot } from "./access/access-root";
 +import { FinanceAlertsList } from "./dashboard/alerts-list";
 +import { FinanceClientsTable } from "./dashboard/clients-table";
++import { FinanceInsightsPanel } from "./dashboard/insights-panel";
 +import { FinanceKpiRow } from "./dashboard/kpi-row";
 +import { FinanceRevenueChart } from "./dashboard/revenue-chart";
++import { FinanceForecastRoot } from "./forecast/forecast-root";
++import { FinanceStatementsRoot } from "./statements/statements-root";
 +
 +type TFinanceRootProps = {
 +  workspaceSlug: string;
 +};
 +
-+type TFinanceTab = "overview" | "access";
++type TFinanceTab = "overview" | "statements" | "forecast" | "access";
 +
 +export const FinanceRoot = observer(function FinanceRoot(props: TFinanceRootProps) {
 +  const { workspaceSlug } = props;
@@ -5042,11 +5471,21 @@ index 0000000..bfb79a4
 +  const accessInfo = useFinanceAccess(workspaceSlug);
 +  // fetch the dashboard
 +  useSWR(`FINANCE_DASHBOARD_${workspaceSlug}`, () => finance.fetchDashboard(workspaceSlug));
++  // command-center data for the overview (forecast key is shared with the Proyecciones tab)
++  useSWR(activeTab === "overview" ? `FINANCE_INSIGHTS_${workspaceSlug}` : null, () =>
++    finance.fetchInsights(workspaceSlug)
++  );
++  useSWR(activeTab === "overview" ? `FINANCE_FORECAST_${workspaceSlug}` : null, () =>
++    finance.fetchForecast(workspaceSlug)
++  );
 +  // derived values
 +  const dashboard = finance.dashboardByWorkspace[workspaceSlug];
++  const forecast = finance.forecastByWorkspace[workspaceSlug];
 +  const isAdmin = !!accessInfo?.is_admin;
 +  const tabs: { key: TFinanceTab; label: string }[] = [
 +    { key: "overview", label: t("finance.tabs.overview") },
++    { key: "statements", label: t("finance.tabs_statements") },
++    { key: "forecast", label: t("finance.tabs_forecast") },
 +    ...(isAdmin ? [{ key: "access" as const, label: t("finance.tabs.access") }] : []),
 +  ];
 +
@@ -5080,13 +5519,18 @@ index 0000000..bfb79a4
 +      <div className="h-full w-full overflow-y-auto px-page-x py-4">
 +        {activeTab === "access" && isAdmin ? (
 +          <FinanceAccessRoot workspaceSlug={workspaceSlug} />
++        ) : activeTab === "statements" ? (
++          <FinanceStatementsRoot workspaceSlug={workspaceSlug} />
++        ) : activeTab === "forecast" ? (
++          <FinanceForecastRoot workspaceSlug={workspaceSlug} />
 +        ) : dashboard === undefined ? (
 +          <div className="grid h-full w-full place-items-center">
 +            <Spinner />
 +          </div>
 +        ) : (
 +          <div className="flex flex-col gap-6">
-+            <FinanceKpiRow dashboard={dashboard} />
++            <FinanceKpiRow dashboard={dashboard} forecast={forecast} />
++            <FinanceInsightsPanel workspaceSlug={workspaceSlug} />
 +            <FinanceAlertsList workspaceSlug={workspaceSlug} alerts={dashboard.alerts} />
 +            <FinanceRevenueChart dashboard={dashboard} />
 +            <FinanceClientsTable workspaceSlug={workspaceSlug} clients={dashboard.clients} />
@@ -5125,6 +5569,24 @@ index 0000000..a8a53a6
 +    <span className="whitespace-nowrap">
 +      {formatted} <span className="text-11 text-tertiary">{currency}</span>
 +    </span>
++  );
++};
+diff --git a/apps/web/core/components/finance/shared/format-month.ts b/apps/web/core/components/finance/shared/format-month.ts
+new file mode 100644
+index 0000000..5e9fb25
+--- /dev/null
++++ b/apps/web/core/components/finance/shared/format-month.ts
+@@ -0,0 +1,12 @@
++/**
++ * Sintergica CE extension: shared month-label formatter ("2026-08" → "ago 2026").
++ * Derived from Plane CE code (AGPL-3.0-only).
++ */
++
++export const formatMonthLabel = (month: string): string => {
++  const [year, monthNumber] = month.split("-").map(Number);
++  if (!year || !monthNumber || monthNumber < 1 || monthNumber > 12) return month;
++  return new Intl.DateTimeFormat("es-MX", { month: "short", year: "numeric" }).format(
++    new Date(year, monthNumber - 1, 1)
 +  );
 +};
 diff --git a/apps/web/core/components/finance/shared/status-chip.tsx b/apps/web/core/components/finance/shared/status-chip.tsx
@@ -5173,6 +5635,771 @@ index 0000000..5418150
 +    </span>
 +  );
 +};
+diff --git a/apps/web/core/components/finance/statements/cash-modal.tsx b/apps/web/core/components/finance/statements/cash-modal.tsx
+new file mode 100644
+index 0000000..ffdc648
+--- /dev/null
++++ b/apps/web/core/components/finance/statements/cash-modal.tsx
+@@ -0,0 +1,164 @@
++/**
++ * Sintergica CE extension: register a cash balance snapshot.
++ * Derived from Plane CE code (AGPL-3.0-only).
++ */
++
++import { useEffect, useState } from "react";
++import { observer } from "mobx-react";
++// plane imports
++import { useTranslation } from "@plane/i18n";
++import { Button } from "@plane/propel/button";
++import { TOAST_TYPE, setToast } from "@plane/propel/toast";
++import { CustomSelect, EModalPosition, EModalWidth, Input, ModalCore } from "@plane/ui";
++// hooks
++import { useFinance } from "@/hooks/store/use-finance";
++// services
++import type { TCashSnapshot, TCurrency } from "@/services/finance.service";
++
++const CURRENCIES: TCurrency[] = ["MXN", "USD"];
++
++const DATE_INPUT_CLASSNAME =
++  "w-full rounded-md border border-subtle bg-layer-1 px-2 py-1.5 text-13 text-primary focus:outline-none";
++
++const getToday = () => new Date().toISOString().slice(0, 10);
++
++type TFinanceCashModalProps = {
++  isOpen: boolean;
++  onClose: () => void;
++  workspaceSlug: string;
++  onMutated?: () => void;
++};
++
++export const FinanceCashModal = observer(function FinanceCashModal(props: TFinanceCashModalProps) {
++  const { isOpen, onClose, workspaceSlug, onMutated } = props;
++  // plane hooks
++  const { t } = useTranslation();
++  // states
++  const [amount, setAmount] = useState("");
++  const [currency, setCurrency] = useState<TCurrency>("MXN");
++  const [asOf, setAsOf] = useState(getToday());
++  const [notes, setNotes] = useState("");
++  const [isSubmitting, setIsSubmitting] = useState(false);
++  // store hooks
++  const finance = useFinance();
++
++  useEffect(() => {
++    if (!isOpen) return;
++    setAmount("");
++    setCurrency("MXN");
++    setAsOf(getToday());
++    setNotes("");
++  }, [isOpen]);
++
++  const handleClose = () => {
++    setIsSubmitting(false);
++    onClose();
++  };
++
++  const parsedAmount = parseFloat(amount);
++  const isAmountValid = Number.isFinite(parsedAmount);
++  const canSubmit = amount.trim() !== "" && isAmountValid && !!asOf;
++
++  const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
++    e.preventDefault();
++    if (isSubmitting || !canSubmit) return;
++    setIsSubmitting(true);
++    const payload: Partial<TCashSnapshot> = {
++      amount,
++      currency,
++      as_of: asOf,
++      notes,
++    };
++    await finance
++      .createCashSnapshot(workspaceSlug, payload)
++      // oxlint-disable-next-line promise/always-return
++      .then(() => {
++        onMutated?.();
++        handleClose();
++      })
++      .catch((error) => {
++        setToast({
++          type: TOAST_TYPE.ERROR,
++          title: "Error!",
++          message: error?.error || t("finance.form.error"),
++        });
++      })
++      .finally(() => setIsSubmitting(false));
++  };
++
++  return (
++    <ModalCore isOpen={isOpen} handleClose={handleClose} position={EModalPosition.TOP} width={EModalWidth.LG}>
++      <form onSubmit={handleSubmit} className="space-y-4 p-5">
++        <h3 className="text-16 font-semibold text-primary">{t("finance.cash.add")}</h3>
++        {/* amount + currency */}
++        <div className="grid grid-cols-2 gap-3">
++          <div className="space-y-1.5">
++            <label htmlFor="finance-cash-amount" className="text-11 font-medium text-tertiary">
++              {t("finance.contract.amount")}
++            </label>
++            <Input
++              id="finance-cash-amount"
++              type="text"
++              value={amount}
++              hasError={amount.trim() !== "" && !isAmountValid}
++              onChange={(e) => setAmount(e.target.value)}
++              placeholder="0.00"
++              className="w-full text-13"
++              autoFocus
++            />
++          </div>
++          <div className="space-y-1.5">
++            <span className="text-11 font-medium text-tertiary">{t("finance.contract.currency")}</span>
++            <CustomSelect
++              value={currency}
++              onChange={(value: TCurrency) => setCurrency(value)}
++              label={<span className="text-13 text-primary">{currency}</span>}
++              className="w-full"
++              buttonClassName="w-full justify-between border-[0.5px] border-subtle-1 bg-layer-2 px-3 py-2"
++            >
++              {CURRENCIES.map((currencyOption) => (
++                <CustomSelect.Option key={currencyOption} value={currencyOption}>
++                  {currencyOption}
++                </CustomSelect.Option>
++              ))}
++            </CustomSelect>
++          </div>
++        </div>
++        {/* as of */}
++        <div className="space-y-1.5">
++          <label htmlFor="finance-cash-as-of" className="text-11 font-medium text-tertiary">
++            {t("finance.cash.as_of")}
++          </label>
++          <input
++            id="finance-cash-as-of"
++            type="date"
++            value={asOf}
++            onChange={(e) => setAsOf(e.target.value)}
++            className={DATE_INPUT_CLASSNAME}
++          />
++        </div>
++        {/* notes */}
++        <div className="space-y-1.5">
++          <label htmlFor="finance-cash-notes" className="text-11 font-medium text-tertiary">
++            {t("finance.payment.notes")}
++          </label>
++          <textarea
++            id="finance-cash-notes"
++            value={notes}
++            onChange={(e) => setNotes(e.target.value)}
++            rows={2}
++            className="w-full resize-none rounded-md border border-subtle bg-layer-1 px-3 py-2 text-13 text-primary placeholder:text-placeholder focus:outline-none"
++          />
++        </div>
++        <div className="flex items-center justify-end gap-2">
++          <Button variant="secondary" size="lg" onClick={handleClose}>
++            {t("common.cancel")}
++          </Button>
++          <Button variant="primary" size="lg" type="submit" loading={isSubmitting} disabled={!canSubmit}>
++            {t("finance.form.save")}
++          </Button>
++        </div>
++      </form>
++    </ModalCore>
++  );
++});
+diff --git a/apps/web/core/components/finance/statements/expense-modal.tsx b/apps/web/core/components/finance/statements/expense-modal.tsx
+new file mode 100644
+index 0000000..15038ee
+--- /dev/null
++++ b/apps/web/core/components/finance/statements/expense-modal.tsx
+@@ -0,0 +1,209 @@
++/**
++ * Sintergica CE extension: create/edit a monthly expense entry.
++ * Derived from Plane CE code (AGPL-3.0-only).
++ */
++
++import { useEffect, useState } from "react";
++import { observer } from "mobx-react";
++// plane imports
++import { useTranslation } from "@plane/i18n";
++import { Button } from "@plane/propel/button";
++import { TOAST_TYPE, setToast } from "@plane/propel/toast";
++import { CustomSelect, EModalPosition, EModalWidth, Input, ModalCore } from "@plane/ui";
++// hooks
++import { useFinance } from "@/hooks/store/use-finance";
++// services
++import type { TCurrency, TExpenseCategory, TExpenseEntry } from "@/services/finance.service";
++
++const CURRENCIES: TCurrency[] = ["MXN", "USD"];
++const CATEGORIES: TExpenseCategory[] = ["payroll", "infrastructure", "marketing", "admin", "taxes", "other"];
++
++const DATE_INPUT_CLASSNAME =
++  "w-full rounded-md border border-subtle bg-layer-1 px-2 py-1.5 text-13 text-primary focus:outline-none";
++
++const getCurrentMonth = () => new Date().toISOString().slice(0, 7);
++
++type TFinanceExpenseModalProps = {
++  isOpen: boolean;
++  onClose: () => void;
++  workspaceSlug: string;
++  expense: TExpenseEntry | null;
++  onMutated?: () => void;
++};
++
++export const FinanceExpenseModal = observer(function FinanceExpenseModal(props: TFinanceExpenseModalProps) {
++  const { isOpen, onClose, workspaceSlug, expense, onMutated } = props;
++  // plane hooks
++  const { t } = useTranslation();
++  // states
++  const [month, setMonth] = useState(getCurrentMonth());
++  const [category, setCategory] = useState<TExpenseCategory>("other");
++  const [concept, setConcept] = useState("");
++  const [amount, setAmount] = useState("");
++  const [currency, setCurrency] = useState<TCurrency>("MXN");
++  const [notes, setNotes] = useState("");
++  const [isSubmitting, setIsSubmitting] = useState(false);
++  // store hooks
++  const finance = useFinance();
++  // derived values
++  const isEditing = !!expense;
++
++  useEffect(() => {
++    if (!isOpen) return;
++    setMonth(expense?.month ?? getCurrentMonth());
++    setCategory(expense?.category ?? "other");
++    setConcept(expense?.concept ?? "");
++    setAmount(expense?.amount ?? "");
++    setCurrency(expense?.currency ?? "MXN");
++    setNotes(expense?.notes ?? "");
++  }, [isOpen, expense]);
++
++  const handleClose = () => {
++    setIsSubmitting(false);
++    onClose();
++  };
++
++  const parsedAmount = parseFloat(amount);
++  const isAmountValid = Number.isFinite(parsedAmount) && parsedAmount > 0;
++  const canSubmit = !!concept.trim() && isAmountValid && !!month;
++
++  const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
++    e.preventDefault();
++    if (isSubmitting || !canSubmit) return;
++    setIsSubmitting(true);
++    const payload: Partial<TExpenseEntry> = {
++      month,
++      category,
++      concept: concept.trim(),
++      amount,
++      currency,
++      notes,
++    };
++    const request = isEditing
++      ? finance.updateExpense(workspaceSlug, expense.id, payload)
++      : finance.createExpense(workspaceSlug, payload);
++    await request
++      // oxlint-disable-next-line promise/always-return
++      .then(() => {
++        onMutated?.();
++        handleClose();
++      })
++      .catch((error) => {
++        setToast({
++          type: TOAST_TYPE.ERROR,
++          title: "Error!",
++          message: error?.error || t("finance.form.error"),
++        });
++      })
++      .finally(() => setIsSubmitting(false));
++  };
++
++  return (
++    <ModalCore isOpen={isOpen} handleClose={handleClose} position={EModalPosition.TOP} width={EModalWidth.XL}>
++      <form onSubmit={handleSubmit} className="space-y-4 p-5">
++        <h3 className="text-16 font-semibold text-primary">
++          {isEditing ? t("finance.expense.edit") : t("finance.expense.add")}
++        </h3>
++        {/* month + category */}
++        <div className="grid grid-cols-2 gap-3">
++          <div className="space-y-1.5">
++            <label htmlFor="finance-expense-month" className="text-11 font-medium text-tertiary">
++              {t("finance.expense.month")}
++            </label>
++            <input
++              id="finance-expense-month"
++              type="month"
++              value={month}
++              onChange={(e) => setMonth(e.target.value)}
++              className={DATE_INPUT_CLASSNAME}
++            />
++          </div>
++          <div className="space-y-1.5">
++            <span className="text-11 font-medium text-tertiary">{t("finance.expense.category")}</span>
++            <CustomSelect
++              value={category}
++              onChange={(value: TExpenseCategory) => setCategory(value)}
++              label={<span className="text-13 text-primary">{t(`finance.expense.category_${category}`)}</span>}
++              className="w-full"
++              buttonClassName="w-full justify-between border-[0.5px] border-subtle-1 bg-layer-2 px-3 py-2"
++            >
++              {CATEGORIES.map((categoryOption) => (
++                <CustomSelect.Option key={categoryOption} value={categoryOption}>
++                  {t(`finance.expense.category_${categoryOption}`)}
++                </CustomSelect.Option>
++              ))}
++            </CustomSelect>
++          </div>
++        </div>
++        {/* concept */}
++        <div className="space-y-1.5">
++          <label htmlFor="finance-expense-concept" className="text-11 font-medium text-tertiary">
++            {t("finance.expense.concept")}
++          </label>
++          <Input
++            id="finance-expense-concept"
++            type="text"
++            value={concept}
++            onChange={(e) => setConcept(e.target.value)}
++            className="w-full text-13"
++            autoFocus
++          />
++        </div>
++        {/* amount + currency */}
++        <div className="grid grid-cols-2 gap-3">
++          <div className="space-y-1.5">
++            <label htmlFor="finance-expense-amount" className="text-11 font-medium text-tertiary">
++              {t("finance.contract.amount")}
++            </label>
++            <Input
++              id="finance-expense-amount"
++              type="text"
++              value={amount}
++              hasError={amount.trim() !== "" && !isAmountValid}
++              onChange={(e) => setAmount(e.target.value)}
++              placeholder="0.00"
++              className="w-full text-13"
++            />
++          </div>
++          <div className="space-y-1.5">
++            <span className="text-11 font-medium text-tertiary">{t("finance.contract.currency")}</span>
++            <CustomSelect
++              value={currency}
++              onChange={(value: TCurrency) => setCurrency(value)}
++              label={<span className="text-13 text-primary">{currency}</span>}
++              className="w-full"
++              buttonClassName="w-full justify-between border-[0.5px] border-subtle-1 bg-layer-2 px-3 py-2"
++            >
++              {CURRENCIES.map((currencyOption) => (
++                <CustomSelect.Option key={currencyOption} value={currencyOption}>
++                  {currencyOption}
++                </CustomSelect.Option>
++              ))}
++            </CustomSelect>
++          </div>
++        </div>
++        {/* notes */}
++        <div className="space-y-1.5">
++          <label htmlFor="finance-expense-notes" className="text-11 font-medium text-tertiary">
++            {t("finance.payment.notes")}
++          </label>
++          <textarea
++            id="finance-expense-notes"
++            value={notes}
++            onChange={(e) => setNotes(e.target.value)}
++            rows={2}
++            className="w-full resize-none rounded-md border border-subtle bg-layer-1 px-3 py-2 text-13 text-primary placeholder:text-placeholder focus:outline-none"
++          />
++        </div>
++        <div className="flex items-center justify-end gap-2">
++          <Button variant="secondary" size="lg" onClick={handleClose}>
++            {t("common.cancel")}
++          </Button>
++          <Button variant="primary" size="lg" type="submit" loading={isSubmitting} disabled={!canSubmit}>
++            {t("finance.form.save")}
++          </Button>
++        </div>
++      </form>
++    </ModalCore>
++  );
++});
+diff --git a/apps/web/core/components/finance/statements/statements-root.tsx b/apps/web/core/components/finance/statements/statements-root.tsx
+new file mode 100644
+index 0000000..9b2a0ad
+--- /dev/null
++++ b/apps/web/core/components/finance/statements/statements-root.tsx
+@@ -0,0 +1,374 @@
++/**
++ * Sintergica CE extension: financial statements tab (cash, P&L, expenses).
++ * Derived from Plane CE code (AGPL-3.0-only).
++ */
++
++import { useState } from "react";
++import { Pencil, Trash2 } from "lucide-react";
++import { observer } from "mobx-react";
++import useSWR from "swr";
++// plane imports
++import { useTranslation } from "@plane/i18n";
++import { Button } from "@plane/propel/button";
++import { TOAST_TYPE, setToast } from "@plane/propel/toast";
++import { AlertModalCore, CustomMenu } from "@plane/ui";
++import { cn, renderFormattedDate } from "@plane/utils";
++// hooks
++import { useFinance } from "@/hooks/store/use-finance";
++// services
++import type { TCashSnapshot, TCurrency, TExpenseEntry, TPnlMonth } from "@/services/finance.service";
++// local imports
++import { CurrencyAmount } from "../shared/currency-amount";
++import { formatMonthLabel } from "../shared/format-month";
++import { FinanceCashModal } from "./cash-modal";
++import { FinanceExpenseModal } from "./expense-modal";
++
++const CURRENCIES: TCurrency[] = ["MXN", "USD"];
++const MAX_VISIBLE_SNAPSHOTS = 6;
++
++type TFinanceStatementsRootProps = {
++  workspaceSlug: string;
++};
++
++// ------------------------------------------------------------------- cash
++const FinanceCashCard = observer(function FinanceCashCard(props: {
++  workspaceSlug: string;
++  onMutated: () => void;
++}) {
++  const { workspaceSlug, onMutated } = props;
++  // plane hooks
++  const { t } = useTranslation();
++  // states
++  const [isModalOpen, setIsModalOpen] = useState(false);
++  const [snapshotToDelete, setSnapshotToDelete] = useState<TCashSnapshot | null>(null);
++  const [isDeleting, setIsDeleting] = useState(false);
++  // store hooks
++  const finance = useFinance();
++  // derived values
++  const snapshots = [...(finance.cashByWorkspace[workspaceSlug] ?? [])].sort((a, b) =>
++    b.as_of.localeCompare(a.as_of)
++  );
++  const latestByCurrency = CURRENCIES.map((currency) => ({
++    currency,
++    snapshot: snapshots.find((snapshot) => snapshot.currency === currency),
++  })).filter((entry) => !!entry.snapshot);
++  const visibleSnapshots = snapshots.slice(0, MAX_VISIBLE_SNAPSHOTS);
++
++  const handleDelete = async () => {
++    if (!snapshotToDelete) return;
++    setIsDeleting(true);
++    await finance
++      .deleteCashSnapshot(workspaceSlug, snapshotToDelete.id)
++      // oxlint-disable-next-line promise/always-return
++      .then(() => {
++        setSnapshotToDelete(null);
++        onMutated();
++      })
++      .catch((error) => {
++        setToast({
++          type: TOAST_TYPE.ERROR,
++          title: "Error!",
++          message: error?.error || t("finance.form.error"),
++        });
++      })
++      .finally(() => setIsDeleting(false));
++  };
++
++  return (
++    <>
++      <FinanceCashModal
++        isOpen={isModalOpen}
++        onClose={() => setIsModalOpen(false)}
++        workspaceSlug={workspaceSlug}
++        onMutated={onMutated}
++      />
++      <AlertModalCore
++        handleClose={() => setSnapshotToDelete(null)}
++        handleSubmit={handleDelete}
++        isSubmitting={isDeleting}
++        isOpen={!!snapshotToDelete}
++        title={t("finance.cash.title")}
++        content={t("finance.cash.delete_confirm")}
++      />
++      <div className="flex flex-col gap-2">
++        <div className="flex items-center justify-between">
++          <h3 className="text-13 font-semibold text-primary">{t("finance.cash.title")}</h3>
++          <Button variant="secondary" size="lg" onClick={() => setIsModalOpen(true)}>
++            {t("finance.cash.add")}
++          </Button>
++        </div>
++        <div className="rounded-md border border-subtle bg-surface-1 p-4">
++          {latestByCurrency.length === 0 ? (
++            <p className="text-13 text-tertiary">{t("finance.cash.empty")}</p>
++          ) : (
++            <div className="flex flex-wrap items-start gap-8">
++              {latestByCurrency.map(({ currency, snapshot }) => (
++                <div key={currency} className="flex flex-col gap-1">
++                  <span className="text-13 text-tertiary">
++                    {t("finance.cash.current")} ({currency})
++                  </span>
++                  <span className="text-20 font-bold text-primary">
++                    <CurrencyAmount amount={snapshot?.amount ?? 0} currency={currency} />
++                  </span>
++                  <span className="text-11 text-tertiary">
++                    {t("finance.cash.as_of")}: {renderFormattedDate(snapshot?.as_of)}
++                  </span>
++                </div>
++              ))}
++            </div>
++          )}
++          {visibleSnapshots.length > 0 && (
++            <div className="mt-4 flex flex-col border-t border-subtle pt-2">
++              {visibleSnapshots.map((snapshot) => (
++                <div
++                  key={snapshot.id}
++                  className="flex items-center gap-3 border-b border-subtle py-2 text-13 last:border-b-0"
++                >
++                  <span className="w-28 flex-shrink-0 text-tertiary">{renderFormattedDate(snapshot.as_of)}</span>
++                  <span className="flex-shrink-0 font-medium text-primary">
++                    <CurrencyAmount amount={snapshot.amount} currency={snapshot.currency} />
++                  </span>
++                  <span className="min-w-0 flex-1 truncate text-tertiary">{snapshot.notes}</span>
++                  <button
++                    type="button"
++                    onClick={() => setSnapshotToDelete(snapshot)}
++                    className="flex-shrink-0 rounded p-1 text-tertiary transition-colors hover:bg-layer-1 hover:text-danger-primary"
++                  >
++                    <Trash2 className="size-3.5" />
++                  </button>
++                </div>
++              ))}
++            </div>
++          )}
++        </div>
++      </div>
++    </>
++  );
++});
++
++// -------------------------------------------------------------------- P&L
++const getPnlMonthCurrencies = (month: TPnlMonth): TCurrency[] =>
++  CURRENCIES.filter((currency) => {
++    const cell = month[currency];
++    return !!cell && (cell.income !== 0 || cell.expenses !== 0 || cell.net !== 0);
++  });
++
++const FinancePnlTable = observer(function FinancePnlTable(props: { workspaceSlug: string }) {
++  const { workspaceSlug } = props;
++  // plane hooks
++  const { t } = useTranslation();
++  // store hooks
++  const finance = useFinance();
++  // derived values
++  const pnl = finance.pnlByWorkspace[workspaceSlug];
++  const months = (pnl?.months ?? [])
++    .slice(-12)
++    .filter((month) => getPnlMonthCurrencies(month).length > 0)
++    .reverse();
++
++  return (
++    <div className="flex flex-col gap-2">
++      <h3 className="text-13 font-semibold text-primary">{t("finance.pnl.title")}</h3>
++      {months.length === 0 ? (
++        <p className="text-13 text-tertiary">{t("finance.pnl.empty")}</p>
++      ) : (
++        <div className="overflow-x-auto rounded-md border border-subtle bg-surface-1">
++          <table className="w-full min-w-[560px] text-13">
++            <thead>
++              <tr className="border-b border-subtle text-left text-11 font-medium text-tertiary">
++                <th className="px-3 py-2">{t("finance.pnl.month")}</th>
++                <th className="px-3 py-2">{t("finance.pnl.income")}</th>
++                <th className="px-3 py-2">{t("finance.pnl.expenses")}</th>
++                <th className="px-3 py-2">{t("finance.pnl.net")}</th>
++              </tr>
++            </thead>
++            <tbody>
++              {months.map((month) => {
++                const currencies = getPnlMonthCurrencies(month);
++                return (
++                  <tr key={month.month} className="border-b border-subtle align-top last:border-b-0">
++                    <td className="px-3 py-2 font-medium text-primary">{formatMonthLabel(month.month)}</td>
++                    <td className="px-3 py-2 text-secondary">
++                      {currencies.map((currency) => (
++                        <div key={currency}>
++                          <CurrencyAmount amount={month[currency]?.income ?? 0} currency={currency} />
++                        </div>
++                      ))}
++                    </td>
++                    <td className="px-3 py-2 text-secondary">
++                      {currencies.map((currency) => (
++                        <div key={currency}>
++                          <CurrencyAmount amount={month[currency]?.expenses ?? 0} currency={currency} />
++                        </div>
++                      ))}
++                    </td>
++                    <td className="px-3 py-2 font-medium">
++                      {currencies.map((currency) => {
++                        const net = month[currency]?.net ?? 0;
++                        return (
++                          <div
++                            key={currency}
++                            className={cn(net < 0 ? "text-danger-primary" : "text-success-primary")}
++                          >
++                            <CurrencyAmount amount={net} currency={currency} />
++                          </div>
++                        );
++                      })}
++                    </td>
++                  </tr>
++                );
++              })}
++            </tbody>
++          </table>
++        </div>
++      )}
++    </div>
++  );
++});
++
++// --------------------------------------------------------------- expenses
++const FinanceExpensesSection = observer(function FinanceExpensesSection(props: {
++  workspaceSlug: string;
++  onMutated: () => void;
++}) {
++  const { workspaceSlug, onMutated } = props;
++  // plane hooks
++  const { t } = useTranslation();
++  // states
++  const [isModalOpen, setIsModalOpen] = useState(false);
++  const [expenseToEdit, setExpenseToEdit] = useState<TExpenseEntry | null>(null);
++  const [expenseToDelete, setExpenseToDelete] = useState<TExpenseEntry | null>(null);
++  const [isDeleting, setIsDeleting] = useState(false);
++  // store hooks
++  const finance = useFinance();
++  // derived values
++  const expenses = finance.expensesByWorkspace[workspaceSlug] ?? [];
++  const monthKeys = [...new Set(expenses.map((expense) => expense.month))].sort((a, b) => b.localeCompare(a));
++
++  const handleDelete = async () => {
++    if (!expenseToDelete) return;
++    setIsDeleting(true);
++    await finance
++      .deleteExpense(workspaceSlug, expenseToDelete.id)
++      // oxlint-disable-next-line promise/always-return
++      .then(() => {
++        setExpenseToDelete(null);
++        onMutated();
++      })
++      .catch((error) => {
++        setToast({
++          type: TOAST_TYPE.ERROR,
++          title: "Error!",
++          message: error?.error || t("finance.form.error"),
++        });
++      })
++      .finally(() => setIsDeleting(false));
++  };
++
++  return (
++    <>
++      <FinanceExpenseModal
++        isOpen={isModalOpen}
++        onClose={() => {
++          setIsModalOpen(false);
++          setExpenseToEdit(null);
++        }}
++        workspaceSlug={workspaceSlug}
++        expense={expenseToEdit}
++        onMutated={onMutated}
++      />
++      <AlertModalCore
++        handleClose={() => setExpenseToDelete(null)}
++        handleSubmit={handleDelete}
++        isSubmitting={isDeleting}
++        isOpen={!!expenseToDelete}
++        title={t("finance.expense.delete_title")}
++        content={t("finance.expense.delete_confirm")}
++      />
++      <div className="flex flex-col gap-2">
++        <div className="flex items-center justify-between">
++          <h3 className="text-13 font-semibold text-primary">{t("finance.expense.title")}</h3>
++          <Button variant="secondary" size="lg" onClick={() => setIsModalOpen(true)}>
++            {t("finance.expense.add")}
++          </Button>
++        </div>
++        {expenses.length === 0 ? (
++          <p className="text-13 text-tertiary">{t("finance.expense.empty")}</p>
++        ) : (
++          <div className="flex flex-col gap-4">
++            {monthKeys.map((monthKey) => (
++              <div key={monthKey} className="flex flex-col">
++                <h4 className="pb-1 text-11 font-semibold uppercase text-tertiary">{formatMonthLabel(monthKey)}</h4>
++                <div className="rounded-md border border-subtle bg-surface-1">
++                  {expenses
++                    .filter((expense) => expense.month === monthKey)
++                    .map((expense) => (
++                      <div
++                        key={expense.id}
++                        className="grid grid-cols-[130px_minmax(0,1fr)_150px_40px] items-center gap-2 border-b border-subtle px-3 py-2.5 text-13 last:border-b-0"
++                      >
++                        <span className="truncate text-secondary">
++                          {t(`finance.expense.category_${expense.category}`)}
++                        </span>
++                        <span className="truncate text-primary">{expense.concept}</span>
++                        <span className="text-right font-medium text-primary">
++                          <CurrencyAmount amount={expense.amount} currency={expense.currency} />
++                        </span>
++                        <div className="flex justify-center">
++                          <CustomMenu ellipsis closeOnSelect placement="bottom-end">
++                            <CustomMenu.MenuItem
++                              onClick={() => {
++                                setExpenseToEdit(expense);
++                                setIsModalOpen(true);
++                              }}
++                            >
++                              <div className="flex items-center gap-2">
++                                <Pencil className="size-3.5" />
++                                <span>{t("finance.expense.edit")}</span>
++                              </div>
++                            </CustomMenu.MenuItem>
++                            <CustomMenu.MenuItem onClick={() => setExpenseToDelete(expense)}>
++                              <div className="flex items-center gap-2 text-danger-primary">
++                                <Trash2 className="size-3.5" />
++                                <span>{t("finance.expense.delete_title")}</span>
++                              </div>
++                            </CustomMenu.MenuItem>
++                          </CustomMenu>
++                        </div>
++                      </div>
++                    ))}
++                </div>
++              </div>
++            ))}
++          </div>
++        )}
++      </div>
++    </>
++  );
++});
++
++// ------------------------------------------------------------------- root
++export const FinanceStatementsRoot = observer(function FinanceStatementsRoot(props: TFinanceStatementsRootProps) {
++  const { workspaceSlug } = props;
++  // store hooks
++  const finance = useFinance();
++  // fetches
++  useSWR(`FINANCE_PNL_${workspaceSlug}`, () => finance.fetchPnl(workspaceSlug));
++  useSWR(`FINANCE_EXPENSES_${workspaceSlug}`, () => finance.fetchExpenses(workspaceSlug));
++  useSWR(`FINANCE_CASH_${workspaceSlug}`, () => finance.fetchCashSnapshots(workspaceSlug));
++
++  // keep the analytics views in sync after any mutation
++  const refreshAnalytics = () => {
++    void finance.fetchPnl(workspaceSlug).catch(() => {});
++    void finance.fetchForecast(workspaceSlug).catch(() => {});
++    void finance.fetchInsights(workspaceSlug).catch(() => {});
++  };
++
++  return (
++    <div className="flex flex-col gap-6">
++      <FinanceCashCard workspaceSlug={workspaceSlug} onMutated={refreshAnalytics} />
++      <FinancePnlTable workspaceSlug={workspaceSlug} />
++      <FinanceExpensesSection workspaceSlug={workspaceSlug} onMutated={refreshAnalytics} />
++    </div>
++  );
++});
 diff --git a/apps/web/core/components/pages/workspace/pages-list-view.tsx b/apps/web/core/components/pages/workspace/pages-list-view.tsx
 new file mode 100644
 index 0000000..ab90633
@@ -5830,10 +7057,10 @@ index 0000000..e6e6213
 +}
 diff --git a/apps/web/core/services/finance.service.ts b/apps/web/core/services/finance.service.ts
 new file mode 100644
-index 0000000..ecf1e24
+index 0000000..85a0ea1
 --- /dev/null
 +++ b/apps/web/core/services/finance.service.ts
-@@ -0,0 +1,343 @@
+@@ -0,0 +1,497 @@
 +/**
 + * Sintergica CE extension: finance module service.
 + * Derived from Plane CE code (AGPL-3.0-only).
@@ -6171,6 +7398,160 @@ index 0000000..ecf1e24
 +
 +  async deletePayment(workspaceSlug: string, projectId: string, paymentId: string): Promise<void> {
 +    return this.delete(`${this.projectUrl(workspaceSlug, projectId)}/payments/${paymentId}/`)
++      .then((response) => response?.data)
++      .catch((error) => {
++        throw error?.response?.data;
++      });
++  }
++}
++
++// ---------------------------------------------------------------------------
++// Command center: expenses, cash, P&L, forecast, insights
++// ---------------------------------------------------------------------------
++
++export type TExpenseCategory = "payroll" | "infrastructure" | "marketing" | "admin" | "taxes" | "other";
++
++export type TExpenseEntry = {
++  id: string;
++  workspace: string;
++  month: string; // YYYY-MM
++  category: TExpenseCategory;
++  concept: string;
++  amount: string;
++  currency: TCurrency;
++  notes: string;
++  created_at: string;
++  updated_at: string;
++};
++
++export type TCashSnapshot = {
++  id: string;
++  workspace: string;
++  as_of: string;
++  amount: string;
++  currency: TCurrency;
++  notes: string;
++  created_at: string;
++};
++
++export type TPnlCell = { income: number; expenses: number; net: number };
++export type TPnlMonth = { month: string } & Record<TCurrency, TPnlCell>;
++export type TFinancePnl = { months: TPnlMonth[] };
++
++export type TForecastCell = {
++  retainer_income: number;
++  oneoff_income: number;
++  expenses: number;
++  net: number;
++  projected_cash: number | null;
++};
++export type TForecastMonth = { month: string } & Record<TCurrency, TForecastCell>;
++export type TFinanceForecast = {
++  mrr: TAmountByCurrency;
++  oneoff_run_rate: TAmountByCurrency;
++  expense_run_rate: TAmountByCurrency;
++  cash: Record<TCurrency, { amount: number; as_of: string } | null>;
++  runway_months: Record<TCurrency, number | "infinite" | null>;
++  months: TForecastMonth[];
++};
++
++export type TFinanceInsight = {
++  kind:
++    | "overdue_collection"
++    | "low_runway"
++    | "no_cash_snapshot"
++    | "client_concentration"
++    | "renewal_due"
++    | "negative_margin"
++    | "missing_expenses";
++  severity: "critical" | "warning" | "info";
++  data: Record<string, unknown>;
++};
++export type TFinanceInsights = { insights: TFinanceInsight[] };
++
++export class FinanceAnalyticsService extends APIService {
++  constructor() {
++    super(API_BASE_URL);
++  }
++
++  private wsUrl(workspaceSlug: string): string {
++    return `/api/workspaces/${workspaceSlug}/finance`;
++  }
++
++  async fetchExpenses(workspaceSlug: string, month?: string): Promise<TExpenseEntry[]> {
++    return this.get(`${this.wsUrl(workspaceSlug)}/expenses/`, { params: month ? { month } : undefined })
++      .then((response) => response?.data)
++      .catch((error) => {
++        throw error?.response?.data;
++      });
++  }
++
++  async createExpense(workspaceSlug: string, data: Partial<TExpenseEntry>): Promise<TExpenseEntry> {
++    return this.post(`${this.wsUrl(workspaceSlug)}/expenses/`, data)
++      .then((response) => response?.data)
++      .catch((error) => {
++        throw error?.response?.data;
++      });
++  }
++
++  async updateExpense(workspaceSlug: string, expenseId: string, data: Partial<TExpenseEntry>): Promise<TExpenseEntry> {
++    return this.patch(`${this.wsUrl(workspaceSlug)}/expenses/${expenseId}/`, data)
++      .then((response) => response?.data)
++      .catch((error) => {
++        throw error?.response?.data;
++      });
++  }
++
++  async deleteExpense(workspaceSlug: string, expenseId: string): Promise<void> {
++    return this.delete(`${this.wsUrl(workspaceSlug)}/expenses/${expenseId}/`)
++      .then((response) => response?.data)
++      .catch((error) => {
++        throw error?.response?.data;
++      });
++  }
++
++  async fetchCashSnapshots(workspaceSlug: string): Promise<TCashSnapshot[]> {
++    return this.get(`${this.wsUrl(workspaceSlug)}/cash/`)
++      .then((response) => response?.data)
++      .catch((error) => {
++        throw error?.response?.data;
++      });
++  }
++
++  async createCashSnapshot(workspaceSlug: string, data: Partial<TCashSnapshot>): Promise<TCashSnapshot> {
++    return this.post(`${this.wsUrl(workspaceSlug)}/cash/`, data)
++      .then((response) => response?.data)
++      .catch((error) => {
++        throw error?.response?.data;
++      });
++  }
++
++  async deleteCashSnapshot(workspaceSlug: string, snapshotId: string): Promise<void> {
++    return this.delete(`${this.wsUrl(workspaceSlug)}/cash/${snapshotId}/`)
++      .then((response) => response?.data)
++      .catch((error) => {
++        throw error?.response?.data;
++      });
++  }
++
++  async fetchPnl(workspaceSlug: string): Promise<TFinancePnl> {
++    return this.get(`${this.wsUrl(workspaceSlug)}/pnl/`)
++      .then((response) => response?.data)
++      .catch((error) => {
++        throw error?.response?.data;
++      });
++  }
++
++  async fetchForecast(workspaceSlug: string): Promise<TFinanceForecast> {
++    return this.get(`${this.wsUrl(workspaceSlug)}/forecast/`)
++      .then((response) => response?.data)
++      .catch((error) => {
++        throw error?.response?.data;
++      });
++  }
++
++  async fetchInsights(workspaceSlug: string): Promise<TFinanceInsights> {
++    return this.get(`${this.wsUrl(workspaceSlug)}/insights/`)
 +      .then((response) => response?.data)
 +      .catch((error) => {
 +        throw error?.response?.data;
@@ -6623,10 +8004,10 @@ index 0000000..dfbf334
 +}
 diff --git a/apps/web/core/store/finance.store.ts b/apps/web/core/store/finance.store.ts
 new file mode 100644
-index 0000000..0d2a3db
+index 0000000..7b729c5
 --- /dev/null
 +++ b/apps/web/core/store/finance.store.ts
-@@ -0,0 +1,338 @@
+@@ -0,0 +1,471 @@
 +/**
 + * Sintergica CE extension: finance store.
 + * Derived from Plane CE code (AGPL-3.0-only).
@@ -6637,16 +8018,21 @@ index 0000000..0d2a3db
 +import { computedFn } from "mobx-utils";
 +// services
 +import type {
++  TCashSnapshot,
 +  TContract,
++  TExpenseEntry,
 +  TFinanceAccessInfo,
 +  TFinanceAccessRow,
 +  TFinanceDashboard,
++  TFinanceForecast,
++  TFinanceInsights,
++  TFinancePnl,
 +  TFinanceProfile,
 +  TInvoice,
 +  TPayment,
 +  TProjectFinanceSummary,
 +} from "@/services/finance.service";
-+import { FinanceService } from "@/services/finance.service";
++import { FinanceAnalyticsService, FinanceService } from "@/services/finance.service";
 +// store
 +import type { CoreRootStore } from "./root.store";
 +
@@ -6660,6 +8046,11 @@ index 0000000..0d2a3db
 +  contractsByProject: Record<string, TContract[]>;
 +  invoicesByProject: Record<string, TInvoice[]>;
 +  paymentsByProject: Record<string, TPayment[]>;
++  pnlByWorkspace: Record<string, TFinancePnl>;
++  forecastByWorkspace: Record<string, TFinanceForecast>;
++  insightsByWorkspace: Record<string, TFinanceInsights>;
++  expensesByWorkspace: Record<string, TExpenseEntry[]>;
++  cashByWorkspace: Record<string, TCashSnapshot[]>;
 +  // helpers
 +  getAccessInfo: (workspaceSlug: string) => TFinanceAccessInfo | undefined;
 +  // actions
@@ -6702,6 +8093,16 @@ index 0000000..0d2a3db
 +    data: Partial<TPayment>
 +  ) => Promise<TPayment>;
 +  deletePayment: (workspaceSlug: string, projectId: string, paymentId: string) => Promise<void>;
++  fetchPnl: (workspaceSlug: string) => Promise<TFinancePnl>;
++  fetchForecast: (workspaceSlug: string) => Promise<TFinanceForecast>;
++  fetchInsights: (workspaceSlug: string) => Promise<TFinanceInsights>;
++  fetchExpenses: (workspaceSlug: string) => Promise<TExpenseEntry[]>;
++  createExpense: (workspaceSlug: string, data: Partial<TExpenseEntry>) => Promise<TExpenseEntry>;
++  updateExpense: (workspaceSlug: string, expenseId: string, data: Partial<TExpenseEntry>) => Promise<TExpenseEntry>;
++  deleteExpense: (workspaceSlug: string, expenseId: string) => Promise<void>;
++  fetchCashSnapshots: (workspaceSlug: string) => Promise<TCashSnapshot[]>;
++  createCashSnapshot: (workspaceSlug: string, data: Partial<TCashSnapshot>) => Promise<TCashSnapshot>;
++  deleteCashSnapshot: (workspaceSlug: string, snapshotId: string) => Promise<void>;
 +}
 +
 +export class FinanceStore implements IFinanceStore {
@@ -6713,12 +8114,18 @@ index 0000000..0d2a3db
 +  contractsByProject: Record<string, TContract[]> = {};
 +  invoicesByProject: Record<string, TInvoice[]> = {};
 +  paymentsByProject: Record<string, TPayment[]> = {};
++  pnlByWorkspace: Record<string, TFinancePnl> = {};
++  forecastByWorkspace: Record<string, TFinanceForecast> = {};
++  insightsByWorkspace: Record<string, TFinanceInsights> = {};
++  expensesByWorkspace: Record<string, TExpenseEntry[]> = {};
++  cashByWorkspace: Record<string, TCashSnapshot[]> = {};
 +  // internal: one in-flight access request per workspace
 +  private accessInFlight: Record<string, Promise<TFinanceAccessInfo | undefined>> = {};
 +  // root store
 +  rootStore: CoreRootStore;
 +  // services
 +  service: FinanceService;
++  analytics: FinanceAnalyticsService;
 +
 +  constructor(private store: CoreRootStore) {
 +    makeObservable(this, {
@@ -6730,6 +8137,11 @@ index 0000000..0d2a3db
 +      contractsByProject: observable,
 +      invoicesByProject: observable,
 +      paymentsByProject: observable,
++      pnlByWorkspace: observable,
++      forecastByWorkspace: observable,
++      insightsByWorkspace: observable,
++      expensesByWorkspace: observable,
++      cashByWorkspace: observable,
 +      fetchAccessInfo: action,
 +      fetchDashboard: action,
 +      fetchAccessList: action,
@@ -6750,9 +8162,20 @@ index 0000000..0d2a3db
 +      createPayment: action,
 +      updatePayment: action,
 +      deletePayment: action,
++      fetchPnl: action,
++      fetchForecast: action,
++      fetchInsights: action,
++      fetchExpenses: action,
++      createExpense: action,
++      updateExpense: action,
++      deleteExpense: action,
++      fetchCashSnapshots: action,
++      createCashSnapshot: action,
++      deleteCashSnapshot: action,
 +    });
 +    this.rootStore = store;
 +    this.service = new FinanceService();
++    this.analytics = new FinanceAnalyticsService();
 +  }
 +
 +  getAccessInfo = computedFn((workspaceSlug: string) => this.accessInfoByWorkspace[workspaceSlug]);
@@ -6961,6 +8384,97 @@ index 0000000..0d2a3db
 +        this.paymentsByProject,
 +        [projectId],
 +        (this.paymentsByProject[projectId] ?? []).filter((p) => p.id !== paymentId)
++      );
++    });
++  };
++
++  // ----------------------------------------------------- command center
++  fetchPnl = async (workspaceSlug: string) => {
++    const data = await this.analytics.fetchPnl(workspaceSlug);
++    runInAction(() => {
++      set(this.pnlByWorkspace, [workspaceSlug], data);
++    });
++    return data;
++  };
++
++  fetchForecast = async (workspaceSlug: string) => {
++    const data = await this.analytics.fetchForecast(workspaceSlug);
++    runInAction(() => {
++      set(this.forecastByWorkspace, [workspaceSlug], data);
++    });
++    return data;
++  };
++
++  fetchInsights = async (workspaceSlug: string) => {
++    const data = await this.analytics.fetchInsights(workspaceSlug);
++    runInAction(() => {
++      set(this.insightsByWorkspace, [workspaceSlug], data);
++    });
++    return data;
++  };
++
++  fetchExpenses = async (workspaceSlug: string) => {
++    const rows = await this.analytics.fetchExpenses(workspaceSlug);
++    runInAction(() => {
++      set(this.expensesByWorkspace, [workspaceSlug], rows);
++    });
++    return rows;
++  };
++
++  createExpense = async (workspaceSlug: string, data: Partial<TExpenseEntry>) => {
++    const row = await this.analytics.createExpense(workspaceSlug, data);
++    runInAction(() => {
++      set(this.expensesByWorkspace, [workspaceSlug], [row, ...(this.expensesByWorkspace[workspaceSlug] ?? [])]);
++    });
++    return row;
++  };
++
++  updateExpense = async (workspaceSlug: string, expenseId: string, data: Partial<TExpenseEntry>) => {
++    const row = await this.analytics.updateExpense(workspaceSlug, expenseId, data);
++    runInAction(() => {
++      set(
++        this.expensesByWorkspace,
++        [workspaceSlug],
++        (this.expensesByWorkspace[workspaceSlug] ?? []).map((e) => (e.id === expenseId ? row : e))
++      );
++    });
++    return row;
++  };
++
++  deleteExpense = async (workspaceSlug: string, expenseId: string) => {
++    await this.analytics.deleteExpense(workspaceSlug, expenseId);
++    runInAction(() => {
++      set(
++        this.expensesByWorkspace,
++        [workspaceSlug],
++        (this.expensesByWorkspace[workspaceSlug] ?? []).filter((e) => e.id !== expenseId)
++      );
++    });
++  };
++
++  fetchCashSnapshots = async (workspaceSlug: string) => {
++    const rows = await this.analytics.fetchCashSnapshots(workspaceSlug);
++    runInAction(() => {
++      set(this.cashByWorkspace, [workspaceSlug], rows);
++    });
++    return rows;
++  };
++
++  createCashSnapshot = async (workspaceSlug: string, data: Partial<TCashSnapshot>) => {
++    const row = await this.analytics.createCashSnapshot(workspaceSlug, data);
++    runInAction(() => {
++      set(this.cashByWorkspace, [workspaceSlug], [row, ...(this.cashByWorkspace[workspaceSlug] ?? [])]);
++    });
++    return row;
++  };
++
++  deleteCashSnapshot = async (workspaceSlug: string, snapshotId: string) => {
++    await this.analytics.deleteCashSnapshot(workspaceSlug, snapshotId);
++    runInAction(() => {
++      set(
++        this.cashByWorkspace,
++        [workspaceSlug],
++        (this.cashByWorkspace[workspaceSlug] ?? []).filter((s) => s.id !== snapshotId)
 +      );
 +    });
 +  };
@@ -7784,10 +9298,10 @@ index 0000000..8a34af5
 +  );
 +}
 diff --git a/packages/i18n/src/locales/cs/common.json b/packages/i18n/src/locales/cs/common.json
-index c1e9372..6a7955a 100644
+index c1e9372..3620564 100644
 --- a/packages/i18n/src/locales/cs/common.json
 +++ b/packages/i18n/src/locales/cs/common.json
-@@ -867,5 +867,210 @@
+@@ -867,5 +867,271 @@
        "description": "Exportujte položky do JSON.",
        "short_description": "Exportovat jako JSON"
      }
@@ -7995,6 +9509,67 @@ index c1e9372..6a7955a 100644
 +      "saving": "Saving",
 +      "required": "This field is required",
 +      "error": "Could not save. Please try again."
++    },
++    "tabs_statements": "Statements",
++    "tabs_forecast": "Forecast",
++    "kpi_mrr": "Committed MRR",
++    "kpi_runway": "Runway",
++    "runway_months": "{{months}} months",
++    "runway_infinite": "No burn (positive flow)",
++    "runway_unknown": "Capture your cash balance",
++    "insights": {
++      "title": "Suggestions",
++      "empty": "No suggestions right now: everything looks in order.",
++      "overdue_collection": "Collections pending: {{count}} overdue invoices. Prioritize contacting {{clients}}.",
++      "low_runway": "Runway of {{months}} months in {{currency}}. Cut spend or speed up collections.",
++      "no_cash_snapshot": "Capture your cash balance in Statements to compute runway and cash projections.",
++      "client_concentration": "{{client}} is {{share}}% of your {{currency}} revenue (last 6 months). Diversifying reduces risk.",
++      "renewal_due": "The retainer “{{contract}}” for {{client}} ends on {{date}}. Schedule the renewal now.",
++      "negative_margin": "Negative margin in {{month}} ({{currency}}): you spent more than you earned.",
++      "missing_expenses": "No expenses captured for {{month}}. Without them, P&L and forecasts are incomplete."
++    },
++    "pnl": {
++      "title": "Income statement (monthly)",
++      "income": "Income",
++      "expenses": "Expenses",
++      "net": "Net",
++      "month": "Month",
++      "empty": "Record payments and expenses to see your income statement."
++    },
++    "expense": {
++      "title": "Expenses",
++      "add": "Record expense",
++      "edit": "Edit expense",
++      "month": "Month",
++      "category": "Category",
++      "category_payroll": "Payroll",
++      "category_infrastructure": "Infrastructure",
++      "category_marketing": "Marketing",
++      "category_admin": "Administration",
++      "category_taxes": "Taxes",
++      "category_other": "Other",
++      "concept": "Concept",
++      "empty": "No expenses captured. Record monthly expenses for a real P&L.",
++      "delete_title": "Delete expense",
++      "delete_confirm": "Delete this expense?"
++    },
++    "cash": {
++      "title": "Cash balance",
++      "add": "Update balance",
++      "as_of": "As of",
++      "current": "Current balance",
++      "empty": "Record your cash balance to compute runway.",
++      "delete_confirm": "Delete this balance record?"
++    },
++    "forecast": {
++      "title": "6-month forecast",
++      "retainer_income": "Committed retainers",
++      "oneoff_income": "Extras (3m avg)",
++      "expenses": "Expenses (3m avg)",
++      "net": "Net flow",
++      "projected_cash": "Projected cash",
++      "assumptions": "Assumptions: active retainers per their cycle and term; extras and expenses as a rolling 3-month average.",
++      "empty": "Create retainer contracts and capture expenses to project."
 +    }
    }
  }
@@ -8012,10 +9587,10 @@ index d340abf..9e643cc 100644
    }
  }
 diff --git a/packages/i18n/src/locales/de/common.json b/packages/i18n/src/locales/de/common.json
-index 1e18d4e..dabc4f1 100644
+index 1e18d4e..27f71a1 100644
 --- a/packages/i18n/src/locales/de/common.json
 +++ b/packages/i18n/src/locales/de/common.json
-@@ -867,5 +867,210 @@
+@@ -867,5 +867,271 @@
        "description": "Arbeitselemente in JSON exportieren.",
        "short_description": "Als JSON exportieren"
      }
@@ -8223,6 +9798,67 @@ index 1e18d4e..dabc4f1 100644
 +      "saving": "Saving",
 +      "required": "This field is required",
 +      "error": "Could not save. Please try again."
++    },
++    "tabs_statements": "Statements",
++    "tabs_forecast": "Forecast",
++    "kpi_mrr": "Committed MRR",
++    "kpi_runway": "Runway",
++    "runway_months": "{{months}} months",
++    "runway_infinite": "No burn (positive flow)",
++    "runway_unknown": "Capture your cash balance",
++    "insights": {
++      "title": "Suggestions",
++      "empty": "No suggestions right now: everything looks in order.",
++      "overdue_collection": "Collections pending: {{count}} overdue invoices. Prioritize contacting {{clients}}.",
++      "low_runway": "Runway of {{months}} months in {{currency}}. Cut spend or speed up collections.",
++      "no_cash_snapshot": "Capture your cash balance in Statements to compute runway and cash projections.",
++      "client_concentration": "{{client}} is {{share}}% of your {{currency}} revenue (last 6 months). Diversifying reduces risk.",
++      "renewal_due": "The retainer “{{contract}}” for {{client}} ends on {{date}}. Schedule the renewal now.",
++      "negative_margin": "Negative margin in {{month}} ({{currency}}): you spent more than you earned.",
++      "missing_expenses": "No expenses captured for {{month}}. Without them, P&L and forecasts are incomplete."
++    },
++    "pnl": {
++      "title": "Income statement (monthly)",
++      "income": "Income",
++      "expenses": "Expenses",
++      "net": "Net",
++      "month": "Month",
++      "empty": "Record payments and expenses to see your income statement."
++    },
++    "expense": {
++      "title": "Expenses",
++      "add": "Record expense",
++      "edit": "Edit expense",
++      "month": "Month",
++      "category": "Category",
++      "category_payroll": "Payroll",
++      "category_infrastructure": "Infrastructure",
++      "category_marketing": "Marketing",
++      "category_admin": "Administration",
++      "category_taxes": "Taxes",
++      "category_other": "Other",
++      "concept": "Concept",
++      "empty": "No expenses captured. Record monthly expenses for a real P&L.",
++      "delete_title": "Delete expense",
++      "delete_confirm": "Delete this expense?"
++    },
++    "cash": {
++      "title": "Cash balance",
++      "add": "Update balance",
++      "as_of": "As of",
++      "current": "Current balance",
++      "empty": "Record your cash balance to compute runway.",
++      "delete_confirm": "Delete this balance record?"
++    },
++    "forecast": {
++      "title": "6-month forecast",
++      "retainer_income": "Committed retainers",
++      "oneoff_income": "Extras (3m avg)",
++      "expenses": "Expenses (3m avg)",
++      "net": "Net flow",
++      "projected_cash": "Projected cash",
++      "assumptions": "Assumptions: active retainers per their cycle and term; extras and expenses as a rolling 3-month average.",
++      "empty": "Create retainer contracts and capture expenses to project."
 +    }
    }
  }
@@ -8240,10 +9876,10 @@ index bf22b25..2ff9605 100644
    }
  }
 diff --git a/packages/i18n/src/locales/en/common.json b/packages/i18n/src/locales/en/common.json
-index a138304..cb2d352 100644
+index a138304..aa9b852 100644
 --- a/packages/i18n/src/locales/en/common.json
 +++ b/packages/i18n/src/locales/en/common.json
-@@ -867,5 +867,210 @@
+@@ -867,5 +867,271 @@
        "description": "Export work items to a JSON file.",
        "short_description": "Export as json"
      }
@@ -8451,6 +10087,67 @@ index a138304..cb2d352 100644
 +      "saving": "Saving",
 +      "required": "This field is required",
 +      "error": "Could not save. Please try again."
++    },
++    "tabs_statements": "Statements",
++    "tabs_forecast": "Forecast",
++    "kpi_mrr": "Committed MRR",
++    "kpi_runway": "Runway",
++    "runway_months": "{{months}} months",
++    "runway_infinite": "No burn (positive flow)",
++    "runway_unknown": "Capture your cash balance",
++    "insights": {
++      "title": "Suggestions",
++      "empty": "No suggestions right now: everything looks in order.",
++      "overdue_collection": "Collections pending: {{count}} overdue invoices. Prioritize contacting {{clients}}.",
++      "low_runway": "Runway of {{months}} months in {{currency}}. Cut spend or speed up collections.",
++      "no_cash_snapshot": "Capture your cash balance in Statements to compute runway and cash projections.",
++      "client_concentration": "{{client}} is {{share}}% of your {{currency}} revenue (last 6 months). Diversifying reduces risk.",
++      "renewal_due": "The retainer “{{contract}}” for {{client}} ends on {{date}}. Schedule the renewal now.",
++      "negative_margin": "Negative margin in {{month}} ({{currency}}): you spent more than you earned.",
++      "missing_expenses": "No expenses captured for {{month}}. Without them, P&L and forecasts are incomplete."
++    },
++    "pnl": {
++      "title": "Income statement (monthly)",
++      "income": "Income",
++      "expenses": "Expenses",
++      "net": "Net",
++      "month": "Month",
++      "empty": "Record payments and expenses to see your income statement."
++    },
++    "expense": {
++      "title": "Expenses",
++      "add": "Record expense",
++      "edit": "Edit expense",
++      "month": "Month",
++      "category": "Category",
++      "category_payroll": "Payroll",
++      "category_infrastructure": "Infrastructure",
++      "category_marketing": "Marketing",
++      "category_admin": "Administration",
++      "category_taxes": "Taxes",
++      "category_other": "Other",
++      "concept": "Concept",
++      "empty": "No expenses captured. Record monthly expenses for a real P&L.",
++      "delete_title": "Delete expense",
++      "delete_confirm": "Delete this expense?"
++    },
++    "cash": {
++      "title": "Cash balance",
++      "add": "Update balance",
++      "as_of": "As of",
++      "current": "Current balance",
++      "empty": "Record your cash balance to compute runway.",
++      "delete_confirm": "Delete this balance record?"
++    },
++    "forecast": {
++      "title": "6-month forecast",
++      "retainer_income": "Committed retainers",
++      "oneoff_income": "Extras (3m avg)",
++      "expenses": "Expenses (3m avg)",
++      "net": "Net flow",
++      "projected_cash": "Projected cash",
++      "assumptions": "Assumptions: active retainers per their cycle and term; extras and expenses as a rolling 3-month average.",
++      "empty": "Create retainer contracts and capture expenses to project."
 +    }
    }
  }
@@ -8470,10 +10167,10 @@ index 883e981..b341231 100644
    }
  }
 diff --git a/packages/i18n/src/locales/es/common.json b/packages/i18n/src/locales/es/common.json
-index 64440c9..73a011a 100644
+index 64440c9..a05fe30 100644
 --- a/packages/i18n/src/locales/es/common.json
 +++ b/packages/i18n/src/locales/es/common.json
-@@ -867,5 +867,210 @@
+@@ -867,5 +867,271 @@
        "description": "Exporta elementos de trabajo a un archivo JSON.",
        "short_description": "Exportar como json"
      }
@@ -8681,6 +10378,67 @@ index 64440c9..73a011a 100644
 +      "saving": "Guardando",
 +      "required": "Este campo es obligatorio",
 +      "error": "No se pudo guardar. Inténtalo de nuevo."
++    },
++    "tabs_statements": "Estados",
++    "tabs_forecast": "Proyecciones",
++    "kpi_mrr": "MRR comprometido",
++    "kpi_runway": "Runway",
++    "runway_months": "{{months}} meses",
++    "runway_infinite": "Sin quema (flujo positivo)",
++    "runway_unknown": "Captura tu saldo de caja",
++    "insights": {
++      "title": "Sugerencias",
++      "empty": "Sin sugerencias por ahora: todo se ve en orden.",
++      "overdue_collection": "Cobranza pendiente: {{count}} cobros vencidos. Prioriza contactar a {{clients}}.",
++      "low_runway": "Runway de {{months}} meses en {{currency}}. Reduce gastos o acelera cobranza.",
++      "no_cash_snapshot": "Captura tu saldo de caja en Estados para calcular runway y proyecciones de efectivo.",
++      "client_concentration": "{{client}} representa {{share}}% de tus ingresos en {{currency}} (últimos 6 meses). Diversificar reduce el riesgo.",
++      "renewal_due": "La iguala «{{contract}}» de {{client}} vence el {{date}}. Agenda la renovación ya.",
++      "negative_margin": "Margen negativo en {{month}} ({{currency}}): gastaste más de lo que ingresó.",
++      "missing_expenses": "No has capturado gastos de {{month}}. Sin ellos, el P&L y las proyecciones quedan incompletos."
++    },
++    "pnl": {
++      "title": "Estado de resultados (mensual)",
++      "income": "Ingresos",
++      "expenses": "Gastos",
++      "net": "Utilidad",
++      "month": "Mes",
++      "empty": "Registra pagos y gastos para ver tu estado de resultados."
++    },
++    "expense": {
++      "title": "Gastos",
++      "add": "Registrar gasto",
++      "edit": "Editar gasto",
++      "month": "Mes",
++      "category": "Categoría",
++      "category_payroll": "Nómina",
++      "category_infrastructure": "Infraestructura",
++      "category_marketing": "Marketing",
++      "category_admin": "Administración",
++      "category_taxes": "Impuestos",
++      "category_other": "Otros",
++      "concept": "Concepto",
++      "empty": "Sin gastos capturados. Registra tus gastos mensuales para un P&L real.",
++      "delete_title": "Eliminar gasto",
++      "delete_confirm": "¿Eliminar este gasto?"
++    },
++    "cash": {
++      "title": "Saldo de caja",
++      "add": "Actualizar saldo",
++      "as_of": "Al día",
++      "current": "Saldo actual",
++      "empty": "Registra tu saldo de caja para calcular el runway.",
++      "delete_confirm": "¿Eliminar este registro de saldo?"
++    },
++    "forecast": {
++      "title": "Proyección a 6 meses",
++      "retainer_income": "Igualas comprometidas",
++      "oneoff_income": "Extras (promedio 3m)",
++      "expenses": "Gastos (promedio 3m)",
++      "net": "Flujo neto",
++      "projected_cash": "Caja proyectada",
++      "assumptions": "Supuestos: igualas activas según su ciclo y vigencia, extras y gastos como promedio móvil de los últimos 3 meses cerrados.",
++      "empty": "Crea contratos de iguala y captura gastos para proyectar."
 +    }
    }
  }
@@ -8700,10 +10458,10 @@ index 3c04912..a28d094 100644
    }
  }
 diff --git a/packages/i18n/src/locales/fr/common.json b/packages/i18n/src/locales/fr/common.json
-index a94ab8a..7886e1f 100644
+index a94ab8a..69da573 100644
 --- a/packages/i18n/src/locales/fr/common.json
 +++ b/packages/i18n/src/locales/fr/common.json
-@@ -867,5 +867,210 @@
+@@ -867,5 +867,271 @@
        "description": "Exportez les éléments de travail vers un fichier JSON.",
        "short_description": "Exporter en json"
      }
@@ -8911,6 +10669,67 @@ index a94ab8a..7886e1f 100644
 +      "saving": "Saving",
 +      "required": "This field is required",
 +      "error": "Could not save. Please try again."
++    },
++    "tabs_statements": "Statements",
++    "tabs_forecast": "Forecast",
++    "kpi_mrr": "Committed MRR",
++    "kpi_runway": "Runway",
++    "runway_months": "{{months}} months",
++    "runway_infinite": "No burn (positive flow)",
++    "runway_unknown": "Capture your cash balance",
++    "insights": {
++      "title": "Suggestions",
++      "empty": "No suggestions right now: everything looks in order.",
++      "overdue_collection": "Collections pending: {{count}} overdue invoices. Prioritize contacting {{clients}}.",
++      "low_runway": "Runway of {{months}} months in {{currency}}. Cut spend or speed up collections.",
++      "no_cash_snapshot": "Capture your cash balance in Statements to compute runway and cash projections.",
++      "client_concentration": "{{client}} is {{share}}% of your {{currency}} revenue (last 6 months). Diversifying reduces risk.",
++      "renewal_due": "The retainer “{{contract}}” for {{client}} ends on {{date}}. Schedule the renewal now.",
++      "negative_margin": "Negative margin in {{month}} ({{currency}}): you spent more than you earned.",
++      "missing_expenses": "No expenses captured for {{month}}. Without them, P&L and forecasts are incomplete."
++    },
++    "pnl": {
++      "title": "Income statement (monthly)",
++      "income": "Income",
++      "expenses": "Expenses",
++      "net": "Net",
++      "month": "Month",
++      "empty": "Record payments and expenses to see your income statement."
++    },
++    "expense": {
++      "title": "Expenses",
++      "add": "Record expense",
++      "edit": "Edit expense",
++      "month": "Month",
++      "category": "Category",
++      "category_payroll": "Payroll",
++      "category_infrastructure": "Infrastructure",
++      "category_marketing": "Marketing",
++      "category_admin": "Administration",
++      "category_taxes": "Taxes",
++      "category_other": "Other",
++      "concept": "Concept",
++      "empty": "No expenses captured. Record monthly expenses for a real P&L.",
++      "delete_title": "Delete expense",
++      "delete_confirm": "Delete this expense?"
++    },
++    "cash": {
++      "title": "Cash balance",
++      "add": "Update balance",
++      "as_of": "As of",
++      "current": "Current balance",
++      "empty": "Record your cash balance to compute runway.",
++      "delete_confirm": "Delete this balance record?"
++    },
++    "forecast": {
++      "title": "6-month forecast",
++      "retainer_income": "Committed retainers",
++      "oneoff_income": "Extras (3m avg)",
++      "expenses": "Expenses (3m avg)",
++      "net": "Net flow",
++      "projected_cash": "Projected cash",
++      "assumptions": "Assumptions: active retainers per their cycle and term; extras and expenses as a rolling 3-month average.",
++      "empty": "Create retainer contracts and capture expenses to project."
 +    }
    }
  }
@@ -8928,10 +10747,10 @@ index 2c77344..1b8d346 100644
    }
  }
 diff --git a/packages/i18n/src/locales/id/common.json b/packages/i18n/src/locales/id/common.json
-index 7d26685..c4ca7c0 100644
+index 7d26685..06f5c3f 100644
 --- a/packages/i18n/src/locales/id/common.json
 +++ b/packages/i18n/src/locales/id/common.json
-@@ -867,5 +867,210 @@
+@@ -867,5 +867,271 @@
        "description": "Ekspor item kerja ke file JSON.",
        "short_description": "Ekspor sebagai json"
      }
@@ -9139,6 +10958,67 @@ index 7d26685..c4ca7c0 100644
 +      "saving": "Saving",
 +      "required": "This field is required",
 +      "error": "Could not save. Please try again."
++    },
++    "tabs_statements": "Statements",
++    "tabs_forecast": "Forecast",
++    "kpi_mrr": "Committed MRR",
++    "kpi_runway": "Runway",
++    "runway_months": "{{months}} months",
++    "runway_infinite": "No burn (positive flow)",
++    "runway_unknown": "Capture your cash balance",
++    "insights": {
++      "title": "Suggestions",
++      "empty": "No suggestions right now: everything looks in order.",
++      "overdue_collection": "Collections pending: {{count}} overdue invoices. Prioritize contacting {{clients}}.",
++      "low_runway": "Runway of {{months}} months in {{currency}}. Cut spend or speed up collections.",
++      "no_cash_snapshot": "Capture your cash balance in Statements to compute runway and cash projections.",
++      "client_concentration": "{{client}} is {{share}}% of your {{currency}} revenue (last 6 months). Diversifying reduces risk.",
++      "renewal_due": "The retainer “{{contract}}” for {{client}} ends on {{date}}. Schedule the renewal now.",
++      "negative_margin": "Negative margin in {{month}} ({{currency}}): you spent more than you earned.",
++      "missing_expenses": "No expenses captured for {{month}}. Without them, P&L and forecasts are incomplete."
++    },
++    "pnl": {
++      "title": "Income statement (monthly)",
++      "income": "Income",
++      "expenses": "Expenses",
++      "net": "Net",
++      "month": "Month",
++      "empty": "Record payments and expenses to see your income statement."
++    },
++    "expense": {
++      "title": "Expenses",
++      "add": "Record expense",
++      "edit": "Edit expense",
++      "month": "Month",
++      "category": "Category",
++      "category_payroll": "Payroll",
++      "category_infrastructure": "Infrastructure",
++      "category_marketing": "Marketing",
++      "category_admin": "Administration",
++      "category_taxes": "Taxes",
++      "category_other": "Other",
++      "concept": "Concept",
++      "empty": "No expenses captured. Record monthly expenses for a real P&L.",
++      "delete_title": "Delete expense",
++      "delete_confirm": "Delete this expense?"
++    },
++    "cash": {
++      "title": "Cash balance",
++      "add": "Update balance",
++      "as_of": "As of",
++      "current": "Current balance",
++      "empty": "Record your cash balance to compute runway.",
++      "delete_confirm": "Delete this balance record?"
++    },
++    "forecast": {
++      "title": "6-month forecast",
++      "retainer_income": "Committed retainers",
++      "oneoff_income": "Extras (3m avg)",
++      "expenses": "Expenses (3m avg)",
++      "net": "Net flow",
++      "projected_cash": "Projected cash",
++      "assumptions": "Assumptions: active retainers per their cycle and term; extras and expenses as a rolling 3-month average.",
++      "empty": "Create retainer contracts and capture expenses to project."
 +    }
    }
  }
@@ -9156,10 +11036,10 @@ index 4a77755..a3f3b1c 100644
    }
  }
 diff --git a/packages/i18n/src/locales/it/common.json b/packages/i18n/src/locales/it/common.json
-index 6fda1b0..3700ea6 100644
+index 6fda1b0..1db1705 100644
 --- a/packages/i18n/src/locales/it/common.json
 +++ b/packages/i18n/src/locales/it/common.json
-@@ -867,5 +867,210 @@
+@@ -867,5 +867,271 @@
        "description": "Esporta elementi di lavoro in un file JSON.",
        "short_description": "Esporta come JSON"
      }
@@ -9367,6 +11247,67 @@ index 6fda1b0..3700ea6 100644
 +      "saving": "Saving",
 +      "required": "This field is required",
 +      "error": "Could not save. Please try again."
++    },
++    "tabs_statements": "Statements",
++    "tabs_forecast": "Forecast",
++    "kpi_mrr": "Committed MRR",
++    "kpi_runway": "Runway",
++    "runway_months": "{{months}} months",
++    "runway_infinite": "No burn (positive flow)",
++    "runway_unknown": "Capture your cash balance",
++    "insights": {
++      "title": "Suggestions",
++      "empty": "No suggestions right now: everything looks in order.",
++      "overdue_collection": "Collections pending: {{count}} overdue invoices. Prioritize contacting {{clients}}.",
++      "low_runway": "Runway of {{months}} months in {{currency}}. Cut spend or speed up collections.",
++      "no_cash_snapshot": "Capture your cash balance in Statements to compute runway and cash projections.",
++      "client_concentration": "{{client}} is {{share}}% of your {{currency}} revenue (last 6 months). Diversifying reduces risk.",
++      "renewal_due": "The retainer “{{contract}}” for {{client}} ends on {{date}}. Schedule the renewal now.",
++      "negative_margin": "Negative margin in {{month}} ({{currency}}): you spent more than you earned.",
++      "missing_expenses": "No expenses captured for {{month}}. Without them, P&L and forecasts are incomplete."
++    },
++    "pnl": {
++      "title": "Income statement (monthly)",
++      "income": "Income",
++      "expenses": "Expenses",
++      "net": "Net",
++      "month": "Month",
++      "empty": "Record payments and expenses to see your income statement."
++    },
++    "expense": {
++      "title": "Expenses",
++      "add": "Record expense",
++      "edit": "Edit expense",
++      "month": "Month",
++      "category": "Category",
++      "category_payroll": "Payroll",
++      "category_infrastructure": "Infrastructure",
++      "category_marketing": "Marketing",
++      "category_admin": "Administration",
++      "category_taxes": "Taxes",
++      "category_other": "Other",
++      "concept": "Concept",
++      "empty": "No expenses captured. Record monthly expenses for a real P&L.",
++      "delete_title": "Delete expense",
++      "delete_confirm": "Delete this expense?"
++    },
++    "cash": {
++      "title": "Cash balance",
++      "add": "Update balance",
++      "as_of": "As of",
++      "current": "Current balance",
++      "empty": "Record your cash balance to compute runway.",
++      "delete_confirm": "Delete this balance record?"
++    },
++    "forecast": {
++      "title": "6-month forecast",
++      "retainer_income": "Committed retainers",
++      "oneoff_income": "Extras (3m avg)",
++      "expenses": "Expenses (3m avg)",
++      "net": "Net flow",
++      "projected_cash": "Projected cash",
++      "assumptions": "Assumptions: active retainers per their cycle and term; extras and expenses as a rolling 3-month average.",
++      "empty": "Create retainer contracts and capture expenses to project."
 +    }
    }
  }
@@ -9384,10 +11325,10 @@ index db31c30..0b8533f 100644
    }
  }
 diff --git a/packages/i18n/src/locales/ja/common.json b/packages/i18n/src/locales/ja/common.json
-index 4899411..a25e1f0 100644
+index 4899411..1a0c013 100644
 --- a/packages/i18n/src/locales/ja/common.json
 +++ b/packages/i18n/src/locales/ja/common.json
-@@ -867,5 +867,210 @@
+@@ -867,5 +867,271 @@
        "description": "作業項目をJSONファイルにエクスポートします。",
        "short_description": "JSONとしてエクスポート"
      }
@@ -9595,6 +11536,67 @@ index 4899411..a25e1f0 100644
 +      "saving": "Saving",
 +      "required": "This field is required",
 +      "error": "Could not save. Please try again."
++    },
++    "tabs_statements": "Statements",
++    "tabs_forecast": "Forecast",
++    "kpi_mrr": "Committed MRR",
++    "kpi_runway": "Runway",
++    "runway_months": "{{months}} months",
++    "runway_infinite": "No burn (positive flow)",
++    "runway_unknown": "Capture your cash balance",
++    "insights": {
++      "title": "Suggestions",
++      "empty": "No suggestions right now: everything looks in order.",
++      "overdue_collection": "Collections pending: {{count}} overdue invoices. Prioritize contacting {{clients}}.",
++      "low_runway": "Runway of {{months}} months in {{currency}}. Cut spend or speed up collections.",
++      "no_cash_snapshot": "Capture your cash balance in Statements to compute runway and cash projections.",
++      "client_concentration": "{{client}} is {{share}}% of your {{currency}} revenue (last 6 months). Diversifying reduces risk.",
++      "renewal_due": "The retainer “{{contract}}” for {{client}} ends on {{date}}. Schedule the renewal now.",
++      "negative_margin": "Negative margin in {{month}} ({{currency}}): you spent more than you earned.",
++      "missing_expenses": "No expenses captured for {{month}}. Without them, P&L and forecasts are incomplete."
++    },
++    "pnl": {
++      "title": "Income statement (monthly)",
++      "income": "Income",
++      "expenses": "Expenses",
++      "net": "Net",
++      "month": "Month",
++      "empty": "Record payments and expenses to see your income statement."
++    },
++    "expense": {
++      "title": "Expenses",
++      "add": "Record expense",
++      "edit": "Edit expense",
++      "month": "Month",
++      "category": "Category",
++      "category_payroll": "Payroll",
++      "category_infrastructure": "Infrastructure",
++      "category_marketing": "Marketing",
++      "category_admin": "Administration",
++      "category_taxes": "Taxes",
++      "category_other": "Other",
++      "concept": "Concept",
++      "empty": "No expenses captured. Record monthly expenses for a real P&L.",
++      "delete_title": "Delete expense",
++      "delete_confirm": "Delete this expense?"
++    },
++    "cash": {
++      "title": "Cash balance",
++      "add": "Update balance",
++      "as_of": "As of",
++      "current": "Current balance",
++      "empty": "Record your cash balance to compute runway.",
++      "delete_confirm": "Delete this balance record?"
++    },
++    "forecast": {
++      "title": "6-month forecast",
++      "retainer_income": "Committed retainers",
++      "oneoff_income": "Extras (3m avg)",
++      "expenses": "Expenses (3m avg)",
++      "net": "Net flow",
++      "projected_cash": "Projected cash",
++      "assumptions": "Assumptions: active retainers per their cycle and term; extras and expenses as a rolling 3-month average.",
++      "empty": "Create retainer contracts and capture expenses to project."
 +    }
    }
  }
@@ -9612,10 +11614,10 @@ index 207ec74..5a69b51 100644
    }
  }
 diff --git a/packages/i18n/src/locales/ko/common.json b/packages/i18n/src/locales/ko/common.json
-index 73eea6b..e412e65 100644
+index 73eea6b..6722342 100644
 --- a/packages/i18n/src/locales/ko/common.json
 +++ b/packages/i18n/src/locales/ko/common.json
-@@ -867,5 +867,210 @@
+@@ -867,5 +867,271 @@
        "description": "작업 항목을 JSON 파일로 내보냅니다.",
        "short_description": "JSON으로 내보내기"
      }
@@ -9823,6 +11825,67 @@ index 73eea6b..e412e65 100644
 +      "saving": "Saving",
 +      "required": "This field is required",
 +      "error": "Could not save. Please try again."
++    },
++    "tabs_statements": "Statements",
++    "tabs_forecast": "Forecast",
++    "kpi_mrr": "Committed MRR",
++    "kpi_runway": "Runway",
++    "runway_months": "{{months}} months",
++    "runway_infinite": "No burn (positive flow)",
++    "runway_unknown": "Capture your cash balance",
++    "insights": {
++      "title": "Suggestions",
++      "empty": "No suggestions right now: everything looks in order.",
++      "overdue_collection": "Collections pending: {{count}} overdue invoices. Prioritize contacting {{clients}}.",
++      "low_runway": "Runway of {{months}} months in {{currency}}. Cut spend or speed up collections.",
++      "no_cash_snapshot": "Capture your cash balance in Statements to compute runway and cash projections.",
++      "client_concentration": "{{client}} is {{share}}% of your {{currency}} revenue (last 6 months). Diversifying reduces risk.",
++      "renewal_due": "The retainer “{{contract}}” for {{client}} ends on {{date}}. Schedule the renewal now.",
++      "negative_margin": "Negative margin in {{month}} ({{currency}}): you spent more than you earned.",
++      "missing_expenses": "No expenses captured for {{month}}. Without them, P&L and forecasts are incomplete."
++    },
++    "pnl": {
++      "title": "Income statement (monthly)",
++      "income": "Income",
++      "expenses": "Expenses",
++      "net": "Net",
++      "month": "Month",
++      "empty": "Record payments and expenses to see your income statement."
++    },
++    "expense": {
++      "title": "Expenses",
++      "add": "Record expense",
++      "edit": "Edit expense",
++      "month": "Month",
++      "category": "Category",
++      "category_payroll": "Payroll",
++      "category_infrastructure": "Infrastructure",
++      "category_marketing": "Marketing",
++      "category_admin": "Administration",
++      "category_taxes": "Taxes",
++      "category_other": "Other",
++      "concept": "Concept",
++      "empty": "No expenses captured. Record monthly expenses for a real P&L.",
++      "delete_title": "Delete expense",
++      "delete_confirm": "Delete this expense?"
++    },
++    "cash": {
++      "title": "Cash balance",
++      "add": "Update balance",
++      "as_of": "As of",
++      "current": "Current balance",
++      "empty": "Record your cash balance to compute runway.",
++      "delete_confirm": "Delete this balance record?"
++    },
++    "forecast": {
++      "title": "6-month forecast",
++      "retainer_income": "Committed retainers",
++      "oneoff_income": "Extras (3m avg)",
++      "expenses": "Expenses (3m avg)",
++      "net": "Net flow",
++      "projected_cash": "Projected cash",
++      "assumptions": "Assumptions: active retainers per their cycle and term; extras and expenses as a rolling 3-month average.",
++      "empty": "Create retainer contracts and capture expenses to project."
 +    }
    }
  }
@@ -9840,10 +11903,10 @@ index 86ba3b7..ed2b818 100644
    }
  }
 diff --git a/packages/i18n/src/locales/pl/common.json b/packages/i18n/src/locales/pl/common.json
-index 4c4850c..5a73fe0 100644
+index 4c4850c..1fe2944 100644
 --- a/packages/i18n/src/locales/pl/common.json
 +++ b/packages/i18n/src/locales/pl/common.json
-@@ -867,5 +867,210 @@
+@@ -867,5 +867,271 @@
        "description": "Eksportuj elementy do pliku JSON.",
        "short_description": "Eksportuj jako JSON"
      }
@@ -10051,6 +12114,67 @@ index 4c4850c..5a73fe0 100644
 +      "saving": "Saving",
 +      "required": "This field is required",
 +      "error": "Could not save. Please try again."
++    },
++    "tabs_statements": "Statements",
++    "tabs_forecast": "Forecast",
++    "kpi_mrr": "Committed MRR",
++    "kpi_runway": "Runway",
++    "runway_months": "{{months}} months",
++    "runway_infinite": "No burn (positive flow)",
++    "runway_unknown": "Capture your cash balance",
++    "insights": {
++      "title": "Suggestions",
++      "empty": "No suggestions right now: everything looks in order.",
++      "overdue_collection": "Collections pending: {{count}} overdue invoices. Prioritize contacting {{clients}}.",
++      "low_runway": "Runway of {{months}} months in {{currency}}. Cut spend or speed up collections.",
++      "no_cash_snapshot": "Capture your cash balance in Statements to compute runway and cash projections.",
++      "client_concentration": "{{client}} is {{share}}% of your {{currency}} revenue (last 6 months). Diversifying reduces risk.",
++      "renewal_due": "The retainer “{{contract}}” for {{client}} ends on {{date}}. Schedule the renewal now.",
++      "negative_margin": "Negative margin in {{month}} ({{currency}}): you spent more than you earned.",
++      "missing_expenses": "No expenses captured for {{month}}. Without them, P&L and forecasts are incomplete."
++    },
++    "pnl": {
++      "title": "Income statement (monthly)",
++      "income": "Income",
++      "expenses": "Expenses",
++      "net": "Net",
++      "month": "Month",
++      "empty": "Record payments and expenses to see your income statement."
++    },
++    "expense": {
++      "title": "Expenses",
++      "add": "Record expense",
++      "edit": "Edit expense",
++      "month": "Month",
++      "category": "Category",
++      "category_payroll": "Payroll",
++      "category_infrastructure": "Infrastructure",
++      "category_marketing": "Marketing",
++      "category_admin": "Administration",
++      "category_taxes": "Taxes",
++      "category_other": "Other",
++      "concept": "Concept",
++      "empty": "No expenses captured. Record monthly expenses for a real P&L.",
++      "delete_title": "Delete expense",
++      "delete_confirm": "Delete this expense?"
++    },
++    "cash": {
++      "title": "Cash balance",
++      "add": "Update balance",
++      "as_of": "As of",
++      "current": "Current balance",
++      "empty": "Record your cash balance to compute runway.",
++      "delete_confirm": "Delete this balance record?"
++    },
++    "forecast": {
++      "title": "6-month forecast",
++      "retainer_income": "Committed retainers",
++      "oneoff_income": "Extras (3m avg)",
++      "expenses": "Expenses (3m avg)",
++      "net": "Net flow",
++      "projected_cash": "Projected cash",
++      "assumptions": "Assumptions: active retainers per their cycle and term; extras and expenses as a rolling 3-month average.",
++      "empty": "Create retainer contracts and capture expenses to project."
 +    }
    }
  }
@@ -10068,10 +12192,10 @@ index 3089b6d..58f309c 100644
    }
  }
 diff --git a/packages/i18n/src/locales/pt-BR/common.json b/packages/i18n/src/locales/pt-BR/common.json
-index 565e85d..f616e16 100644
+index 565e85d..7a46bf3 100644
 --- a/packages/i18n/src/locales/pt-BR/common.json
 +++ b/packages/i18n/src/locales/pt-BR/common.json
-@@ -867,5 +867,210 @@
+@@ -867,5 +867,271 @@
        "description": "Exporte itens de trabalho para um arquivo JSON.",
        "short_description": "Exportar como JSON"
      }
@@ -10279,6 +12403,67 @@ index 565e85d..f616e16 100644
 +      "saving": "Saving",
 +      "required": "This field is required",
 +      "error": "Could not save. Please try again."
++    },
++    "tabs_statements": "Statements",
++    "tabs_forecast": "Forecast",
++    "kpi_mrr": "Committed MRR",
++    "kpi_runway": "Runway",
++    "runway_months": "{{months}} months",
++    "runway_infinite": "No burn (positive flow)",
++    "runway_unknown": "Capture your cash balance",
++    "insights": {
++      "title": "Suggestions",
++      "empty": "No suggestions right now: everything looks in order.",
++      "overdue_collection": "Collections pending: {{count}} overdue invoices. Prioritize contacting {{clients}}.",
++      "low_runway": "Runway of {{months}} months in {{currency}}. Cut spend or speed up collections.",
++      "no_cash_snapshot": "Capture your cash balance in Statements to compute runway and cash projections.",
++      "client_concentration": "{{client}} is {{share}}% of your {{currency}} revenue (last 6 months). Diversifying reduces risk.",
++      "renewal_due": "The retainer “{{contract}}” for {{client}} ends on {{date}}. Schedule the renewal now.",
++      "negative_margin": "Negative margin in {{month}} ({{currency}}): you spent more than you earned.",
++      "missing_expenses": "No expenses captured for {{month}}. Without them, P&L and forecasts are incomplete."
++    },
++    "pnl": {
++      "title": "Income statement (monthly)",
++      "income": "Income",
++      "expenses": "Expenses",
++      "net": "Net",
++      "month": "Month",
++      "empty": "Record payments and expenses to see your income statement."
++    },
++    "expense": {
++      "title": "Expenses",
++      "add": "Record expense",
++      "edit": "Edit expense",
++      "month": "Month",
++      "category": "Category",
++      "category_payroll": "Payroll",
++      "category_infrastructure": "Infrastructure",
++      "category_marketing": "Marketing",
++      "category_admin": "Administration",
++      "category_taxes": "Taxes",
++      "category_other": "Other",
++      "concept": "Concept",
++      "empty": "No expenses captured. Record monthly expenses for a real P&L.",
++      "delete_title": "Delete expense",
++      "delete_confirm": "Delete this expense?"
++    },
++    "cash": {
++      "title": "Cash balance",
++      "add": "Update balance",
++      "as_of": "As of",
++      "current": "Current balance",
++      "empty": "Record your cash balance to compute runway.",
++      "delete_confirm": "Delete this balance record?"
++    },
++    "forecast": {
++      "title": "6-month forecast",
++      "retainer_income": "Committed retainers",
++      "oneoff_income": "Extras (3m avg)",
++      "expenses": "Expenses (3m avg)",
++      "net": "Net flow",
++      "projected_cash": "Projected cash",
++      "assumptions": "Assumptions: active retainers per their cycle and term; extras and expenses as a rolling 3-month average.",
++      "empty": "Create retainer contracts and capture expenses to project."
 +    }
    }
  }
@@ -10296,10 +12481,10 @@ index c2a2d62..ffc5645 100644
    }
  }
 diff --git a/packages/i18n/src/locales/ro/common.json b/packages/i18n/src/locales/ro/common.json
-index e2b44ce..4c97e4d 100644
+index e2b44ce..2f930eb 100644
 --- a/packages/i18n/src/locales/ro/common.json
 +++ b/packages/i18n/src/locales/ro/common.json
-@@ -867,5 +867,210 @@
+@@ -867,5 +867,271 @@
        "description": "Exportă activitățile într-un fișier JSON.",
        "short_description": "Exportă ca JSON"
      }
@@ -10507,6 +12692,67 @@ index e2b44ce..4c97e4d 100644
 +      "saving": "Saving",
 +      "required": "This field is required",
 +      "error": "Could not save. Please try again."
++    },
++    "tabs_statements": "Statements",
++    "tabs_forecast": "Forecast",
++    "kpi_mrr": "Committed MRR",
++    "kpi_runway": "Runway",
++    "runway_months": "{{months}} months",
++    "runway_infinite": "No burn (positive flow)",
++    "runway_unknown": "Capture your cash balance",
++    "insights": {
++      "title": "Suggestions",
++      "empty": "No suggestions right now: everything looks in order.",
++      "overdue_collection": "Collections pending: {{count}} overdue invoices. Prioritize contacting {{clients}}.",
++      "low_runway": "Runway of {{months}} months in {{currency}}. Cut spend or speed up collections.",
++      "no_cash_snapshot": "Capture your cash balance in Statements to compute runway and cash projections.",
++      "client_concentration": "{{client}} is {{share}}% of your {{currency}} revenue (last 6 months). Diversifying reduces risk.",
++      "renewal_due": "The retainer “{{contract}}” for {{client}} ends on {{date}}. Schedule the renewal now.",
++      "negative_margin": "Negative margin in {{month}} ({{currency}}): you spent more than you earned.",
++      "missing_expenses": "No expenses captured for {{month}}. Without them, P&L and forecasts are incomplete."
++    },
++    "pnl": {
++      "title": "Income statement (monthly)",
++      "income": "Income",
++      "expenses": "Expenses",
++      "net": "Net",
++      "month": "Month",
++      "empty": "Record payments and expenses to see your income statement."
++    },
++    "expense": {
++      "title": "Expenses",
++      "add": "Record expense",
++      "edit": "Edit expense",
++      "month": "Month",
++      "category": "Category",
++      "category_payroll": "Payroll",
++      "category_infrastructure": "Infrastructure",
++      "category_marketing": "Marketing",
++      "category_admin": "Administration",
++      "category_taxes": "Taxes",
++      "category_other": "Other",
++      "concept": "Concept",
++      "empty": "No expenses captured. Record monthly expenses for a real P&L.",
++      "delete_title": "Delete expense",
++      "delete_confirm": "Delete this expense?"
++    },
++    "cash": {
++      "title": "Cash balance",
++      "add": "Update balance",
++      "as_of": "As of",
++      "current": "Current balance",
++      "empty": "Record your cash balance to compute runway.",
++      "delete_confirm": "Delete this balance record?"
++    },
++    "forecast": {
++      "title": "6-month forecast",
++      "retainer_income": "Committed retainers",
++      "oneoff_income": "Extras (3m avg)",
++      "expenses": "Expenses (3m avg)",
++      "net": "Net flow",
++      "projected_cash": "Projected cash",
++      "assumptions": "Assumptions: active retainers per their cycle and term; extras and expenses as a rolling 3-month average.",
++      "empty": "Create retainer contracts and capture expenses to project."
 +    }
    }
  }
@@ -10524,10 +12770,10 @@ index e56d5aa..ff5227d 100644
    }
  }
 diff --git a/packages/i18n/src/locales/ru/common.json b/packages/i18n/src/locales/ru/common.json
-index c2881e5..14c3af0 100644
+index c2881e5..4f61007 100644
 --- a/packages/i18n/src/locales/ru/common.json
 +++ b/packages/i18n/src/locales/ru/common.json
-@@ -867,5 +867,210 @@
+@@ -867,5 +867,271 @@
        "description": "Экспорт рабочих элементов в JSON-файл.",
        "short_description": "Экспорт в json"
      }
@@ -10735,6 +12981,67 @@ index c2881e5..14c3af0 100644
 +      "saving": "Saving",
 +      "required": "This field is required",
 +      "error": "Could not save. Please try again."
++    },
++    "tabs_statements": "Statements",
++    "tabs_forecast": "Forecast",
++    "kpi_mrr": "Committed MRR",
++    "kpi_runway": "Runway",
++    "runway_months": "{{months}} months",
++    "runway_infinite": "No burn (positive flow)",
++    "runway_unknown": "Capture your cash balance",
++    "insights": {
++      "title": "Suggestions",
++      "empty": "No suggestions right now: everything looks in order.",
++      "overdue_collection": "Collections pending: {{count}} overdue invoices. Prioritize contacting {{clients}}.",
++      "low_runway": "Runway of {{months}} months in {{currency}}. Cut spend or speed up collections.",
++      "no_cash_snapshot": "Capture your cash balance in Statements to compute runway and cash projections.",
++      "client_concentration": "{{client}} is {{share}}% of your {{currency}} revenue (last 6 months). Diversifying reduces risk.",
++      "renewal_due": "The retainer “{{contract}}” for {{client}} ends on {{date}}. Schedule the renewal now.",
++      "negative_margin": "Negative margin in {{month}} ({{currency}}): you spent more than you earned.",
++      "missing_expenses": "No expenses captured for {{month}}. Without them, P&L and forecasts are incomplete."
++    },
++    "pnl": {
++      "title": "Income statement (monthly)",
++      "income": "Income",
++      "expenses": "Expenses",
++      "net": "Net",
++      "month": "Month",
++      "empty": "Record payments and expenses to see your income statement."
++    },
++    "expense": {
++      "title": "Expenses",
++      "add": "Record expense",
++      "edit": "Edit expense",
++      "month": "Month",
++      "category": "Category",
++      "category_payroll": "Payroll",
++      "category_infrastructure": "Infrastructure",
++      "category_marketing": "Marketing",
++      "category_admin": "Administration",
++      "category_taxes": "Taxes",
++      "category_other": "Other",
++      "concept": "Concept",
++      "empty": "No expenses captured. Record monthly expenses for a real P&L.",
++      "delete_title": "Delete expense",
++      "delete_confirm": "Delete this expense?"
++    },
++    "cash": {
++      "title": "Cash balance",
++      "add": "Update balance",
++      "as_of": "As of",
++      "current": "Current balance",
++      "empty": "Record your cash balance to compute runway.",
++      "delete_confirm": "Delete this balance record?"
++    },
++    "forecast": {
++      "title": "6-month forecast",
++      "retainer_income": "Committed retainers",
++      "oneoff_income": "Extras (3m avg)",
++      "expenses": "Expenses (3m avg)",
++      "net": "Net flow",
++      "projected_cash": "Projected cash",
++      "assumptions": "Assumptions: active retainers per their cycle and term; extras and expenses as a rolling 3-month average.",
++      "empty": "Create retainer contracts and capture expenses to project."
 +    }
    }
  }
@@ -10752,10 +13059,10 @@ index 80bbdd8..5647d12 100644
    }
  }
 diff --git a/packages/i18n/src/locales/sk/common.json b/packages/i18n/src/locales/sk/common.json
-index 4fc339c..95ea0c7 100644
+index 4fc339c..fd9844a 100644
 --- a/packages/i18n/src/locales/sk/common.json
 +++ b/packages/i18n/src/locales/sk/common.json
-@@ -867,5 +867,210 @@
+@@ -867,5 +867,271 @@
        "description": "Exportujte položky do JSON.",
        "short_description": "Exportovať ako JSON"
      }
@@ -10963,6 +13270,67 @@ index 4fc339c..95ea0c7 100644
 +      "saving": "Saving",
 +      "required": "This field is required",
 +      "error": "Could not save. Please try again."
++    },
++    "tabs_statements": "Statements",
++    "tabs_forecast": "Forecast",
++    "kpi_mrr": "Committed MRR",
++    "kpi_runway": "Runway",
++    "runway_months": "{{months}} months",
++    "runway_infinite": "No burn (positive flow)",
++    "runway_unknown": "Capture your cash balance",
++    "insights": {
++      "title": "Suggestions",
++      "empty": "No suggestions right now: everything looks in order.",
++      "overdue_collection": "Collections pending: {{count}} overdue invoices. Prioritize contacting {{clients}}.",
++      "low_runway": "Runway of {{months}} months in {{currency}}. Cut spend or speed up collections.",
++      "no_cash_snapshot": "Capture your cash balance in Statements to compute runway and cash projections.",
++      "client_concentration": "{{client}} is {{share}}% of your {{currency}} revenue (last 6 months). Diversifying reduces risk.",
++      "renewal_due": "The retainer “{{contract}}” for {{client}} ends on {{date}}. Schedule the renewal now.",
++      "negative_margin": "Negative margin in {{month}} ({{currency}}): you spent more than you earned.",
++      "missing_expenses": "No expenses captured for {{month}}. Without them, P&L and forecasts are incomplete."
++    },
++    "pnl": {
++      "title": "Income statement (monthly)",
++      "income": "Income",
++      "expenses": "Expenses",
++      "net": "Net",
++      "month": "Month",
++      "empty": "Record payments and expenses to see your income statement."
++    },
++    "expense": {
++      "title": "Expenses",
++      "add": "Record expense",
++      "edit": "Edit expense",
++      "month": "Month",
++      "category": "Category",
++      "category_payroll": "Payroll",
++      "category_infrastructure": "Infrastructure",
++      "category_marketing": "Marketing",
++      "category_admin": "Administration",
++      "category_taxes": "Taxes",
++      "category_other": "Other",
++      "concept": "Concept",
++      "empty": "No expenses captured. Record monthly expenses for a real P&L.",
++      "delete_title": "Delete expense",
++      "delete_confirm": "Delete this expense?"
++    },
++    "cash": {
++      "title": "Cash balance",
++      "add": "Update balance",
++      "as_of": "As of",
++      "current": "Current balance",
++      "empty": "Record your cash balance to compute runway.",
++      "delete_confirm": "Delete this balance record?"
++    },
++    "forecast": {
++      "title": "6-month forecast",
++      "retainer_income": "Committed retainers",
++      "oneoff_income": "Extras (3m avg)",
++      "expenses": "Expenses (3m avg)",
++      "net": "Net flow",
++      "projected_cash": "Projected cash",
++      "assumptions": "Assumptions: active retainers per their cycle and term; extras and expenses as a rolling 3-month average.",
++      "empty": "Create retainer contracts and capture expenses to project."
 +    }
    }
  }
@@ -10980,10 +13348,10 @@ index 0d09286..1156fc4 100644
    }
  }
 diff --git a/packages/i18n/src/locales/tr-TR/common.json b/packages/i18n/src/locales/tr-TR/common.json
-index 74bd5cb..85bc7f8 100644
+index 74bd5cb..3ee47db 100644
 --- a/packages/i18n/src/locales/tr-TR/common.json
 +++ b/packages/i18n/src/locales/tr-TR/common.json
-@@ -867,5 +867,210 @@
+@@ -867,5 +867,271 @@
        "description": "İş öğelerini JSON dosyasına aktarın.",
        "short_description": "JSON olarak aktar"
      }
@@ -11191,6 +13559,67 @@ index 74bd5cb..85bc7f8 100644
 +      "saving": "Saving",
 +      "required": "This field is required",
 +      "error": "Could not save. Please try again."
++    },
++    "tabs_statements": "Statements",
++    "tabs_forecast": "Forecast",
++    "kpi_mrr": "Committed MRR",
++    "kpi_runway": "Runway",
++    "runway_months": "{{months}} months",
++    "runway_infinite": "No burn (positive flow)",
++    "runway_unknown": "Capture your cash balance",
++    "insights": {
++      "title": "Suggestions",
++      "empty": "No suggestions right now: everything looks in order.",
++      "overdue_collection": "Collections pending: {{count}} overdue invoices. Prioritize contacting {{clients}}.",
++      "low_runway": "Runway of {{months}} months in {{currency}}. Cut spend or speed up collections.",
++      "no_cash_snapshot": "Capture your cash balance in Statements to compute runway and cash projections.",
++      "client_concentration": "{{client}} is {{share}}% of your {{currency}} revenue (last 6 months). Diversifying reduces risk.",
++      "renewal_due": "The retainer “{{contract}}” for {{client}} ends on {{date}}. Schedule the renewal now.",
++      "negative_margin": "Negative margin in {{month}} ({{currency}}): you spent more than you earned.",
++      "missing_expenses": "No expenses captured for {{month}}. Without them, P&L and forecasts are incomplete."
++    },
++    "pnl": {
++      "title": "Income statement (monthly)",
++      "income": "Income",
++      "expenses": "Expenses",
++      "net": "Net",
++      "month": "Month",
++      "empty": "Record payments and expenses to see your income statement."
++    },
++    "expense": {
++      "title": "Expenses",
++      "add": "Record expense",
++      "edit": "Edit expense",
++      "month": "Month",
++      "category": "Category",
++      "category_payroll": "Payroll",
++      "category_infrastructure": "Infrastructure",
++      "category_marketing": "Marketing",
++      "category_admin": "Administration",
++      "category_taxes": "Taxes",
++      "category_other": "Other",
++      "concept": "Concept",
++      "empty": "No expenses captured. Record monthly expenses for a real P&L.",
++      "delete_title": "Delete expense",
++      "delete_confirm": "Delete this expense?"
++    },
++    "cash": {
++      "title": "Cash balance",
++      "add": "Update balance",
++      "as_of": "As of",
++      "current": "Current balance",
++      "empty": "Record your cash balance to compute runway.",
++      "delete_confirm": "Delete this balance record?"
++    },
++    "forecast": {
++      "title": "6-month forecast",
++      "retainer_income": "Committed retainers",
++      "oneoff_income": "Extras (3m avg)",
++      "expenses": "Expenses (3m avg)",
++      "net": "Net flow",
++      "projected_cash": "Projected cash",
++      "assumptions": "Assumptions: active retainers per their cycle and term; extras and expenses as a rolling 3-month average.",
++      "empty": "Create retainer contracts and capture expenses to project."
 +    }
    }
  }
@@ -11208,10 +13637,10 @@ index f347e01..8640ecb 100644
    }
  }
 diff --git a/packages/i18n/src/locales/ua/common.json b/packages/i18n/src/locales/ua/common.json
-index 89bd906..32c1fab 100644
+index 89bd906..e359c29 100644
 --- a/packages/i18n/src/locales/ua/common.json
 +++ b/packages/i18n/src/locales/ua/common.json
-@@ -867,5 +867,210 @@
+@@ -867,5 +867,271 @@
        "description": "Експортуйте одиниці у формат JSON.",
        "short_description": "Експортувати як JSON"
      }
@@ -11419,6 +13848,67 @@ index 89bd906..32c1fab 100644
 +      "saving": "Saving",
 +      "required": "This field is required",
 +      "error": "Could not save. Please try again."
++    },
++    "tabs_statements": "Statements",
++    "tabs_forecast": "Forecast",
++    "kpi_mrr": "Committed MRR",
++    "kpi_runway": "Runway",
++    "runway_months": "{{months}} months",
++    "runway_infinite": "No burn (positive flow)",
++    "runway_unknown": "Capture your cash balance",
++    "insights": {
++      "title": "Suggestions",
++      "empty": "No suggestions right now: everything looks in order.",
++      "overdue_collection": "Collections pending: {{count}} overdue invoices. Prioritize contacting {{clients}}.",
++      "low_runway": "Runway of {{months}} months in {{currency}}. Cut spend or speed up collections.",
++      "no_cash_snapshot": "Capture your cash balance in Statements to compute runway and cash projections.",
++      "client_concentration": "{{client}} is {{share}}% of your {{currency}} revenue (last 6 months). Diversifying reduces risk.",
++      "renewal_due": "The retainer “{{contract}}” for {{client}} ends on {{date}}. Schedule the renewal now.",
++      "negative_margin": "Negative margin in {{month}} ({{currency}}): you spent more than you earned.",
++      "missing_expenses": "No expenses captured for {{month}}. Without them, P&L and forecasts are incomplete."
++    },
++    "pnl": {
++      "title": "Income statement (monthly)",
++      "income": "Income",
++      "expenses": "Expenses",
++      "net": "Net",
++      "month": "Month",
++      "empty": "Record payments and expenses to see your income statement."
++    },
++    "expense": {
++      "title": "Expenses",
++      "add": "Record expense",
++      "edit": "Edit expense",
++      "month": "Month",
++      "category": "Category",
++      "category_payroll": "Payroll",
++      "category_infrastructure": "Infrastructure",
++      "category_marketing": "Marketing",
++      "category_admin": "Administration",
++      "category_taxes": "Taxes",
++      "category_other": "Other",
++      "concept": "Concept",
++      "empty": "No expenses captured. Record monthly expenses for a real P&L.",
++      "delete_title": "Delete expense",
++      "delete_confirm": "Delete this expense?"
++    },
++    "cash": {
++      "title": "Cash balance",
++      "add": "Update balance",
++      "as_of": "As of",
++      "current": "Current balance",
++      "empty": "Record your cash balance to compute runway.",
++      "delete_confirm": "Delete this balance record?"
++    },
++    "forecast": {
++      "title": "6-month forecast",
++      "retainer_income": "Committed retainers",
++      "oneoff_income": "Extras (3m avg)",
++      "expenses": "Expenses (3m avg)",
++      "net": "Net flow",
++      "projected_cash": "Projected cash",
++      "assumptions": "Assumptions: active retainers per their cycle and term; extras and expenses as a rolling 3-month average.",
++      "empty": "Create retainer contracts and capture expenses to project."
 +    }
    }
  }
@@ -11436,10 +13926,10 @@ index 742ef12..0a00df0 100644
    }
  }
 diff --git a/packages/i18n/src/locales/vi-VN/common.json b/packages/i18n/src/locales/vi-VN/common.json
-index f9aae43..1b18666 100644
+index f9aae43..6d24cfe 100644
 --- a/packages/i18n/src/locales/vi-VN/common.json
 +++ b/packages/i18n/src/locales/vi-VN/common.json
-@@ -867,5 +867,210 @@
+@@ -867,5 +867,271 @@
        "description": "Xuất mục công việc thành tệp JSON.",
        "short_description": "Xuất sang JSON"
      }
@@ -11647,6 +14137,67 @@ index f9aae43..1b18666 100644
 +      "saving": "Saving",
 +      "required": "This field is required",
 +      "error": "Could not save. Please try again."
++    },
++    "tabs_statements": "Statements",
++    "tabs_forecast": "Forecast",
++    "kpi_mrr": "Committed MRR",
++    "kpi_runway": "Runway",
++    "runway_months": "{{months}} months",
++    "runway_infinite": "No burn (positive flow)",
++    "runway_unknown": "Capture your cash balance",
++    "insights": {
++      "title": "Suggestions",
++      "empty": "No suggestions right now: everything looks in order.",
++      "overdue_collection": "Collections pending: {{count}} overdue invoices. Prioritize contacting {{clients}}.",
++      "low_runway": "Runway of {{months}} months in {{currency}}. Cut spend or speed up collections.",
++      "no_cash_snapshot": "Capture your cash balance in Statements to compute runway and cash projections.",
++      "client_concentration": "{{client}} is {{share}}% of your {{currency}} revenue (last 6 months). Diversifying reduces risk.",
++      "renewal_due": "The retainer “{{contract}}” for {{client}} ends on {{date}}. Schedule the renewal now.",
++      "negative_margin": "Negative margin in {{month}} ({{currency}}): you spent more than you earned.",
++      "missing_expenses": "No expenses captured for {{month}}. Without them, P&L and forecasts are incomplete."
++    },
++    "pnl": {
++      "title": "Income statement (monthly)",
++      "income": "Income",
++      "expenses": "Expenses",
++      "net": "Net",
++      "month": "Month",
++      "empty": "Record payments and expenses to see your income statement."
++    },
++    "expense": {
++      "title": "Expenses",
++      "add": "Record expense",
++      "edit": "Edit expense",
++      "month": "Month",
++      "category": "Category",
++      "category_payroll": "Payroll",
++      "category_infrastructure": "Infrastructure",
++      "category_marketing": "Marketing",
++      "category_admin": "Administration",
++      "category_taxes": "Taxes",
++      "category_other": "Other",
++      "concept": "Concept",
++      "empty": "No expenses captured. Record monthly expenses for a real P&L.",
++      "delete_title": "Delete expense",
++      "delete_confirm": "Delete this expense?"
++    },
++    "cash": {
++      "title": "Cash balance",
++      "add": "Update balance",
++      "as_of": "As of",
++      "current": "Current balance",
++      "empty": "Record your cash balance to compute runway.",
++      "delete_confirm": "Delete this balance record?"
++    },
++    "forecast": {
++      "title": "6-month forecast",
++      "retainer_income": "Committed retainers",
++      "oneoff_income": "Extras (3m avg)",
++      "expenses": "Expenses (3m avg)",
++      "net": "Net flow",
++      "projected_cash": "Projected cash",
++      "assumptions": "Assumptions: active retainers per their cycle and term; extras and expenses as a rolling 3-month average.",
++      "empty": "Create retainer contracts and capture expenses to project."
 +    }
    }
  }
@@ -11664,10 +14215,10 @@ index 1e5d213..7e59d27 100644
    }
  }
 diff --git a/packages/i18n/src/locales/zh-CN/common.json b/packages/i18n/src/locales/zh-CN/common.json
-index dd67d92..d1d974c 100644
+index dd67d92..e3c77d4 100644
 --- a/packages/i18n/src/locales/zh-CN/common.json
 +++ b/packages/i18n/src/locales/zh-CN/common.json
-@@ -867,5 +867,210 @@
+@@ -867,5 +867,271 @@
        "description": "将工作项导出为 JSON 文件。",
        "short_description": "导出为 JSON"
      }
@@ -11875,6 +14426,67 @@ index dd67d92..d1d974c 100644
 +      "saving": "Saving",
 +      "required": "This field is required",
 +      "error": "Could not save. Please try again."
++    },
++    "tabs_statements": "Statements",
++    "tabs_forecast": "Forecast",
++    "kpi_mrr": "Committed MRR",
++    "kpi_runway": "Runway",
++    "runway_months": "{{months}} months",
++    "runway_infinite": "No burn (positive flow)",
++    "runway_unknown": "Capture your cash balance",
++    "insights": {
++      "title": "Suggestions",
++      "empty": "No suggestions right now: everything looks in order.",
++      "overdue_collection": "Collections pending: {{count}} overdue invoices. Prioritize contacting {{clients}}.",
++      "low_runway": "Runway of {{months}} months in {{currency}}. Cut spend or speed up collections.",
++      "no_cash_snapshot": "Capture your cash balance in Statements to compute runway and cash projections.",
++      "client_concentration": "{{client}} is {{share}}% of your {{currency}} revenue (last 6 months). Diversifying reduces risk.",
++      "renewal_due": "The retainer “{{contract}}” for {{client}} ends on {{date}}. Schedule the renewal now.",
++      "negative_margin": "Negative margin in {{month}} ({{currency}}): you spent more than you earned.",
++      "missing_expenses": "No expenses captured for {{month}}. Without them, P&L and forecasts are incomplete."
++    },
++    "pnl": {
++      "title": "Income statement (monthly)",
++      "income": "Income",
++      "expenses": "Expenses",
++      "net": "Net",
++      "month": "Month",
++      "empty": "Record payments and expenses to see your income statement."
++    },
++    "expense": {
++      "title": "Expenses",
++      "add": "Record expense",
++      "edit": "Edit expense",
++      "month": "Month",
++      "category": "Category",
++      "category_payroll": "Payroll",
++      "category_infrastructure": "Infrastructure",
++      "category_marketing": "Marketing",
++      "category_admin": "Administration",
++      "category_taxes": "Taxes",
++      "category_other": "Other",
++      "concept": "Concept",
++      "empty": "No expenses captured. Record monthly expenses for a real P&L.",
++      "delete_title": "Delete expense",
++      "delete_confirm": "Delete this expense?"
++    },
++    "cash": {
++      "title": "Cash balance",
++      "add": "Update balance",
++      "as_of": "As of",
++      "current": "Current balance",
++      "empty": "Record your cash balance to compute runway.",
++      "delete_confirm": "Delete this balance record?"
++    },
++    "forecast": {
++      "title": "6-month forecast",
++      "retainer_income": "Committed retainers",
++      "oneoff_income": "Extras (3m avg)",
++      "expenses": "Expenses (3m avg)",
++      "net": "Net flow",
++      "projected_cash": "Projected cash",
++      "assumptions": "Assumptions: active retainers per their cycle and term; extras and expenses as a rolling 3-month average.",
++      "empty": "Create retainer contracts and capture expenses to project."
 +    }
    }
  }
@@ -11892,10 +14504,10 @@ index 0fe15a3..c1d6427 100644
    }
  }
 diff --git a/packages/i18n/src/locales/zh-TW/common.json b/packages/i18n/src/locales/zh-TW/common.json
-index 834a2d9..fea8bf0 100644
+index 834a2d9..d628c9e 100644
 --- a/packages/i18n/src/locales/zh-TW/common.json
 +++ b/packages/i18n/src/locales/zh-TW/common.json
-@@ -867,5 +867,210 @@
+@@ -867,5 +867,271 @@
        "description": "將工作事項匯出為 JSON 檔案。",
        "short_description": "匯出為 JSON"
      }
@@ -12103,6 +14715,67 @@ index 834a2d9..fea8bf0 100644
 +      "saving": "Saving",
 +      "required": "This field is required",
 +      "error": "Could not save. Please try again."
++    },
++    "tabs_statements": "Statements",
++    "tabs_forecast": "Forecast",
++    "kpi_mrr": "Committed MRR",
++    "kpi_runway": "Runway",
++    "runway_months": "{{months}} months",
++    "runway_infinite": "No burn (positive flow)",
++    "runway_unknown": "Capture your cash balance",
++    "insights": {
++      "title": "Suggestions",
++      "empty": "No suggestions right now: everything looks in order.",
++      "overdue_collection": "Collections pending: {{count}} overdue invoices. Prioritize contacting {{clients}}.",
++      "low_runway": "Runway of {{months}} months in {{currency}}. Cut spend or speed up collections.",
++      "no_cash_snapshot": "Capture your cash balance in Statements to compute runway and cash projections.",
++      "client_concentration": "{{client}} is {{share}}% of your {{currency}} revenue (last 6 months). Diversifying reduces risk.",
++      "renewal_due": "The retainer “{{contract}}” for {{client}} ends on {{date}}. Schedule the renewal now.",
++      "negative_margin": "Negative margin in {{month}} ({{currency}}): you spent more than you earned.",
++      "missing_expenses": "No expenses captured for {{month}}. Without them, P&L and forecasts are incomplete."
++    },
++    "pnl": {
++      "title": "Income statement (monthly)",
++      "income": "Income",
++      "expenses": "Expenses",
++      "net": "Net",
++      "month": "Month",
++      "empty": "Record payments and expenses to see your income statement."
++    },
++    "expense": {
++      "title": "Expenses",
++      "add": "Record expense",
++      "edit": "Edit expense",
++      "month": "Month",
++      "category": "Category",
++      "category_payroll": "Payroll",
++      "category_infrastructure": "Infrastructure",
++      "category_marketing": "Marketing",
++      "category_admin": "Administration",
++      "category_taxes": "Taxes",
++      "category_other": "Other",
++      "concept": "Concept",
++      "empty": "No expenses captured. Record monthly expenses for a real P&L.",
++      "delete_title": "Delete expense",
++      "delete_confirm": "Delete this expense?"
++    },
++    "cash": {
++      "title": "Cash balance",
++      "add": "Update balance",
++      "as_of": "As of",
++      "current": "Current balance",
++      "empty": "Record your cash balance to compute runway.",
++      "delete_confirm": "Delete this balance record?"
++    },
++    "forecast": {
++      "title": "6-month forecast",
++      "retainer_income": "Committed retainers",
++      "oneoff_income": "Extras (3m avg)",
++      "expenses": "Expenses (3m avg)",
++      "net": "Net flow",
++      "projected_cash": "Projected cash",
++      "assumptions": "Assumptions: active retainers per their cycle and term; extras and expenses as a rolling 3-month average.",
++      "empty": "Create retainer contracts and capture expenses to project."
 +    }
    }
  }

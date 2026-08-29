@@ -149,6 +149,61 @@ class Payment(ProjectBaseModel):
         return f"{self.amount} {self.currency} @ {self.paid_at}"
 
 
+class ExpenseEntry(BaseModel):
+    """A monthly expense line ("estado financiero" input). Workspace-level:
+    company costs are not tied to a client project."""
+
+    CATEGORY_CHOICES = (
+        ("payroll", "Payroll"),
+        ("infrastructure", "Infrastructure"),
+        ("marketing", "Marketing"),
+        ("admin", "Administration"),
+        ("taxes", "Taxes"),
+        ("other", "Other"),
+    )
+
+    workspace = models.ForeignKey(
+        "db.Workspace", on_delete=models.CASCADE, related_name="finance_expenses"
+    )
+    month = models.CharField(max_length=7, db_index=True)  # "YYYY-MM"
+    category = models.CharField(max_length=20, choices=CATEGORY_CHOICES, default="other")
+    concept = models.CharField(max_length=255)
+    amount = models.DecimalField(max_digits=12, decimal_places=2)
+    currency = models.CharField(max_length=3, choices=CURRENCY_CHOICES, default="MXN")
+    notes = models.TextField(blank=True, default="")
+
+    class Meta:
+        verbose_name = "Expense Entry"
+        verbose_name_plural = "Expense Entries"
+        db_table = "finance_expenses"
+        ordering = ("-month", "-created_at")
+
+    def __str__(self):
+        return f"{self.month} {self.concept} {self.amount} {self.currency}"
+
+
+class CashSnapshot(BaseModel):
+    """Cash balance at a point in time, per currency. The latest snapshot is
+    the anchor for runway and cash projections."""
+
+    workspace = models.ForeignKey(
+        "db.Workspace", on_delete=models.CASCADE, related_name="finance_cash_snapshots"
+    )
+    as_of = models.DateField()
+    amount = models.DecimalField(max_digits=14, decimal_places=2)
+    currency = models.CharField(max_length=3, choices=CURRENCY_CHOICES, default="MXN")
+    notes = models.TextField(blank=True, default="")
+
+    class Meta:
+        verbose_name = "Cash Snapshot"
+        verbose_name_plural = "Cash Snapshots"
+        db_table = "finance_cash_snapshots"
+        ordering = ("-as_of", "-created_at")
+
+    def __str__(self):
+        return f"{self.as_of} {self.amount} {self.currency}"
+
+
 class FinanceAccess(BaseModel):
     """Workspace-level allowlist: members allowed to view/manage finance data.
     Workspace admins have implicit access and are not required to be listed."""

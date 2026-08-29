@@ -163,8 +163,26 @@ def project_financials(project, today=None, materialize=True):
     }
 
 
+def _backfill_profiles(workspace):
+    """Auto-repara datos huérfanos: proyectos con contratos/cobros/pagos pero
+    sin perfil (creados antes de que el perfil fuera implícito)."""
+    project_ids = set()
+    for model in (Contract, Invoice, Payment):
+        project_ids.update(
+            model.objects.filter(workspace=workspace).values_list("project_id", flat=True)
+        )
+    with_profile = set(
+        FinanceProfile.objects.filter(workspace=workspace).values_list("project_id", flat=True)
+    )
+    for pid in project_ids - with_profile:
+        FinanceProfile.objects.get_or_create(
+            project_id=pid, defaults={"workspace_id": workspace.id}
+        )
+
+
 def build_dashboard(workspace, today=None):
     today = today or date.today()
+    _backfill_profiles(workspace)
     profiles = FinanceProfile.objects.filter(workspace=workspace).select_related("project")
 
     totals = {

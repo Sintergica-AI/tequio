@@ -33,6 +33,15 @@ def _get_project(slug, project_id):
     return Project.objects.get(pk=project_id, workspace__slug=slug)
 
 
+def _ensure_profile(project):
+    """Registrar datos financieros convierte al proyecto en cliente de forma
+    implícita: sin esto, el dashboard (que parte de FinanceProfile) queda vacío
+    aunque existan contratos o pagos."""
+    FinanceProfile.objects.get_or_create(
+        project=project, defaults={"workspace_id": project.workspace_id}
+    )
+
+
 class FinanceMeEndpoint(BaseAPIView):
     def get(self, request, slug):
         if not WorkspaceMember.objects.filter(
@@ -153,6 +162,7 @@ class ContractsEndpoint(BaseAPIView):
     @allow_finance_access
     def post(self, request, slug, project_id):
         project = _get_project(slug, project_id)
+        _ensure_profile(project)
         serializer = ContractSerializer(data=request.data)
         if serializer.is_valid():
             serializer.save(project=project, workspace_id=project.workspace_id)
@@ -199,6 +209,7 @@ class InvoicesEndpoint(BaseAPIView):
     @allow_finance_access
     def post(self, request, slug, project_id):
         project = _get_project(slug, project_id)
+        _ensure_profile(project)
         serializer = InvoiceSerializer(data=request.data, context={"project_id": project_id})
         if serializer.is_valid():
             serializer.save(project=project, workspace_id=project.workspace_id)
@@ -241,6 +252,7 @@ class PaymentsEndpoint(BaseAPIView):
     @allow_finance_access
     def post(self, request, slug, project_id):
         project = _get_project(slug, project_id)
+        _ensure_profile(project)
         serializer = PaymentSerializer(data=request.data, context={"project_id": project_id})
         if serializer.is_valid():
             serializer.save(project=project, workspace_id=project.workspace_id)
@@ -275,3 +287,92 @@ class PaymentDetailEndpoint(BaseAPIView):
         row = Payment.objects.get(pk=pk, project_id=project_id, workspace__slug=slug)
         row.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+# --------------------------------------------------------------------------
+# Command center: expenses, cash snapshots, P&L, forecast, insights
+# --------------------------------------------------------------------------
+from plane.finance.analytics import build_forecast, build_insights, build_pnl  # noqa: E402
+from plane.finance.models import CashSnapshot, ExpenseEntry  # noqa: E402
+from plane.finance.serializers import CashSnapshotSerializer, ExpenseEntrySerializer  # noqa: E402
+
+
+class ExpensesEndpoint(BaseAPIView):
+    @allow_finance_access
+    def get(self, request, slug):
+        qs = ExpenseEntry.objects.filter(workspace__slug=slug)
+        month = request.query_params.get("month")
+        if month:
+            qs = qs.filter(month=month)
+        return Response(ExpenseEntrySerializer(qs, many=True).data, status=status.HTTP_200_OK)
+
+    @allow_finance_access
+    def post(self, request, slug):
+        workspace = Workspace.objects.get(slug=slug)
+        serializer = ExpenseEntrySerializer(data=request.data)
+        if serializer.is_valid():
+            serializer.save(workspace=workspace)
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class ExpenseDetailEndpoint(BaseAPIView):
+    @allow_finance_access
+    def patch(self, request, slug, pk):
+        row = ExpenseEntry.objects.get(pk=pk, workspace__slug=slug)
+        serializer = ExpenseEntrySerializer(row, data=request.data, partial=True)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data, status=status.HTTP_200_OK)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    @allow_finance_access
+    def delete(self, request, slug, pk):
+        row = ExpenseEntry.objects.get(pk=pk, workspace__slug=slug)
+        row.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class CashSnapshotsEndpoint(BaseAPIView):
+    @allow_finance_access
+    def get(self, request, slug):
+        qs = CashSnapshot.objects.filter(workspace__slug=slug)[:24]
+        return Response(CashSnapshotSerializer(qs, many=True).data, status=status.HTTP_200_OK)
+
+    @allow_finance_access
+    def post(self, request, slug):
+        workspace = Workspace.objects.get(slug=slug)
+        serializer = CashSnapshotSerializer(data=request.data)
+        if serializer.is_valid():
+            serializer.save(workspace=workspace)
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class CashSnapshotDetailEndpoint(BaseAPIView):
+    @allow_finance_access
+    def delete(self, request, slug, pk):
+        row = CashSnapshot.objects.get(pk=pk, workspace__slug=slug)
+        row.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class FinancePnlEndpoint(BaseAPIView):
+    @allow_finance_access
+    def get(self, request, slug):
+        workspace = Workspace.objects.get(slug=slug)
+        return Response(build_pnl(workspace), status=status.HTTP_200_OK)
+
+
+class FinanceForecastEndpoint(BaseAPIView):
+    @allow_finance_access
+    def get(self, request, slug):
+        workspace = Workspace.objects.get(slug=slug)
+        return Response(build_forecast(workspace), status=status.HTTP_200_OK)
+
+
+class FinanceInsightsEndpoint(BaseAPIView):
+    @allow_finance_access
+    def get(self, request, slug):
+        workspace = Workspace.objects.get(slug=slug)
+        return Response(build_insights(workspace), status=status.HTTP_200_OK)

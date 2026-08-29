@@ -4,7 +4,7 @@ from decimal import Decimal
 
 from rest_framework import serializers
 
-from plane.finance.models import Contract, FinanceAccess, FinanceProfile, Invoice, Payment
+from plane.finance.models import CashSnapshot, Contract, ExpenseEntry, FinanceAccess, FinanceProfile, Invoice, Payment
 from plane.finance.services import invoice_effective_status
 
 
@@ -130,4 +130,33 @@ class FinanceAccessSerializer(serializers.ModelSerializer):
             "member_display_name", "member_email", "member_avatar_url",
             "created_at",
         ]
+        read_only_fields = ["id", "workspace", "created_at"]
+
+
+class ExpenseEntrySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ExpenseEntry
+        fields = [
+            "id", "workspace", "month", "category", "concept", "amount", "currency",
+            "notes", "created_at", "updated_at",
+        ]
+        read_only_fields = ["id", "workspace", "created_at", "updated_at"]
+
+    def validate_amount(self, value):
+        if value <= 0:
+            raise serializers.ValidationError("Amount must be positive.")
+        return value
+
+    def validate_month(self, value):
+        import re
+
+        if not re.fullmatch(r"\d{4}-(0[1-9]|1[0-2])", value or ""):
+            raise serializers.ValidationError("Month must be in YYYY-MM format.")
+        return value
+
+
+class CashSnapshotSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = CashSnapshot
+        fields = ["id", "workspace", "as_of", "amount", "currency", "notes", "created_at"]
         read_only_fields = ["id", "workspace", "created_at"]

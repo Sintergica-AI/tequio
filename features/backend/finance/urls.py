@@ -4,7 +4,14 @@
 from django.urls import path
 
 from plane.finance.views import (
+    CashSnapshotDetailEndpoint,
+    CashSnapshotsEndpoint,
     ContractDetailEndpoint,
+    ExpenseDetailEndpoint,
+    ExpensesEndpoint,
+    FinanceForecastEndpoint,
+    FinanceInsightsEndpoint,
+    FinancePnlEndpoint,
     ContractsEndpoint,
     FinanceAccessDetailEndpoint,
     FinanceAccessEndpoint,
@@ -20,6 +27,21 @@ from plane.finance.views import (
 
 urlpatterns = [
     path("workspaces/<str:slug>/finance/me/", FinanceMeEndpoint.as_view(), name="finance-me"),
+    path("workspaces/<str:slug>/finance/expenses/", ExpensesEndpoint.as_view(), name="finance-expenses"),
+    path(
+        "workspaces/<str:slug>/finance/expenses/<uuid:pk>/",
+        ExpenseDetailEndpoint.as_view(),
+        name="finance-expense-detail",
+    ),
+    path("workspaces/<str:slug>/finance/cash/", CashSnapshotsEndpoint.as_view(), name="finance-cash"),
+    path(
+        "workspaces/<str:slug>/finance/cash/<uuid:pk>/",
+        CashSnapshotDetailEndpoint.as_view(),
+        name="finance-cash-detail",
+    ),
+    path("workspaces/<str:slug>/finance/pnl/", FinancePnlEndpoint.as_view(), name="finance-pnl"),
+    path("workspaces/<str:slug>/finance/forecast/", FinanceForecastEndpoint.as_view(), name="finance-forecast"),
+    path("workspaces/<str:slug>/finance/insights/", FinanceInsightsEndpoint.as_view(), name="finance-insights"),
     path(
         "workspaces/<str:slug>/finance/dashboard/",
         FinanceDashboardEndpoint.as_view(),

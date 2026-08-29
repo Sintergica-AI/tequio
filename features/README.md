@@ -17,6 +17,18 @@ Añade a Plane CE una wiki a nivel de organización y un gestor de archivos
 - Acceso restringido: admins del workspace + allowlist (`FinanceAccess`)
   gestionada desde la pestaña Acceso. Quien no está ni ve el menú ni pasa
   del 403; el ítem del sidebar se oculta por usuario.
+- **Centro de mando**: pestañas Estados (P&L mensual con captura de gastos por
+  categoría y saldo de caja) y Proyecciones (forecast de 6 meses: igualas
+  comprometidas según ciclo y vigencia + promedio móvil 3m de extras y gastos,
+  caja proyectada y runway por moneda). Panel de Sugerencias con motor de
+  reglas: cobranza vencida, runway bajo, concentración de cliente >40%,
+  renovaciones a 60 días, margen negativo y recordatorios de captura. Las
+  sugerencias viajan como datos estructurados (kind + severidad) y el frontend
+  pone el texto, así que se traducen como todo lo demás.
+- El perfil de cliente se crea **implícitamente** al registrar cualquier
+  contrato, cobro o pago (y el dashboard auto-repara datos huérfanos): sin
+  esto, capturar datos sin pasar por "convertir en cliente" dejaba el
+  dashboard vacío.
 - **Primera capa con tablas propias**: app Django `plane.finance`
   (`features/backend/finance/`) con migración `0001_initial` (5 tablas,
   aditiva pura — la imagen anterior simplemente las ignora, rollback por
