@@ -66,6 +66,13 @@ if [ "$N" -lt "$MIN_TOTAL" ]; then
   exit 1
 fi
 
+# Fondo, no solo forma: las cabeceras "diff --git" existen aunque el contenido
+# binario falte. Si alguien quita --binary, esto falla en vez de escribir un
+# parche que parece bueno. (Propuesto por la sesion -22 tras encontrar 31
+# activos vacios en el parche que ella misma commiteo.)
+B=$(grep -c "^Binary files .* differ$" "$TMP" || true)
+[ "$B" -eq 0 ] || { echo "FATAL: $B binarios sin contenido; falta --binary. El parche existente NO se ha tocado."; exit 1; }
+
 FAIL=0
 for entry in "${MIN_DIRS[@]}"; do
   d="${entry%:*}"; min="${entry#*:}"

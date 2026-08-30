@@ -75,6 +75,22 @@ patch(
     '    path("api/", include("plane.assistant.urls")),',
 )
 
+
+# ---------------------------------------------------------------------------
+# Idioma de perfil por defecto: "es". El frontend arranca en español para
+# visitantes sin preferencia (DEFAULT_LANGUAGE en packages/i18n); si el perfil
+# naciera en "en", el usuario nuevo veria la interfaz cambiar a ingles tras
+# iniciar sesion. Profile.objects.create(user=user) no pasa idioma (adapter/
+# base.py), asi que manda este default del modelo. Sin migracion a proposito:
+# el default de un CharField vive en Python, no en el esquema; una migracion
+# AlterField en plane.db chocaria con las de upstream al actualizar.
+# ---------------------------------------------------------------------------
+patch(
+    "/code/plane/db/models/user.py",
+    '    language = models.CharField(max_length=255, default="en")',
+    '    language = models.CharField(max_length=255, default="es")',
+)
+
 # ---------------------------------------------------------------------------
 # Sanity: compile every file we touched or added
 # ---------------------------------------------------------------------------
@@ -90,6 +106,7 @@ for f in (
     "/code/plane/app/serializers/workspace_page_ext.py",
     "/code/plane/settings/common.py",
     "/code/plane/urls.py",
+    "/code/plane/db/models/user.py",
     *sorted(glob.glob("/code/plane/finance/*.py")),
     *sorted(glob.glob("/code/plane/finance/migrations/*.py")),
     *sorted(glob.glob("/code/plane/assistant/*.py")),
