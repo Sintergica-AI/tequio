@@ -59,6 +59,23 @@ patch(
 )
 
 # ---------------------------------------------------------------------------
+# Assistant module: register the app and mount its URLs. Anchored on the
+# finance lines because the finance patch above runs first on the same file;
+# patch() is idempotent, so a rebuild over an already-patched image is a no-op.
+# ---------------------------------------------------------------------------
+patch(
+    "/code/plane/settings/common.py",
+    '    "plane.finance",\n    # Third-party things',
+    '    "plane.finance",\n    "plane.assistant",\n    # Third-party things',
+)
+patch(
+    "/code/plane/urls.py",
+    '    path("api/", include("plane.finance.urls")),',
+    '    path("api/", include("plane.finance.urls")),\n'
+    '    path("api/", include("plane.assistant.urls")),',
+)
+
+# ---------------------------------------------------------------------------
 # Sanity: compile every file we touched or added
 # ---------------------------------------------------------------------------
 import glob
@@ -75,6 +92,8 @@ for f in (
     "/code/plane/urls.py",
     *sorted(glob.glob("/code/plane/finance/*.py")),
     *sorted(glob.glob("/code/plane/finance/migrations/*.py")),
+    *sorted(glob.glob("/code/plane/assistant/*.py")),
+    *sorted(glob.glob("/code/plane/assistant/migrations/*.py")),
 ):
     py_compile.compile(f, doraise=True)
     print(f"{OK} compiles {f}")

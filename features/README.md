@@ -1,67 +1,10 @@
-# Capa 2 — Wiki por organización + gestor de archivos
+# Sintergica features: Wiki por organización + Gestor de archivos (Drive)
 
-Añade a Plane CE una wiki a nivel de organización y un gestor de archivos
-(por proyecto y por organización), incluyendo toda la interfaz web.
+Paquete listo para desplegar en el Plane self-hosted (plane.sintergica.ai).
 
 ## Qué agrega
 
-**Módulo de Finanzas** (`/<slug>/finance` y pestaña Finanzas en cada proyecto)
-- Cada proyecto se trata como un cliente: perfil, contrataciones (iguala
-  recurrente o pago único), cobros y pagos. Monedas MXN/USD por contrato,
-  totales siempre separados, sin conversión.
-- Dashboard con KPIs, alertas de vencidos/próximos (calculadas al leer, sin
-  tareas programadas), gráfica de ingresos por mes y tabla de clientes.
-- Los cobros de iguala se generan solos al consultar: idempotente por
-  `(contrato, periodo)` con constraint único condicional, tope 24 periodos,
-  solo-crear (las ediciones manuales sobreviven).
-- Acceso restringido: admins del workspace + allowlist (`FinanceAccess`)
-  gestionada desde la pestaña Acceso. Quien no está ni ve el menú ni pasa
-  del 403; el ítem del sidebar se oculta por usuario.
-- **Centro de mando**: pestañas Estados (P&L mensual con captura de gastos por
-  categoría y saldo de caja) y Proyecciones (forecast de 6 meses: igualas
-  comprometidas según ciclo y vigencia + promedio móvil 3m de extras y gastos,
-  caja proyectada y runway por moneda). Panel de Sugerencias con motor de
-  reglas: cobranza vencida, runway bajo, concentración de cliente >40%,
-  renovaciones a 60 días, margen negativo y recordatorios de captura. Las
-  sugerencias viajan como datos estructurados (kind + severidad) y el frontend
-  pone el texto, así que se traducen como todo lo demás.
-- **Importación de estados de cuenta con IA**: en Estados, sube el CSV del
-  banco o pega el texto de la banca en línea; el LLM configurado en god-mode
-  interpreta y categoriza los movimientos, el usuario revisa (categorías
-  editables, filas desmarcables) y los egresos se importan como gastos. Los
-  abonos se muestran solo como referencia. Los modelos configurados actúan
-  como cadena de fallback (los gratuitos de OpenRouter se saturan seguido);
-  si todos fallan se devuelve 503 con un mensaje accionable.
-- **Análisis del CFO IA**: botón en Resumen que envía P&L, proyección,
-  cobranza y clientes al LLM y devuelve un diagnóstico ejecutivo con acciones,
-  en español y solo con cifras reales del contexto.
-- **Formato ICU en i18n**: Plane usa i18next-icu, así que las plantillas con
-  parámetros llevan llaves simples `{param}` — `{{param}}` se renderiza
-  literal. Todas las plantillas de finance/drive están en ICU.
-- El perfil de cliente se crea **implícitamente** al registrar cualquier
-  contrato, cobro o pago (y el dashboard auto-repara datos huérfanos): sin
-  esto, capturar datos sin pasar por "convertir en cliente" dejaba el
-  dashboard vacío.
-- **Primera capa con tablas propias**: app Django `plane.finance`
-  (`features/backend/finance/`) con migración `0001_initial` (5 tablas,
-  aditiva pura — la imagen anterior simplemente las ignora, rollback por
-  `pg_restore` del respaldo). `backend-rebuild.sh` respalda la BD con
-  `pg_dump` y corre el servicio `migrator` antes de recrear api/worker/beat;
-  sin ese orden, los servicios quedan colgados en `wait_for_migrations`.
-
-**Diagramas Mermaid en páginas**
-- Los bloques ` ```mermaid ` se renderizan como diagrama en el editor de páginas,
-  con un botón para alternar entre diagrama y código fuente.
-- Mermaid (~1 MB) se importa de forma dinámica: queda en chunks aparte que solo
-  se descargan la primera vez que se muestra un diagrama.
-- Se inicializa con `securityLevel: "strict"`, porque el contenido lo escriben
-  usuarios: sanea el marcado y desactiva los manejadores de clic.
-- Si la sintaxis falla se muestra el error de Mermaid y el código sigue accesible.
-- Vive en `packages/editor` (extensión `code`), así que `sync-web.sh` sincroniza
-  también ese paquete y el `pnpm-lock.yaml` (el Dockerfile instala con
-  `--frozen-lockfile`).
-
-**Wiki por organización** (`/<slug>/wiki`)
+**Wiki por organización** (`/sintergica/wiki`)
 - Entrada "Wiki" en el sidebar del workspace.
 - Listado con pestañas Public / Private / Archived, búsqueda, orden y filtros.
 - Editor colaborativo completo (el mismo de las páginas de proyecto): tiempo real
@@ -70,7 +13,7 @@ Añade a Plane CE una wiki a nivel de organización y un gestor de archivos
 - Backend: endpoints nuevos `/api/workspaces/<slug>/pages/...` sobre `Page.is_global=True`.
   Sin migraciones de BD.
 
-**Gestor de archivos** (`/<slug>/drive` y `/<slug>/projects/<id>/drive`)
+**Gestor de archivos** (`/sintergica/drive` y `/sintergica/projects/<id>/drive`)
 - Entrada "Archivos" en el sidebar del workspace y en cada proyecto.
 - Subida por botón o drag & drop (múltiples archivos, barra de progreso),
   búsqueda, orden, renombrar, descargar, eliminar (solo autor o admin).
@@ -113,29 +56,101 @@ enlace"); si no, Google muestra su propia pantalla de permisos dentro del marco.
 El sitio no envía CSP y su `X-Frame-Options: DENY` solo impide que a Plane lo
 incrusten otros, así que no bloquea estos iframes salientes.
 
+**Módulo de Finanzas** (`/<slug>/finance` y pestaña Finanzas en cada proyecto)
+- Cada proyecto se trata como un cliente: perfil, contrataciones (iguala recurrente
+  o pago único), cobros y pagos. Monedas MXN/USD por contrato, totales separados.
+- Dashboard con KPIs, alertas de vencidos/próximos (calculadas al leer, sin cron),
+  gráfica de ingresos por mes y tabla de clientes con estado.
+- Los cobros de iguala se generan solos al consultar (idempotente por
+  `(contrato, periodo)`, tope 24 periodos, solo-crear).
+- Acceso restringido: admins + allowlist (`FinanceAccess`) gestionada desde la
+  pestaña Acceso del dashboard. Quien no está ni ve el menú ni pasa del 403.
+- **Primera función con tablas propias**: app Django `plane.finance` con la
+  migración `0001_initial` (5 tablas, aditiva pura). `backend-rebuild.sh` ahora
+  respalda la BD (`pg_dump`) y corre el servicio `migrator` antes de recrear
+  api/worker/beat — sin ese paso quedan colgados en `wait_for_migrations`.
+
+**Finanzas — clientes, fiscal y filtros** *(ronda de agosto 2026)*
+- **Pestaña Clientes** con distribución de ingresos por cliente (barra apilada
+  por moneda, cada cliente con su color; el color se auto-asigna de una paleta
+  y se puede cambiar en el perfil).
+- **Datos fiscales por cliente**: razón social, RFC (validado y normalizado),
+  régimen, C.P., correo de facturación y la **CSF en PDF** (sube a MinIO con el
+  mismo flujo prefirmado del Drive, entity_type `FINANCE_CSF`; se visualiza
+  inline y el reemplazo marca la anterior como borrada).
+- **Importación de estados de cuenta en PDF**: el backend extrae el texto con
+  `pypdf` (la imagen lo instala en el build); un PDF escaneado sin texto da un
+  error accionable. CSV y texto pegado siguen funcionando.
+- **Análisis del CFO IA guardados**: tabla `finance_analyses`; cada generación
+  se persiste con autor, fecha y el periodo filtrado; historial consultable y
+  borrable desde la tarjeta de Resumen.
+- **Filtro por rango de fechas** (presets + meses libres) en Resumen, Clientes
+  y Estados: acota ingresos, gráfica mensual, P&L y gastos vía
+  `?date_from&date_to`. Lo pendiente de cobro es siempre "al día de hoy".
+- Migración `finance.0003` (aditiva pura): 7 columnas nuevas en
+  `finance_profiles` + tabla `finance_analyses`. Verificación: `verify7.py`
+  (29 comprobaciones) + E2E real de PDF→IA y análisis guardado.
+
+**Asistente conversacional** (`plane.assistant`) — *fase 1 (sólo lectura) completa*
+- Chat con contexto real del workspace: responde consultando work items, proyectos,
+  ciclos, módulos, miembros y páginas mediante 9 herramientas sobre el ORM.
+- Conversaciones persistentes y **privadas de su autor** (sin override de admin),
+  con streaming SSE token a token y selector de modelo por conversación.
+- Cada herramienta corre con el alcance del usuario que pregunta —los proyectos donde
+  es miembro activo—, nunca con una cuenta de servicio. Por eso va contra el ORM y no
+  contra el MCP, que autentica con una `X-API-Key` fija, es decir siempre la misma
+  identidad.
+- Tope de tokens por workspace y mes (`ASSISTANT_MONTHLY_TOKEN_CAP`, 5M por defecto).
+- Tercera función con tablas propias: app Django `plane.assistant`, migración
+  `assistant.0001_initial` (3 tablas, aditiva pura).
+- **Interfaz**: panel acoplado a la derecha en todas las páginas del workspace
+  (ancho arrastrable) + página completa en `/<slug>/assistant`. El botón vive en
+  la barra superior y sólo aparece si el proveedor está configurado.
+- Los `SIN-123` de las respuestas son enlaces al work item. La traza de
+  herramientas se ve durante la espera. El selector de modelo cambia de modelo
+  sobre la marcha, incluso antes del primer mensaje.
+- Diseño completo, decisiones y trampas en [`ASSISTANT-DESIGN.md`](ASSISTANT-DESIGN.md).
+
+### API del asistente
+
+Base: `/api/workspaces/<slug>/assistant/`
+
+| Verbo | Ruta | Notas |
+|---|---|---|
+| GET | `/config/` | proveedor, modelos permitidos, herramientas, cuota |
+| GET POST | `/conversations/` | listar / crear |
+| GET PATCH DELETE | `/conversations/<id>/` | sólo el dueño; ajeno → 404 |
+| POST | `/conversations/<id>/messages/` | **SSE**: `token`, `tool_call`, `tool_result`, `done`, `error` |
+
+La fase 2 (acciones de escritura con confirmación humana) está diseñada pero no
+implementada: `WRITE_TOOLS` está vacío y `/config/` devuelve `can_write: false`.
+
+### Tres trampas del streaming (documentadas para no repetirlas)
+
+1. **Un generador síncrono NO se transmite.** Django lo materializa entero con
+   `await sync_to_async(list)(...)` antes de emitir nada. El generador es async.
+2. **`GZipMiddleware` comprime también el streaming** y zlib retiene los frames
+   pequeños. La respuesta declara `Content-Encoding: identity`, que es la vía de
+   escape que el propio middleware define.
+3. **Un regex con flag `g` a nivel de módulo + función recursiva = cuelgue.**
+   `lastIndex` es estado compartido; la llamada anidada rebobina el bucle
+   exterior. Un regex por llamada.
+
 ## Contenido
 
 ```
-backend/          6 archivos python: endpoints nuevos + patcher de URLs
-live/             servicio y parche del servidor de colaboración en tiempo real
-web-live.patch    git diff con 62 archivos (frontend web + live + traducciones)
-scripts/          despliegue (ver más abajo)
-verify/           pruebas funcionales que corren dentro del contenedor api
+backend/               → archivos python + patcher (imagen derivada de la actual del api)
+backend/assistant/     → app Django del asistente de IA (modelos, herramientas, loop SSE)
+                         frontend en plane-src: core/components/assistant/, store, servicio
+web-live.patch         → git diff con 58 archivos (frontend web + servidor live + i18n)
+remote-deploy.sh       → se ejecuta en el VPS: build de 3 imágenes + actualización del compose
+deploy.sh              → sube el paquete por scp y ejecuta remote-deploy.sh
+sync-web.sh            → sólo frontend: copia archivos, reconstruye la imagen web y la recrea
+sync-admin.sh          → lo mismo para apps/admin (god-mode); sync-web.sh no lo cubre
+fix-live-image.sh      → parche puntual del compose para el servicio live
+verify*.py             → pruebas funcionales que se ejecutan dentro del contenedor api
+                         (verify5.py = asistente, 72 comprobaciones, sin llamar al proveedor)
 ```
-
-### Scripts
-
-| Script | Para qué |
-|---|---|
-| `deploy.sh` | despliegue completo: sube el paquete y construye las 3 imágenes |
-| `sync-web.sh` | sólo frontend: sincroniza archivos, reconstruye la imagen web y la recrea |
-| `sync-backend.sh` | sólo backend: reconstruye la imagen del api y recrea api + workers |
-| `fix-live-image.sh` | corrige la imagen del servicio `live` en el compose |
-
-Todos leen la conexión de `scripts/deploy.env` (copia `deploy.env.example` y
-complétalo; está en `.gitignore`, nunca se sube). Variables: `VPS_HOST`,
-`VPS_PORT`, `VPS_KEY`, `REMOTE_SRC` y `PLANE_SRC` (ruta local al árbol de
-fuentes de Plane, necesaria sólo para `sync-web.sh`).
 
 ## Notas de mantenimiento
 
@@ -150,16 +165,38 @@ El vocabulario actual es `text-primary/secondary/tertiary/placeholder`, `border-
 `packages/i18n/src/locales/<idioma>/common.json` (namespace `common`, ya registrado).
 Español e inglés están traducidos; el resto de idiomas hereda el inglés.
 
-**Asistente de IA.** No es una sección del menú: en Plane CE el botón vive dentro del
-editor de descripción de un *work item*, y sólo aparece si `has_llm_configured` es
-verdadero y ya escribiste un título. Se configura en `/god-mode/ai/`.
+**Asistente de IA de CE (el de fábrica).** No es una sección del menú: el botón vive
+dentro del editor de descripción del *modal* de un work item, y sólo aparece si
+`has_llm_configured` es verdadero y ya escribiste un título. Hay otro en el editor de
+Páginas, en el handle `⋮⋮` de cada bloque. Se configura en `/god-mode/ai/`. El panel
+de chat lateral que sale en el marketing de Plane es de la edición Commercial y **no
+existe en CE** — por eso el módulo de abajo.
+
+**Correo por Resend.** El panel de `/god-mode/email/` tiene un selector de proveedor:
+*Resend* pide sólo la API key y la dirección del remitente, y rellena el resto
+(`smtp.resend.com`, puerto 587, usuario `resend`, TLS); *SMTP personalizado* deja el
+formulario completo de siempre. No hay backend nuevo ni claves de instancia nuevas —
+Resend expone SMTP, así que lo que se guarda es una configuración SMTP normal y el modo
+se deduce del host. Comprobado que el VPS no bloquea los puertos SMTP de salida, que es
+la única razón de peso para haber usado la API HTTP en su lugar.
+
+**Panel admin en español.** `apps/admin` no usa i18n: son cadenas fijas, y están
+traducidas directamente (241 reemplazos). `app/root.tsx` lleva `lang="es"` y
+`<meta name="google" content="notranslate">`, porque antes Chrome traducía el panel
+al vuelo y convertía "Plane" en "avión" ("Redirigir al avión"). Los nombres de campo
+de las consolas de Google/GitHub/GitLab ("Authorized Callback URI"…) se dejan en inglés
+a propósito: es el literal que hay que buscar allí. Para desplegarlo hay
+[`sync-admin.sh`](sync-admin.sh) — `sync-web.sh` sólo mira `apps/web`, así que los
+cambios del panel no llegaban nunca a producción.
+
+**`LLM_MODEL` es multi-valor.** El selector de god-mode permite marcar varios modelos y
+los guarda separados por comas en una sola clave. Cualquier código que lea esa clave
+tiene que partirla; mandarla entera como nombre de modelo es un 404.
 
 ## Desplegar
 
 ```bash
-cp features/scripts/deploy.env.example features/scripts/deploy.env
-$EDITOR features/scripts/deploy.env
-bash features/scripts/deploy.sh
+bash sintergica-features/deploy.sh
 ```
 
 Tarda ~10–20 min (builds de web y live en el VPS). La BD, redis, minio y rabbitmq
@@ -176,4 +213,4 @@ no se tocan; el compose queda respaldado (`docker-compose.yaml.bak-<ts>`).
 
 En el dir del compose del VPS: restaurar `docker-compose.yaml.bak-<ts>` y
 `docker compose up -d --no-deps --force-recreate api worker beat-worker web live proxy`.
-En el árbol de fuentes: `git apply -R web-live.patch`.
+En `/opt/plane-src`: `git apply -R /opt/sintergica-features/web-live.patch`.

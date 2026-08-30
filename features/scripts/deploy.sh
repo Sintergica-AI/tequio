@@ -7,11 +7,12 @@ set -euo pipefail
 VPS="$VPS_HOST"
 PORT="$VPS_PORT"
 KEY="$VPS_KEY"
+DIR="$(cd "$(dirname "$0")" && pwd)"
 
 echo "=== Subiendo paquete al VPS ==="
 ssh -i "$KEY" -p "$PORT" "$VPS" "mkdir -p /opt/sintergica-features/backend"
-scp -i "$KEY" -P "$PORT" "$PKG/web-live.patch" "$PKG/scripts/remote-deploy.sh" "$VPS:/opt/sintergica-features/"
-scp -i "$KEY" -P "$PORT" "$PKG/backend/"*.py "$VPS:/opt/sintergica-features/backend/"
+scp -i "$KEY" -P "$PORT" "$DIR/web-live.patch" "$DIR/remote-deploy.sh" "$VPS:/opt/sintergica-features/"
+scp -i "$KEY" -P "$PORT" "$DIR/backend/"*.py "$VPS:/opt/sintergica-features/backend/"
 
 echo "=== Ejecutando despliegue remoto ==="
 ssh -i "$KEY" -p "$PORT" "$VPS" "bash /opt/sintergica-features/remote-deploy.sh"

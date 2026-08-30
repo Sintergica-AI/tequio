@@ -9,6 +9,3 @@ fi
 : "${VPS_PORT:=22}"
 : "${VPS_KEY:=$HOME/.ssh/id_rsa}"
 : "${REMOTE_SRC:=/opt/plane-src}"
-# Raíz del paquete (features/) y árbol de fuentes de Plane en local.
-PKG="$(cd "$_here/.." && pwd)"
-: "${PLANE_SRC:=$PKG/../../plane-src}"

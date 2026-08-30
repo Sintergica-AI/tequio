@@ -21,8 +21,10 @@ docker image inspect "$BASE_IMAGE" >/dev/null 2>&1 || { echo "FATAL: falta la im
 
 mkdir -p "$BB"
 cp "$FEAT_DIR/backend/"*.py "$BB/"
-rm -rf "$BB/finance"
-cp -r "$FEAT_DIR/backend/finance" "$BB/finance"
+for app in finance assistant; do
+  rm -rf "${BB:?}/$app"
+  cp -r "$FEAT_DIR/backend/$app" "$BB/$app"
+done
 cat > "$BB/Dockerfile" <<EOF
 FROM ${BASE_IMAGE}
 COPY workspace_page_serializers.py /code/plane/app/serializers/workspace_page_ext.py
@@ -31,7 +33,10 @@ COPY workspace_page_urls.py        /code/plane/app/urls/workspace_page_ext.py
 COPY drive_views.py                /code/plane/app/views/drive_ext.py
 COPY drive_urls.py                 /code/plane/app/urls/drive_ext.py
 COPY finance/                      /code/plane/finance/
+COPY assistant/                    /code/plane/assistant/
 COPY patch_ce_features.py          /tmp/patch_ce_features.py
+# pypdf: extracción de texto de estados de cuenta en PDF (finanzas)
+RUN pip install --no-cache-dir "pypdf>=5,<6"
 RUN python /tmp/patch_ce_features.py && rm /tmp/patch_ce_features.py
 EOF
 
@@ -40,11 +45,22 @@ docker build -t "plane-backend-custom:${TAG}" "$BB"
 
 cd "$COMPOSE_DIR"
 
+# El compose apunta a un tag literal. Construir con OTRO tag deja la imagen
+# nueva sin usar: el migrator y los contenedores siguen con la vieja y el
+# despliegue parece correcto sin serlo. Pasó al añadir el asistente.
+if ! grep -q "plane-backend-custom:${TAG}" docker-compose.yaml; then
+  echo "FATAL: docker-compose.yaml no referencia plane-backend-custom:${TAG}."
+  echo "       Tags que sí usa:"
+  grep -o 'plane-backend-custom:[A-Za-z0-9._-]*' docker-compose.yaml | sort -u | sed 's/^/         /'
+  echo "       Reconstruye con uno de esos, o actualiza el compose primero."
+  exit 1
+fi
+
 # --- Migraciones (módulo de finanzas) ---------------------------------------
-# Si la imagen trae migraciones pendientes, api/worker/beat se quedan
+# Si la imagen trae migraciones pendientes (finance, assistant), api/worker/beat se quedan
 # bloqueados en wait_for_migrations hasta que alguien corra `migrate`.
 # Orden obligatorio: respaldo -> migrator -> recreate.
-if ls "$BB"/finance/migrations/0*.py >/dev/null 2>&1; then
+if ls "$BB"/*/migrations/0*.py >/dev/null 2>&1; then
   echo "=== Respaldo de la base de datos ==="
   mkdir -p "$FEAT_DIR/db-backups"
   DUMP="$FEAT_DIR/db-backups/plane-$(date +%F-%H%M%S).dump"
@@ -59,7 +75,7 @@ if ls "$BB"/finance/migrations/0*.py >/dev/null 2>&1; then
   docker compose -f docker-compose.yaml --env-file=plane.env run --rm migrator \
     || docker compose -f docker-compose.yaml --env-file=plane.env up migrator
 else
-  echo "(sin migraciones de finance en el build — se omite migrator)"
+  echo "(sin migraciones en el build — se omite migrator)"
 fi
 
 echo "=== Recreando api y workers ==="
