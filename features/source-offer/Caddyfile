@@ -1,0 +1,49 @@
+(plane_proxy) {
+	request_body {
+		max_size {$FILE_SIZE_LIMIT}
+	}
+
+  redir /spaces /spaces/ permanent
+	reverse_proxy /spaces/* space:3000
+
+  redir /god-mode /god-mode/ permanent
+	reverse_proxy /god-mode/* admin:3000
+	
+	reverse_proxy /live/* live:3000
+
+	reverse_proxy /api/* api:8000
+
+	reverse_proxy /auth/* api:8000
+
+	reverse_proxy /static/* api:8000
+
+	reverse_proxy /{$BUCKET_NAME}/* plane-minio:9000
+	reverse_proxy /{$BUCKET_NAME} plane-minio:9000
+
+	# AGPL-3.0 §13: oferta del código fuente correspondiente de ESTA versión
+	# modificada. Va antes del catch-all `reverse_proxy /* web:3000`; si no, la
+	# SPA responde 200 con su pantalla de "no encontrado" y el enlace de licencia
+	# parece funcionar sin servir nada.
+	redir /source /source/ permanent
+	handle_path /source/* {
+		root * /srv/source
+		file_server browse
+	}
+
+	reverse_proxy /* web:3000
+}
+
+{
+	{$CERT_EMAIL}
+	acme_ca {$CERT_ACME_CA:https://acme-v02.api.letsencrypt.org/directory} 
+	{$CERT_ACME_DNS}
+	servers {
+		max_header_size 25MB
+		client_ip_headers X-Forwarded-For X-Real-IP
+		trusted_proxies static {$TRUSTED_PROXIES:0.0.0.0/0}
+	}
+}
+
+{$SITE_ADDRESS} {
+	import plane_proxy
+}

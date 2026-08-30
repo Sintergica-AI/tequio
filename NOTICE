@@ -1,15 +1,37 @@
-plane-ce-api-extension
+Tequio
 Copyright (c) 2026 Sintergica AI
 
-Este producto contiene código derivado de Plane
+Tequio es una VERSIÓN MODIFICADA de Plane
 (https://github.com/makeplane/plane), Copyright (c) 2023-present
-Plane Software, Inc. and contributors, licenciado bajo AGPL-3.0-only.
+Plane Software, Inc. and contributors, licenciada bajo AGPL-3.0-only.
 
-Los archivos de esta extensión se distribuyen bajo AGPL-3.0-only, la misma
-licencia de la obra original:
-  - patch/page_ext_*.py, patch/patch_ce.py
-  - features/backend/*.py
-  - features/live/workspace-page.service.ts
-  - features/web-live.patch (modificaciones sobre apps/web y apps/live)
+Modificaciones realizadas por Sintergica AI a partir de Plane
+Community Edition v1.4.2 (agosto de 2026):
+
+  - Identidad visual y nombre del producto: "Plane" pasa a ser "Tequio"
+    (logotipos, favicons, manifiestos PWA, títulos, metadatos y textos
+    de interfaz). Se retiran los enlaces salientes a los sitios y canales
+    de Plane Software, Inc.
+  - API pública: endpoints de páginas y features (patch/page_ext_*.py,
+    patch/patch_ce.py).
+  - Funciones nuevas: wiki por organización, gestor de archivos (Drive),
+    módulo de finanzas y asistente conversacional
+    (features/backend/**, features/live/**, features/web-live.patch).
+
+"Plane" es una marca de Plane Software, Inc. Tequio no está afiliado a
+Plane Software, Inc. ni cuenta con su respaldo o patrocinio. El nombre y
+el logotipo de Plane no se usan para identificar este producto; su
+mención aquí es únicamente la atribución de autoría que exige la licencia.
+
+Todos los archivos de este repositorio, incluidas las modificaciones
+listadas arriba, se distribuyen bajo AGPL-3.0-only, la misma licencia de
+la obra original. Se conservan los avisos de copyright de Plane Software,
+Inc. en los archivos derivados.
+
+AGPL-3.0 §13 (interacción remota por red): toda persona que use una
+instancia de Tequio a través de la red tiene derecho a recibir el código
+fuente correspondiente de esa versión modificada. La aplicación ofrece
+ese código en el menú de ayuda, bajo "Código fuente"; la dirección se
+configura con la variable de entorno VITE_SOURCE_CODE_URL.
 
 Texto completo de la licencia: https://www.gnu.org/licenses/agpl-3.0.txt

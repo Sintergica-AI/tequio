@@ -2,6 +2,9 @@
 # Sincroniza los archivos del frontend con el VPS, reconstruye SOLO la imagen web
 # y recrea el contenedor. Usar tras cambios que no tocan backend ni live.
 #
+# packages/propel entró en la lista el 30 Ago: ahí viven los componentes de
+# logotipo, y sin él un rebranding sale a medias (textos nuevos, logos viejos).
+#
 # Maneja altas, modificaciones Y BAJAS: si un archivo se borró en local hay que
 # borrarlo también en el VPS, o quedaría código muerto que aún se compila.
 set -euo pipefail
@@ -20,7 +23,7 @@ cd "$SRC"
 # git status colapsa directorios enteramente nuevos a "?? dir/", lo que rompería
 # la copia archivo-por-archivo. `add -N` (intent-to-add) los expande a archivos
 # individuales sin preparar contenido.
-git add -A -N -- 'apps/web' 'packages/i18n' 'packages/constants' 'packages/editor' >/dev/null 2>&1 || true
+git add -A -N -- 'apps/web' 'packages/propel' 'packages/i18n' 'packages/constants' 'packages/editor' >/dev/null 2>&1 || true
 # status porcelain: XY <ruta>. La X/Y es "D" cuando el archivo se borró.
 # (bash 3.2 de macOS no tiene mapfile, así que se lee con un while)
 TO_COPY=()
@@ -35,7 +38,7 @@ while IFS= read -r line; do
   else
     TO_COPY+=("$path")
   fi
-done < <(git status --porcelain -- 'apps/web' 'packages/i18n' 'packages/constants' 'packages/editor' 'pnpm-lock.yaml')
+done < <(git status --porcelain -- 'apps/web' 'packages/propel' 'packages/i18n' 'packages/constants' 'packages/editor' 'pnpm-lock.yaml')
 # pnpm-lock.yaml es imprescindible: el Dockerfile instala con
 # --frozen-lockfile, así que si package.json cambia y el lock no viaja,
 # el build falla.
@@ -73,7 +76,14 @@ done
 echo "=== Reconstruyendo imagen web (bloqueante, ~8-15 min) ==="
 # Se ejecuta en primer plano: si falla, este script falla. No usar pgrep para
 # esperar — hay watchers antiguos cuya línea de comando contiene "docker build".
-run "cd $REMOTE_SRC && docker build -f apps/web/Dockerfile.web -t plane-web-custom:$TAG . 2>&1 | tail -8"
+# Las VITE_* se hornean en el bundle: no basta con ponerlas en el entorno del
+# contenedor, hay que pasarlas como build-arg. Vacias por defecto; se definen en
+# deploy.env. Ver source-offer/README.md para el enlace de codigo fuente.
+BUILD_ARGS="--build-arg VITE_SOURCE_CODE_URL=${VITE_SOURCE_CODE_URL:-}"
+BUILD_ARGS="$BUILD_ARGS --build-arg VITE_SUPPORT_EMAIL=${VITE_SUPPORT_EMAIL:-}"
+BUILD_ARGS="$BUILD_ARGS --build-arg VITE_TERMS_URL=${VITE_TERMS_URL:-}"
+BUILD_ARGS="$BUILD_ARGS --build-arg VITE_PRIVACY_URL=${VITE_PRIVACY_URL:-}"
+run "cd $REMOTE_SRC && docker build $BUILD_ARGS -f apps/web/Dockerfile.web -t plane-web-custom:$TAG . 2>&1 | tail -8"
 
 echo "=== Recreando contenedor web ==="
 run "cd /opt/plane/plane-app && docker compose -f docker-compose.yaml --env-file=plane.env up -d --no-deps --force-recreate web"
