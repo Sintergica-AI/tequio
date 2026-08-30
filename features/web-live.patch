@@ -3176,6 +3176,78 @@ index 0000000..ddeca86
 +    </div>
 +  );
 +});
+diff --git a/apps/web/core/components/finance/dashboard/analysis-card.tsx b/apps/web/core/components/finance/dashboard/analysis-card.tsx
+new file mode 100644
+index 0000000..32f835d
+--- /dev/null
++++ b/apps/web/core/components/finance/dashboard/analysis-card.tsx
+@@ -0,0 +1,66 @@
++/**
++ * Sintergica CE extension: on-demand CFO-style AI analysis of the workspace
++ * finances. Derived from Plane CE code (AGPL-3.0-only).
++ */
++
++import { useState } from "react";
++import { Sparkles } from "lucide-react";
++import { observer } from "mobx-react";
++// plane imports
++import { useTranslation } from "@plane/i18n";
++import { Button } from "@plane/propel/button";
++import { TOAST_TYPE, setToast } from "@plane/propel/toast";
++// hooks
++import { useFinance } from "@/hooks/store/use-finance";
++
++type TAnalysisCardProps = {
++  workspaceSlug: string;
++};
++
++export const FinanceAnalysisCard = observer(function FinanceAnalysisCard(props: TAnalysisCardProps) {
++  const { workspaceSlug } = props;
++  const { t } = useTranslation();
++  const finance = useFinance();
++  // states
++  const [analysis, setAnalysis] = useState<string | null>(null);
++  const [isGenerating, setIsGenerating] = useState(false);
++
++  const handleGenerate = async () => {
++    setIsGenerating(true);
++    try {
++      const result = await finance.analyze(workspaceSlug);
++      setAnalysis(result);
++    } catch (error: any) {
++      setToast({ type: TOAST_TYPE.ERROR, title: "Error!", message: error?.error || t("finance.form.error") });
++    } finally {
++      setIsGenerating(false);
++    }
++  };
++
++  return (
++    <div className="rounded-md border border-subtle bg-surface-1 p-4">
++      <div className="flex flex-wrap items-center justify-between gap-2">
++        <div className="flex items-center gap-2">
++          <Sparkles className="size-4 text-accent-primary" />
++          <h3 className="text-13 font-semibold">{t("finance.analysis.title")}</h3>
++        </div>
++        <Button
++          variant={analysis ? "secondary" : "primary"}
++          size="lg"
++          onClick={() => void handleGenerate()}
++          loading={isGenerating}
++          disabled={isGenerating}
++        >
++          {analysis ? t("finance.analysis.regenerate") : t("finance.analysis.generate")}
++        </Button>
++      </div>
++      {isGenerating ? (
++        <p className="mt-3 animate-pulse text-13 text-secondary">{t("finance.analysis.generating")}</p>
++      ) : analysis ? (
++        <p className="mt-3 text-13 leading-relaxed whitespace-pre-wrap text-primary">{analysis}</p>
++      ) : (
++        <p className="mt-3 text-13 text-tertiary">{t("finance.analysis.description")}</p>
++      )}
++    </div>
++  );
++});
 diff --git a/apps/web/core/components/finance/dashboard/clients-table.tsx b/apps/web/core/components/finance/dashboard/clients-table.tsx
 new file mode 100644
 index 0000000..4fd69d6
@@ -5426,10 +5498,10 @@ index 0000000..d4d8157
 +});
 diff --git a/apps/web/core/components/finance/root.tsx b/apps/web/core/components/finance/root.tsx
 new file mode 100644
-index 0000000..c158b87
+index 0000000..84f76d8
 --- /dev/null
 +++ b/apps/web/core/components/finance/root.tsx
-@@ -0,0 +1,110 @@
+@@ -0,0 +1,112 @@
 +/**
 + * Sintergica CE extension: workspace finance root (dashboard + statements + forecast + access tabs).
 + * Derived from Plane CE code (AGPL-3.0-only).
@@ -5449,6 +5521,7 @@ index 0000000..c158b87
 +import { FinanceAlertsList } from "./dashboard/alerts-list";
 +import { FinanceClientsTable } from "./dashboard/clients-table";
 +import { FinanceInsightsPanel } from "./dashboard/insights-panel";
++import { FinanceAnalysisCard } from "./dashboard/analysis-card";
 +import { FinanceKpiRow } from "./dashboard/kpi-row";
 +import { FinanceRevenueChart } from "./dashboard/revenue-chart";
 +import { FinanceForecastRoot } from "./forecast/forecast-root";
@@ -5531,6 +5604,7 @@ index 0000000..c158b87
 +          <div className="flex flex-col gap-6">
 +            <FinanceKpiRow dashboard={dashboard} forecast={forecast} />
 +            <FinanceInsightsPanel workspaceSlug={workspaceSlug} />
++            <FinanceAnalysisCard workspaceSlug={workspaceSlug} />
 +            <FinanceAlertsList workspaceSlug={workspaceSlug} alerts={dashboard.alerts} />
 +            <FinanceRevenueChart dashboard={dashboard} />
 +            <FinanceClientsTable workspaceSlug={workspaceSlug} clients={dashboard.clients} />
@@ -6020,12 +6094,269 @@ index 0000000..15038ee
 +    </ModalCore>
 +  );
 +});
+diff --git a/apps/web/core/components/finance/statements/import-modal.tsx b/apps/web/core/components/finance/statements/import-modal.tsx
+new file mode 100644
+index 0000000..10eedd7
+--- /dev/null
++++ b/apps/web/core/components/finance/statements/import-modal.tsx
+@@ -0,0 +1,251 @@
++/**
++ * Sintergica CE extension: bank statement import — the AI interprets the
++ * statement text, the user reviews and picks what to import as expenses.
++ * Derived from Plane CE code (AGPL-3.0-only).
++ */
++
++import { useRef, useState } from "react";
++import { ArrowDownLeft, Sparkles, Upload } from "lucide-react";
++import { observer } from "mobx-react";
++// plane imports
++import { useTranslation } from "@plane/i18n";
++import { Button } from "@plane/propel/button";
++import { TOAST_TYPE, setToast } from "@plane/propel/toast";
++import { EModalPosition, EModalWidth, ModalCore } from "@plane/ui";
++import { cn } from "@plane/utils";
++// hooks
++import { useFinance } from "@/hooks/store/use-finance";
++// services
++import type { TExpenseCategory, TParsedTransaction } from "@/services/finance.service";
++// local imports
++import { CurrencyAmount } from "../shared/currency-amount";
++
++const CATEGORIES: TExpenseCategory[] = ["payroll", "infrastructure", "marketing", "admin", "taxes", "other"];
++
++type TImportModalProps = {
++  isOpen: boolean;
++  onClose: () => void;
++  workspaceSlug: string;
++};
++
++type TReviewRow = TParsedTransaction & { include: boolean; category: TExpenseCategory };
++
++export const FinanceImportModal = observer(function FinanceImportModal(props: TImportModalProps) {
++  const { isOpen, onClose, workspaceSlug } = props;
++  const { t } = useTranslation();
++  const finance = useFinance();
++  // refs
++  const fileInputRef = useRef<HTMLInputElement>(null);
++  // states
++  const [content, setContent] = useState("");
++  const [isParsing, setIsParsing] = useState(false);
++  const [isCommitting, setIsCommitting] = useState(false);
++  const [rows, setRows] = useState<TReviewRow[] | null>(null);
++
++  const handleClose = () => {
++    setContent("");
++    setRows(null);
++    setIsParsing(false);
++    setIsCommitting(false);
++    onClose();
++  };
++
++  const handleFile = (file: File | undefined) => {
++    if (!file) return;
++    const reader = new FileReader();
++    reader.onload = () => setContent(String(reader.result ?? ""));
++    reader.readAsText(file);
++  };
++
++  const handleParse = async () => {
++    if (!content.trim()) return;
++    setIsParsing(true);
++    try {
++      const transactions = await finance.parseStatement(workspaceSlug, content);
++      if (transactions.length === 0) {
++        setToast({ type: TOAST_TYPE.ERROR, title: "Error!", message: t("finance.import.nothing") });
++        return;
++      }
++      setRows(
++        transactions.map((tx) => ({ ...tx, include: tx.direction === "out", category: tx.suggested_category }))
++      );
++    } catch (error: any) {
++      setToast({ type: TOAST_TYPE.ERROR, title: "Error!", message: error?.error || t("finance.form.error") });
++    } finally {
++      setIsParsing(false);
++    }
++  };
++
++  const handleCommit = async () => {
++    if (!rows) return;
++    const selected = rows.filter((r) => r.include && r.direction === "out");
++    if (selected.length === 0) {
++      setToast({ type: TOAST_TYPE.ERROR, title: "Error!", message: t("finance.import.no_selection") });
++      return;
++    }
++    setIsCommitting(true);
++    try {
++      const created = await finance.commitImport(
++        workspaceSlug,
++        selected.map((r) => ({
++          month: r.date.slice(0, 7),
++          category: r.category,
++          concept: r.concept,
++          amount: String(r.amount),
++          currency: r.currency,
++        }))
++      );
++      setToast({
++        type: TOAST_TYPE.SUCCESS,
++        title: "Success!",
++        message: t("finance.import.success", { count: created }),
++      });
++      handleClose();
++    } catch (error: any) {
++      setToast({ type: TOAST_TYPE.ERROR, title: "Error!", message: error?.error || t("finance.form.error") });
++    } finally {
++      setIsCommitting(false);
++    }
++  };
++
++  const selectedCount = rows?.filter((r) => r.include && r.direction === "out").length ?? 0;
++
++  return (
++    <ModalCore isOpen={isOpen} handleClose={handleClose} position={EModalPosition.CENTER} width={EModalWidth.XXXXL}>
++      <div className="space-y-4 p-5">
++        <h3 className="text-16 font-semibold">{t("finance.import.title")}</h3>
++
++        {rows === null ? (
++          <>
++            <p className="text-13 text-secondary">{t("finance.import.description")}</p>
++            <div>
++              <input
++                ref={fileInputRef}
++                type="file"
++                accept=".csv,.txt,text/csv,text/plain"
++                className="hidden"
++                onChange={(e) => handleFile(e.target.files?.[0])}
++              />
++              <Button
++                variant="secondary"
++                size="lg"
++                onClick={() => fileInputRef.current?.click()}
++                prependIcon={<Upload className="size-3.5" />}
++              >
++                {t("finance.import.file_label")}
++              </Button>
++            </div>
++            <div>
++              <p className="mb-1.5 text-13 text-tertiary">{t("finance.import.paste_label")}</p>
++              <textarea
++                value={content}
++                onChange={(e) => setContent(e.target.value)}
++                rows={10}
++                className="w-full rounded-md border border-subtle bg-layer-1 p-2.5 font-mono text-11 text-primary placeholder:text-placeholder focus:outline-none"
++                placeholder="Fecha,Concepto,Cargo,Abono..."
++              />
++            </div>
++            <div className="flex items-center justify-end gap-2">
++              <Button variant="secondary" size="lg" onClick={handleClose}>
++                {t("common.cancel")}
++              </Button>
++              <Button
++                variant="primary"
++                size="lg"
++                onClick={() => void handleParse()}
++                loading={isParsing}
++                disabled={!content.trim() || isParsing}
++                prependIcon={<Sparkles className="size-3.5" />}
++              >
++                {isParsing ? t("finance.import.parsing") : t("finance.import.parse")}
++              </Button>
++            </div>
++          </>
++        ) : (
++          <>
++            <div>
++              <p className="text-13 font-medium">{t("finance.import.review_title")}</p>
++              <p className="mt-1 text-11 text-tertiary">{t("finance.import.review_hint")}</p>
++            </div>
++            <div className="max-h-[50vh] overflow-y-auto rounded-md border border-subtle">
++              <div className="grid grid-cols-[32px_90px_minmax(0,1fr)_130px_150px] items-center gap-2 border-b border-subtle bg-layer-1 px-3 py-2 text-11 font-medium text-tertiary">
++                <span />
++                <span>{t("finance.import.col_date")}</span>
++                <span>{t("finance.import.col_concept")}</span>
++                <span>{t("finance.import.col_amount")}</span>
++                <span>{t("finance.import.col_category")}</span>
++              </div>
++              {rows.map((row, index) => (
++                <div
++                  key={index}
++                  className={cn(
++                    "grid grid-cols-[32px_90px_minmax(0,1fr)_130px_150px] items-center gap-2 border-b border-subtle px-3 py-2 text-13",
++                    { "opacity-60": row.direction === "in" }
++                  )}
++                >
++                  <span className="flex justify-center">
++                    {row.direction === "out" ? (
++                      <input
++                        type="checkbox"
++                        checked={row.include}
++                        onChange={(e) =>
++                          setRows((prev) =>
++                            prev ? prev.map((r, i) => (i === index ? { ...r, include: e.target.checked } : r)) : prev
++                          )
++                        }
++                      />
++                    ) : (
++                      <ArrowDownLeft className="size-3.5 text-success-primary" />
++                    )}
++                  </span>
++                  <span className="text-tertiary">{row.date}</span>
++                  <span className="truncate">{row.concept}</span>
++                  <CurrencyAmount amount={row.amount} currency={row.currency} />
++                  <span>
++                    {row.direction === "out" ? (
++                      <select
++                        value={row.category}
++                        onChange={(e) =>
++                          setRows((prev) =>
++                            prev
++                              ? prev.map((r, i) =>
++                                  i === index ? { ...r, category: e.target.value as TExpenseCategory } : r
++                                )
++                              : prev
++                          )
++                        }
++                        className="w-full rounded-md border border-subtle bg-layer-1 px-2 py-1 text-13 text-primary focus:outline-none"
++                      >
++                        {CATEGORIES.map((cat) => (
++                          <option key={cat} value={cat}>
++                            {t(`finance.expense.category_${cat}`)}
++                          </option>
++                        ))}
++                      </select>
++                    ) : (
++                      <span className="text-11 text-success-primary">{t("finance.import.inflow")}</span>
++                    )}
++                  </span>
++                </div>
++              ))}
++            </div>
++            <div className="flex items-center justify-between gap-2">
++              <Button variant="secondary" size="lg" onClick={() => setRows(null)}>
++                {t("finance.import.back")}
++              </Button>
++              <Button
++                variant="primary"
++                size="lg"
++                onClick={() => void handleCommit()}
++                loading={isCommitting}
++                disabled={selectedCount === 0 || isCommitting}
++              >
++                {isCommitting ? t("finance.import.committing") : t("finance.import.commit", { count: selectedCount })}
++              </Button>
++            </div>
++          </>
++        )}
++      </div>
++    </ModalCore>
++  );
++});
 diff --git a/apps/web/core/components/finance/statements/statements-root.tsx b/apps/web/core/components/finance/statements/statements-root.tsx
 new file mode 100644
-index 0000000..9b2a0ad
+index 0000000..500d061
 --- /dev/null
 +++ b/apps/web/core/components/finance/statements/statements-root.tsx
-@@ -0,0 +1,374 @@
+@@ -0,0 +1,386 @@
 +/**
 + * Sintergica CE extension: financial statements tab (cash, P&L, expenses).
 + * Derived from Plane CE code (AGPL-3.0-only).
@@ -6050,6 +6381,7 @@ index 0000000..9b2a0ad
 +import { formatMonthLabel } from "../shared/format-month";
 +import { FinanceCashModal } from "./cash-modal";
 +import { FinanceExpenseModal } from "./expense-modal";
++import { FinanceImportModal } from "./import-modal";
 +
 +const CURRENCIES: TCurrency[] = ["MXN", "USD"];
 +const MAX_VISIBLE_SNAPSHOTS = 6;
@@ -6264,6 +6596,7 @@ index 0000000..9b2a0ad
 +  const { t } = useTranslation();
 +  // states
 +  const [isModalOpen, setIsModalOpen] = useState(false);
++  const [isImportOpen, setIsImportOpen] = useState(false);
 +  const [expenseToEdit, setExpenseToEdit] = useState<TExpenseEntry | null>(null);
 +  const [expenseToDelete, setExpenseToDelete] = useState<TExpenseEntry | null>(null);
 +  const [isDeleting, setIsDeleting] = useState(false);
@@ -6313,12 +6646,22 @@ index 0000000..9b2a0ad
 +        title={t("finance.expense.delete_title")}
 +        content={t("finance.expense.delete_confirm")}
 +      />
++      <FinanceImportModal
++        isOpen={isImportOpen}
++        onClose={() => setIsImportOpen(false)}
++        workspaceSlug={workspaceSlug}
++      />
 +      <div className="flex flex-col gap-2">
 +        <div className="flex items-center justify-between">
 +          <h3 className="text-13 font-semibold text-primary">{t("finance.expense.title")}</h3>
-+          <Button variant="secondary" size="lg" onClick={() => setIsModalOpen(true)}>
-+            {t("finance.expense.add")}
-+          </Button>
++          <div className="flex items-center gap-2">
++            <Button variant="primary" size="lg" onClick={() => setIsImportOpen(true)}>
++              {t("finance.import.button")}
++            </Button>
++            <Button variant="secondary" size="lg" onClick={() => setIsModalOpen(true)}>
++              {t("finance.expense.add")}
++            </Button>
++          </div>
 +        </div>
 +        {expenses.length === 0 ? (
 +          <p className="text-13 text-tertiary">{t("finance.expense.empty")}</p>
@@ -7057,10 +7400,10 @@ index 0000000..e6e6213
 +}
 diff --git a/apps/web/core/services/finance.service.ts b/apps/web/core/services/finance.service.ts
 new file mode 100644
-index 0000000..85a0ea1
+index 0000000..7e75aa2
 --- /dev/null
 +++ b/apps/web/core/services/finance.service.ts
-@@ -0,0 +1,497 @@
+@@ -0,0 +1,543 @@
 +/**
 + * Sintergica CE extension: finance module service.
 + * Derived from Plane CE code (AGPL-3.0-only).
@@ -7558,6 +7901,52 @@ index 0000000..85a0ea1
 +      });
 +  }
 +}
++
++// ---------------------------------------------------------------------------
++// Finance AI: bank statement import + CFO analysis
++// ---------------------------------------------------------------------------
++
++export type TParsedTransaction = {
++  date: string;
++  concept: string;
++  amount: number;
++  currency: TCurrency;
++  direction: "in" | "out";
++  suggested_category: TExpenseCategory;
++};
++
++export class FinanceAIService extends APIService {
++  constructor() {
++    super(API_BASE_URL);
++  }
++
++  async parseStatement(workspaceSlug: string, content: string): Promise<{ transactions: TParsedTransaction[] }> {
++    return this.post(`/api/workspaces/${workspaceSlug}/finance/import/parse/`, { content })
++      .then((response) => response?.data)
++      .catch((error) => {
++        throw error?.response?.data;
++      });
++  }
++
++  async commitImport(
++    workspaceSlug: string,
++    expenses: Partial<TExpenseEntry>[]
++  ): Promise<{ created: number; expenses: TExpenseEntry[] }> {
++    return this.post(`/api/workspaces/${workspaceSlug}/finance/import/commit/`, { expenses })
++      .then((response) => response?.data)
++      .catch((error) => {
++        throw error?.response?.data;
++      });
++  }
++
++  async analyze(workspaceSlug: string): Promise<{ analysis: string }> {
++    return this.post(`/api/workspaces/${workspaceSlug}/finance/analyze/`, {})
++      .then((response) => response?.data)
++      .catch((error) => {
++        throw error?.response?.data;
++      });
++  }
++}
 diff --git a/apps/web/core/services/page/index.ts b/apps/web/core/services/page/index.ts
 index cd5daae..13231bf 100644
 --- a/apps/web/core/services/page/index.ts
@@ -8004,10 +8393,10 @@ index 0000000..dfbf334
 +}
 diff --git a/apps/web/core/store/finance.store.ts b/apps/web/core/store/finance.store.ts
 new file mode 100644
-index 0000000..7b729c5
+index 0000000..76e0265
 --- /dev/null
 +++ b/apps/web/core/store/finance.store.ts
-@@ -0,0 +1,471 @@
+@@ -0,0 +1,497 @@
 +/**
 + * Sintergica CE extension: finance store.
 + * Derived from Plane CE code (AGPL-3.0-only).
@@ -8032,7 +8421,8 @@ index 0000000..7b729c5
 +  TPayment,
 +  TProjectFinanceSummary,
 +} from "@/services/finance.service";
-+import { FinanceAnalyticsService, FinanceService } from "@/services/finance.service";
++import { FinanceAIService, FinanceAnalyticsService, FinanceService } from "@/services/finance.service";
++import type { TParsedTransaction } from "@/services/finance.service";
 +// store
 +import type { CoreRootStore } from "./root.store";
 +
@@ -8100,6 +8490,9 @@ index 0000000..7b729c5
 +  createExpense: (workspaceSlug: string, data: Partial<TExpenseEntry>) => Promise<TExpenseEntry>;
 +  updateExpense: (workspaceSlug: string, expenseId: string, data: Partial<TExpenseEntry>) => Promise<TExpenseEntry>;
 +  deleteExpense: (workspaceSlug: string, expenseId: string) => Promise<void>;
++  parseStatement: (workspaceSlug: string, content: string) => Promise<TParsedTransaction[]>;
++  commitImport: (workspaceSlug: string, expenses: Partial<TExpenseEntry>[]) => Promise<number>;
++  analyze: (workspaceSlug: string) => Promise<string>;
 +  fetchCashSnapshots: (workspaceSlug: string) => Promise<TCashSnapshot[]>;
 +  createCashSnapshot: (workspaceSlug: string, data: Partial<TCashSnapshot>) => Promise<TCashSnapshot>;
 +  deleteCashSnapshot: (workspaceSlug: string, snapshotId: string) => Promise<void>;
@@ -8126,6 +8519,7 @@ index 0000000..7b729c5
 +  // services
 +  service: FinanceService;
 +  analytics: FinanceAnalyticsService;
++  ai: FinanceAIService;
 +
 +  constructor(private store: CoreRootStore) {
 +    makeObservable(this, {
@@ -8176,6 +8570,7 @@ index 0000000..7b729c5
 +    this.rootStore = store;
 +    this.service = new FinanceService();
 +    this.analytics = new FinanceAnalyticsService();
++    this.ai = new FinanceAIService();
 +  }
 +
 +  getAccessInfo = computedFn((workspaceSlug: string) => this.accessInfoByWorkspace[workspaceSlug]);
@@ -8450,6 +8845,26 @@ index 0000000..7b729c5
 +        (this.expensesByWorkspace[workspaceSlug] ?? []).filter((e) => e.id !== expenseId)
 +      );
 +    });
++  };
++
++  parseStatement = async (workspaceSlug: string, content: string) => {
++    const data = await this.ai.parseStatement(workspaceSlug, content);
++    return data.transactions;
++  };
++
++  commitImport = async (workspaceSlug: string, expenses: Partial<TExpenseEntry>[]) => {
++    const data = await this.ai.commitImport(workspaceSlug, expenses);
++    // the imported rows change every derived view
++    void this.fetchExpenses(workspaceSlug).catch(() => {});
++    void this.fetchPnl(workspaceSlug).catch(() => {});
++    void this.fetchForecast(workspaceSlug).catch(() => {});
++    void this.fetchInsights(workspaceSlug).catch(() => {});
++    return data.created;
++  };
++
++  analyze = async (workspaceSlug: string) => {
++    const data = await this.ai.analyze(workspaceSlug);
++    return data.analysis;
 +  };
 +
 +  fetchCashSnapshots = async (workspaceSlug: string) => {
@@ -9298,10 +9713,10 @@ index 0000000..8a34af5
 +  );
 +}
 diff --git a/packages/i18n/src/locales/cs/common.json b/packages/i18n/src/locales/cs/common.json
-index c1e9372..3620564 100644
+index c1e9372..7c49746 100644
 --- a/packages/i18n/src/locales/cs/common.json
 +++ b/packages/i18n/src/locales/cs/common.json
-@@ -867,5 +867,271 @@
+@@ -867,5 +867,300 @@
        "description": "Exportujte položky do JSON.",
        "short_description": "Exportovat jako JSON"
      }
@@ -9333,7 +9748,7 @@ index c1e9372..3620564 100644
 +    "delete_error": "File could not be deleted. Please try again.",
 +    "rename_success": "File renamed successfully.",
 +    "rename_error": "File could not be renamed. Please try again.",
-+    "upload_error": "\"{{name}}\" could not be uploaded. Please try again.",
++    "upload_error": "\"{name}\" could not be uploaded. Please try again.",
 +    "delete_confirm_prefix": "Are you sure you want to delete the file",
 +    "delete_confirm_suffix": "? The file will be deleted permanently. This action cannot be undone.",
 +    "preview": "Preview",
@@ -9353,8 +9768,8 @@ index c1e9372..3620564 100644
 +    "open_in_google_drive": "Open in Google Drive",
 +    "tags_label": "Tags",
 +    "tags_placeholder": "Type a tag and press Enter",
-+    "tags_max_error": "You can add up to {{max}} tags.",
-+    "tag_length_error": "A tag can be at most {{max}} characters long.",
++    "tags_max_error": "You can add up to {max} tags.",
++    "tag_length_error": "A tag can be at most {max} characters long.",
 +    "tag_remove": "Remove tag",
 +    "module_label": "Module",
 +    "module_none": "No module",
@@ -9389,9 +9804,9 @@ index c1e9372..3620564 100644
 +    },
 +    "alerts": {
 +      "title": "Alerts",
-+      "overdue_since": "Overdue by {{days}} days",
++      "overdue_since": "Overdue by {days} days",
 +      "due_today": "Due today",
-+      "due_in_days": "Due in {{days}} days",
++      "due_in_days": "Due in {days} days",
 +      "empty": "No alerts: every client is up to date."
 +    },
 +    "clients": {
@@ -9514,19 +9929,19 @@ index c1e9372..3620564 100644
 +    "tabs_forecast": "Forecast",
 +    "kpi_mrr": "Committed MRR",
 +    "kpi_runway": "Runway",
-+    "runway_months": "{{months}} months",
++    "runway_months": "{months} months",
 +    "runway_infinite": "No burn (positive flow)",
 +    "runway_unknown": "Capture your cash balance",
 +    "insights": {
 +      "title": "Suggestions",
 +      "empty": "No suggestions right now: everything looks in order.",
-+      "overdue_collection": "Collections pending: {{count}} overdue invoices. Prioritize contacting {{clients}}.",
-+      "low_runway": "Runway of {{months}} months in {{currency}}. Cut spend or speed up collections.",
++      "overdue_collection": "Collections pending: {count} overdue invoices. Prioritize contacting {clients}.",
++      "low_runway": "Runway of {months} months in {currency}. Cut spend or speed up collections.",
 +      "no_cash_snapshot": "Capture your cash balance in Statements to compute runway and cash projections.",
-+      "client_concentration": "{{client}} is {{share}}% of your {{currency}} revenue (last 6 months). Diversifying reduces risk.",
-+      "renewal_due": "The retainer “{{contract}}” for {{client}} ends on {{date}}. Schedule the renewal now.",
-+      "negative_margin": "Negative margin in {{month}} ({{currency}}): you spent more than you earned.",
-+      "missing_expenses": "No expenses captured for {{month}}. Without them, P&L and forecasts are incomplete."
++      "client_concentration": "{client} is {share}% of your {currency} revenue (last 6 months). Diversifying reduces risk.",
++      "renewal_due": "The retainer “{contract}” for {client} ends on {date}. Schedule the renewal now.",
++      "negative_margin": "Negative margin in {month} ({currency}): you spent more than you earned.",
++      "missing_expenses": "No expenses captured for {month}. Without them, P&L and forecasts are incomplete."
 +    },
 +    "pnl": {
 +      "title": "Income statement (monthly)",
@@ -9570,6 +9985,35 @@ index c1e9372..3620564 100644
 +      "projected_cash": "Projected cash",
 +      "assumptions": "Assumptions: active retainers per their cycle and term; extras and expenses as a rolling 3-month average.",
 +      "empty": "Create retainer contracts and capture expenses to project."
++    },
++    "import": {
++      "button": "Import bank statement",
++      "title": "Import bank statement",
++      "description": "Upload your bank's CSV or paste the transactions from your online banking. The AI interprets and categorizes them; you review before importing.",
++      "file_label": "File (.csv or .txt)",
++      "paste_label": "Or paste the text here",
++      "parse": "Interpret with AI",
++      "parsing": "Interpreting…",
++      "review_title": "Review the transactions",
++      "review_hint": "Checked outflows will be imported as expenses. Inflows are shown for reference only; record them as payments on the client's project.",
++      "col_date": "Date",
++      "col_concept": "Concept",
++      "col_amount": "Amount",
++      "col_category": "Category",
++      "inflow": "Inflow",
++      "commit": "Import {count} expenses",
++      "committing": "Importing…",
++      "success": "{count} expenses imported.",
++      "nothing": "No transactions detected in the text.",
++      "no_selection": "Select at least one outflow.",
++      "back": "Back"
++    },
++    "analysis": {
++      "title": "AI CFO analysis",
++      "generate": "Generate analysis",
++      "generating": "Analyzing your finances… (may take up to a minute)",
++      "description": "The AI reviews your P&L, forecast, collections and clients, and gives you a diagnosis with concrete actions.",
++      "regenerate": "Refresh analysis"
 +    }
    }
  }
@@ -9587,10 +10031,10 @@ index d340abf..9e643cc 100644
    }
  }
 diff --git a/packages/i18n/src/locales/de/common.json b/packages/i18n/src/locales/de/common.json
-index 1e18d4e..27f71a1 100644
+index 1e18d4e..4e9ec30 100644
 --- a/packages/i18n/src/locales/de/common.json
 +++ b/packages/i18n/src/locales/de/common.json
-@@ -867,5 +867,271 @@
+@@ -867,5 +867,300 @@
        "description": "Arbeitselemente in JSON exportieren.",
        "short_description": "Als JSON exportieren"
      }
@@ -9622,7 +10066,7 @@ index 1e18d4e..27f71a1 100644
 +    "delete_error": "File could not be deleted. Please try again.",
 +    "rename_success": "File renamed successfully.",
 +    "rename_error": "File could not be renamed. Please try again.",
-+    "upload_error": "\"{{name}}\" could not be uploaded. Please try again.",
++    "upload_error": "\"{name}\" could not be uploaded. Please try again.",
 +    "delete_confirm_prefix": "Are you sure you want to delete the file",
 +    "delete_confirm_suffix": "? The file will be deleted permanently. This action cannot be undone.",
 +    "preview": "Preview",
@@ -9642,8 +10086,8 @@ index 1e18d4e..27f71a1 100644
 +    "open_in_google_drive": "Open in Google Drive",
 +    "tags_label": "Tags",
 +    "tags_placeholder": "Type a tag and press Enter",
-+    "tags_max_error": "You can add up to {{max}} tags.",
-+    "tag_length_error": "A tag can be at most {{max}} characters long.",
++    "tags_max_error": "You can add up to {max} tags.",
++    "tag_length_error": "A tag can be at most {max} characters long.",
 +    "tag_remove": "Remove tag",
 +    "module_label": "Module",
 +    "module_none": "No module",
@@ -9678,9 +10122,9 @@ index 1e18d4e..27f71a1 100644
 +    },
 +    "alerts": {
 +      "title": "Alerts",
-+      "overdue_since": "Overdue by {{days}} days",
++      "overdue_since": "Overdue by {days} days",
 +      "due_today": "Due today",
-+      "due_in_days": "Due in {{days}} days",
++      "due_in_days": "Due in {days} days",
 +      "empty": "No alerts: every client is up to date."
 +    },
 +    "clients": {
@@ -9803,19 +10247,19 @@ index 1e18d4e..27f71a1 100644
 +    "tabs_forecast": "Forecast",
 +    "kpi_mrr": "Committed MRR",
 +    "kpi_runway": "Runway",
-+    "runway_months": "{{months}} months",
++    "runway_months": "{months} months",
 +    "runway_infinite": "No burn (positive flow)",
 +    "runway_unknown": "Capture your cash balance",
 +    "insights": {
 +      "title": "Suggestions",
 +      "empty": "No suggestions right now: everything looks in order.",
-+      "overdue_collection": "Collections pending: {{count}} overdue invoices. Prioritize contacting {{clients}}.",
-+      "low_runway": "Runway of {{months}} months in {{currency}}. Cut spend or speed up collections.",
++      "overdue_collection": "Collections pending: {count} overdue invoices. Prioritize contacting {clients}.",
++      "low_runway": "Runway of {months} months in {currency}. Cut spend or speed up collections.",
 +      "no_cash_snapshot": "Capture your cash balance in Statements to compute runway and cash projections.",
-+      "client_concentration": "{{client}} is {{share}}% of your {{currency}} revenue (last 6 months). Diversifying reduces risk.",
-+      "renewal_due": "The retainer “{{contract}}” for {{client}} ends on {{date}}. Schedule the renewal now.",
-+      "negative_margin": "Negative margin in {{month}} ({{currency}}): you spent more than you earned.",
-+      "missing_expenses": "No expenses captured for {{month}}. Without them, P&L and forecasts are incomplete."
++      "client_concentration": "{client} is {share}% of your {currency} revenue (last 6 months). Diversifying reduces risk.",
++      "renewal_due": "The retainer “{contract}” for {client} ends on {date}. Schedule the renewal now.",
++      "negative_margin": "Negative margin in {month} ({currency}): you spent more than you earned.",
++      "missing_expenses": "No expenses captured for {month}. Without them, P&L and forecasts are incomplete."
 +    },
 +    "pnl": {
 +      "title": "Income statement (monthly)",
@@ -9859,6 +10303,35 @@ index 1e18d4e..27f71a1 100644
 +      "projected_cash": "Projected cash",
 +      "assumptions": "Assumptions: active retainers per their cycle and term; extras and expenses as a rolling 3-month average.",
 +      "empty": "Create retainer contracts and capture expenses to project."
++    },
++    "import": {
++      "button": "Import bank statement",
++      "title": "Import bank statement",
++      "description": "Upload your bank's CSV or paste the transactions from your online banking. The AI interprets and categorizes them; you review before importing.",
++      "file_label": "File (.csv or .txt)",
++      "paste_label": "Or paste the text here",
++      "parse": "Interpret with AI",
++      "parsing": "Interpreting…",
++      "review_title": "Review the transactions",
++      "review_hint": "Checked outflows will be imported as expenses. Inflows are shown for reference only; record them as payments on the client's project.",
++      "col_date": "Date",
++      "col_concept": "Concept",
++      "col_amount": "Amount",
++      "col_category": "Category",
++      "inflow": "Inflow",
++      "commit": "Import {count} expenses",
++      "committing": "Importing…",
++      "success": "{count} expenses imported.",
++      "nothing": "No transactions detected in the text.",
++      "no_selection": "Select at least one outflow.",
++      "back": "Back"
++    },
++    "analysis": {
++      "title": "AI CFO analysis",
++      "generate": "Generate analysis",
++      "generating": "Analyzing your finances… (may take up to a minute)",
++      "description": "The AI reviews your P&L, forecast, collections and clients, and gives you a diagnosis with concrete actions.",
++      "regenerate": "Refresh analysis"
 +    }
    }
  }
@@ -9876,10 +10349,10 @@ index bf22b25..2ff9605 100644
    }
  }
 diff --git a/packages/i18n/src/locales/en/common.json b/packages/i18n/src/locales/en/common.json
-index a138304..aa9b852 100644
+index a138304..5885073 100644
 --- a/packages/i18n/src/locales/en/common.json
 +++ b/packages/i18n/src/locales/en/common.json
-@@ -867,5 +867,271 @@
+@@ -867,5 +867,300 @@
        "description": "Export work items to a JSON file.",
        "short_description": "Export as json"
      }
@@ -9911,7 +10384,7 @@ index a138304..aa9b852 100644
 +    "delete_error": "File could not be deleted. Please try again.",
 +    "rename_success": "File renamed successfully.",
 +    "rename_error": "File could not be renamed. Please try again.",
-+    "upload_error": "\"{{name}}\" could not be uploaded. Please try again.",
++    "upload_error": "\"{name}\" could not be uploaded. Please try again.",
 +    "delete_confirm_prefix": "Are you sure you want to delete the file",
 +    "delete_confirm_suffix": "? The file will be deleted permanently. This action cannot be undone.",
 +    "preview": "Preview",
@@ -9931,8 +10404,8 @@ index a138304..aa9b852 100644
 +    "open_in_google_drive": "Open in Google Drive",
 +    "tags_label": "Tags",
 +    "tags_placeholder": "Type a tag and press Enter",
-+    "tags_max_error": "You can add up to {{max}} tags.",
-+    "tag_length_error": "A tag can be at most {{max}} characters long.",
++    "tags_max_error": "You can add up to {max} tags.",
++    "tag_length_error": "A tag can be at most {max} characters long.",
 +    "tag_remove": "Remove tag",
 +    "module_label": "Module",
 +    "module_none": "No module",
@@ -9967,9 +10440,9 @@ index a138304..aa9b852 100644
 +    },
 +    "alerts": {
 +      "title": "Alerts",
-+      "overdue_since": "Overdue by {{days}} days",
++      "overdue_since": "Overdue by {days} days",
 +      "due_today": "Due today",
-+      "due_in_days": "Due in {{days}} days",
++      "due_in_days": "Due in {days} days",
 +      "empty": "No alerts: every client is up to date."
 +    },
 +    "clients": {
@@ -10092,19 +10565,19 @@ index a138304..aa9b852 100644
 +    "tabs_forecast": "Forecast",
 +    "kpi_mrr": "Committed MRR",
 +    "kpi_runway": "Runway",
-+    "runway_months": "{{months}} months",
++    "runway_months": "{months} months",
 +    "runway_infinite": "No burn (positive flow)",
 +    "runway_unknown": "Capture your cash balance",
 +    "insights": {
 +      "title": "Suggestions",
 +      "empty": "No suggestions right now: everything looks in order.",
-+      "overdue_collection": "Collections pending: {{count}} overdue invoices. Prioritize contacting {{clients}}.",
-+      "low_runway": "Runway of {{months}} months in {{currency}}. Cut spend or speed up collections.",
++      "overdue_collection": "Collections pending: {count} overdue invoices. Prioritize contacting {clients}.",
++      "low_runway": "Runway of {months} months in {currency}. Cut spend or speed up collections.",
 +      "no_cash_snapshot": "Capture your cash balance in Statements to compute runway and cash projections.",
-+      "client_concentration": "{{client}} is {{share}}% of your {{currency}} revenue (last 6 months). Diversifying reduces risk.",
-+      "renewal_due": "The retainer “{{contract}}” for {{client}} ends on {{date}}. Schedule the renewal now.",
-+      "negative_margin": "Negative margin in {{month}} ({{currency}}): you spent more than you earned.",
-+      "missing_expenses": "No expenses captured for {{month}}. Without them, P&L and forecasts are incomplete."
++      "client_concentration": "{client} is {share}% of your {currency} revenue (last 6 months). Diversifying reduces risk.",
++      "renewal_due": "The retainer “{contract}” for {client} ends on {date}. Schedule the renewal now.",
++      "negative_margin": "Negative margin in {month} ({currency}): you spent more than you earned.",
++      "missing_expenses": "No expenses captured for {month}. Without them, P&L and forecasts are incomplete."
 +    },
 +    "pnl": {
 +      "title": "Income statement (monthly)",
@@ -10148,6 +10621,35 @@ index a138304..aa9b852 100644
 +      "projected_cash": "Projected cash",
 +      "assumptions": "Assumptions: active retainers per their cycle and term; extras and expenses as a rolling 3-month average.",
 +      "empty": "Create retainer contracts and capture expenses to project."
++    },
++    "import": {
++      "button": "Import bank statement",
++      "title": "Import bank statement",
++      "description": "Upload your bank's CSV or paste the transactions from your online banking. The AI interprets and categorizes them; you review before importing.",
++      "file_label": "File (.csv or .txt)",
++      "paste_label": "Or paste the text here",
++      "parse": "Interpret with AI",
++      "parsing": "Interpreting…",
++      "review_title": "Review the transactions",
++      "review_hint": "Checked outflows will be imported as expenses. Inflows are shown for reference only; record them as payments on the client's project.",
++      "col_date": "Date",
++      "col_concept": "Concept",
++      "col_amount": "Amount",
++      "col_category": "Category",
++      "inflow": "Inflow",
++      "commit": "Import {count} expenses",
++      "committing": "Importing…",
++      "success": "{count} expenses imported.",
++      "nothing": "No transactions detected in the text.",
++      "no_selection": "Select at least one outflow.",
++      "back": "Back"
++    },
++    "analysis": {
++      "title": "AI CFO analysis",
++      "generate": "Generate analysis",
++      "generating": "Analyzing your finances… (may take up to a minute)",
++      "description": "The AI reviews your P&L, forecast, collections and clients, and gives you a diagnosis with concrete actions.",
++      "regenerate": "Refresh analysis"
 +    }
    }
  }
@@ -10167,10 +10669,10 @@ index 883e981..b341231 100644
    }
  }
 diff --git a/packages/i18n/src/locales/es/common.json b/packages/i18n/src/locales/es/common.json
-index 64440c9..a05fe30 100644
+index 64440c9..60c3bcf 100644
 --- a/packages/i18n/src/locales/es/common.json
 +++ b/packages/i18n/src/locales/es/common.json
-@@ -867,5 +867,271 @@
+@@ -867,5 +867,300 @@
        "description": "Exporta elementos de trabajo a un archivo JSON.",
        "short_description": "Exportar como json"
      }
@@ -10202,7 +10704,7 @@ index 64440c9..a05fe30 100644
 +    "delete_error": "No se pudo eliminar el archivo. Inténtalo de nuevo.",
 +    "rename_success": "Archivo renombrado correctamente.",
 +    "rename_error": "No se pudo renombrar el archivo. Inténtalo de nuevo.",
-+    "upload_error": "No se pudo subir «{{name}}». Inténtalo de nuevo.",
++    "upload_error": "No se pudo subir «{name}». Inténtalo de nuevo.",
 +    "delete_confirm_prefix": "¿Seguro que quieres eliminar el archivo",
 +    "delete_confirm_suffix": "? El archivo se eliminará de forma permanente. Esta acción no se puede deshacer.",
 +    "preview": "Vista previa",
@@ -10222,8 +10724,8 @@ index 64440c9..a05fe30 100644
 +    "open_in_google_drive": "Abrir en Google Drive",
 +    "tags_label": "Etiquetas",
 +    "tags_placeholder": "Escribe una etiqueta y pulsa Enter",
-+    "tags_max_error": "Puedes agregar hasta {{max}} etiquetas.",
-+    "tag_length_error": "Cada etiqueta puede tener como máximo {{max}} caracteres.",
++    "tags_max_error": "Puedes agregar hasta {max} etiquetas.",
++    "tag_length_error": "Cada etiqueta puede tener como máximo {max} caracteres.",
 +    "tag_remove": "Quitar etiqueta",
 +    "module_label": "Módulo",
 +    "module_none": "Sin módulo",
@@ -10258,9 +10760,9 @@ index 64440c9..a05fe30 100644
 +    },
 +    "alerts": {
 +      "title": "Alertas",
-+      "overdue_since": "Vencido hace {{days}} días",
++      "overdue_since": "Vencido hace {days} días",
 +      "due_today": "Vence hoy",
-+      "due_in_days": "Vence en {{days}} días",
++      "due_in_days": "Vence en {days} días",
 +      "empty": "Sin alertas: todos los clientes están al corriente."
 +    },
 +    "clients": {
@@ -10383,19 +10885,19 @@ index 64440c9..a05fe30 100644
 +    "tabs_forecast": "Proyecciones",
 +    "kpi_mrr": "MRR comprometido",
 +    "kpi_runway": "Runway",
-+    "runway_months": "{{months}} meses",
++    "runway_months": "{months} meses",
 +    "runway_infinite": "Sin quema (flujo positivo)",
 +    "runway_unknown": "Captura tu saldo de caja",
 +    "insights": {
 +      "title": "Sugerencias",
 +      "empty": "Sin sugerencias por ahora: todo se ve en orden.",
-+      "overdue_collection": "Cobranza pendiente: {{count}} cobros vencidos. Prioriza contactar a {{clients}}.",
-+      "low_runway": "Runway de {{months}} meses en {{currency}}. Reduce gastos o acelera cobranza.",
++      "overdue_collection": "Cobranza pendiente: {count} cobros vencidos. Prioriza contactar a {clients}.",
++      "low_runway": "Runway de {months} meses en {currency}. Reduce gastos o acelera cobranza.",
 +      "no_cash_snapshot": "Captura tu saldo de caja en Estados para calcular runway y proyecciones de efectivo.",
-+      "client_concentration": "{{client}} representa {{share}}% de tus ingresos en {{currency}} (últimos 6 meses). Diversificar reduce el riesgo.",
-+      "renewal_due": "La iguala «{{contract}}» de {{client}} vence el {{date}}. Agenda la renovación ya.",
-+      "negative_margin": "Margen negativo en {{month}} ({{currency}}): gastaste más de lo que ingresó.",
-+      "missing_expenses": "No has capturado gastos de {{month}}. Sin ellos, el P&L y las proyecciones quedan incompletos."
++      "client_concentration": "{client} representa {share}% de tus ingresos en {currency} (últimos 6 meses). Diversificar reduce el riesgo.",
++      "renewal_due": "La iguala «{contract}» de {client} vence el {date}. Agenda la renovación ya.",
++      "negative_margin": "Margen negativo en {month} ({currency}): gastaste más de lo que ingresó.",
++      "missing_expenses": "No has capturado gastos de {month}. Sin ellos, el P&L y las proyecciones quedan incompletos."
 +    },
 +    "pnl": {
 +      "title": "Estado de resultados (mensual)",
@@ -10439,6 +10941,35 @@ index 64440c9..a05fe30 100644
 +      "projected_cash": "Caja proyectada",
 +      "assumptions": "Supuestos: igualas activas según su ciclo y vigencia, extras y gastos como promedio móvil de los últimos 3 meses cerrados.",
 +      "empty": "Crea contratos de iguala y captura gastos para proyectar."
++    },
++    "import": {
++      "button": "Importar estado de cuenta",
++      "title": "Importar estado de cuenta bancario",
++      "description": "Sube el CSV de tu banco o pega el texto de los movimientos desde tu banca en línea. La IA los interpreta y categoriza; tú revisas antes de importar.",
++      "file_label": "Archivo (.csv o .txt)",
++      "paste_label": "O pega el texto aquí",
++      "parse": "Interpretar con IA",
++      "parsing": "Interpretando…",
++      "review_title": "Revisa los movimientos",
++      "review_hint": "Los egresos marcados se importarán como gastos. Los ingresos se muestran solo como referencia; regístralos como pagos en el proyecto del cliente.",
++      "col_date": "Fecha",
++      "col_concept": "Concepto",
++      "col_amount": "Monto",
++      "col_category": "Categoría",
++      "inflow": "Ingreso",
++      "commit": "Importar {count} gastos",
++      "committing": "Importando…",
++      "success": "{count} gastos importados.",
++      "nothing": "No se detectaron movimientos en el texto.",
++      "no_selection": "Selecciona al menos un egreso.",
++      "back": "Volver"
++    },
++    "analysis": {
++      "title": "Análisis del CFO IA",
++      "generate": "Generar análisis",
++      "generating": "Analizando tus finanzas… (puede tardar hasta un minuto)",
++      "description": "La IA revisa tu P&L, proyecciones, cobranza y clientes, y te da un diagnóstico con acciones concretas.",
++      "regenerate": "Actualizar análisis"
 +    }
    }
  }
@@ -10458,10 +10989,10 @@ index 3c04912..a28d094 100644
    }
  }
 diff --git a/packages/i18n/src/locales/fr/common.json b/packages/i18n/src/locales/fr/common.json
-index a94ab8a..69da573 100644
+index a94ab8a..916db7d 100644
 --- a/packages/i18n/src/locales/fr/common.json
 +++ b/packages/i18n/src/locales/fr/common.json
-@@ -867,5 +867,271 @@
+@@ -867,5 +867,300 @@
        "description": "Exportez les éléments de travail vers un fichier JSON.",
        "short_description": "Exporter en json"
      }
@@ -10493,7 +11024,7 @@ index a94ab8a..69da573 100644
 +    "delete_error": "File could not be deleted. Please try again.",
 +    "rename_success": "File renamed successfully.",
 +    "rename_error": "File could not be renamed. Please try again.",
-+    "upload_error": "\"{{name}}\" could not be uploaded. Please try again.",
++    "upload_error": "\"{name}\" could not be uploaded. Please try again.",
 +    "delete_confirm_prefix": "Are you sure you want to delete the file",
 +    "delete_confirm_suffix": "? The file will be deleted permanently. This action cannot be undone.",
 +    "preview": "Preview",
@@ -10513,8 +11044,8 @@ index a94ab8a..69da573 100644
 +    "open_in_google_drive": "Open in Google Drive",
 +    "tags_label": "Tags",
 +    "tags_placeholder": "Type a tag and press Enter",
-+    "tags_max_error": "You can add up to {{max}} tags.",
-+    "tag_length_error": "A tag can be at most {{max}} characters long.",
++    "tags_max_error": "You can add up to {max} tags.",
++    "tag_length_error": "A tag can be at most {max} characters long.",
 +    "tag_remove": "Remove tag",
 +    "module_label": "Module",
 +    "module_none": "No module",
@@ -10549,9 +11080,9 @@ index a94ab8a..69da573 100644
 +    },
 +    "alerts": {
 +      "title": "Alerts",
-+      "overdue_since": "Overdue by {{days}} days",
++      "overdue_since": "Overdue by {days} days",
 +      "due_today": "Due today",
-+      "due_in_days": "Due in {{days}} days",
++      "due_in_days": "Due in {days} days",
 +      "empty": "No alerts: every client is up to date."
 +    },
 +    "clients": {
@@ -10674,19 +11205,19 @@ index a94ab8a..69da573 100644
 +    "tabs_forecast": "Forecast",
 +    "kpi_mrr": "Committed MRR",
 +    "kpi_runway": "Runway",
-+    "runway_months": "{{months}} months",
++    "runway_months": "{months} months",
 +    "runway_infinite": "No burn (positive flow)",
 +    "runway_unknown": "Capture your cash balance",
 +    "insights": {
 +      "title": "Suggestions",
 +      "empty": "No suggestions right now: everything looks in order.",
-+      "overdue_collection": "Collections pending: {{count}} overdue invoices. Prioritize contacting {{clients}}.",
-+      "low_runway": "Runway of {{months}} months in {{currency}}. Cut spend or speed up collections.",
++      "overdue_collection": "Collections pending: {count} overdue invoices. Prioritize contacting {clients}.",
++      "low_runway": "Runway of {months} months in {currency}. Cut spend or speed up collections.",
 +      "no_cash_snapshot": "Capture your cash balance in Statements to compute runway and cash projections.",
-+      "client_concentration": "{{client}} is {{share}}% of your {{currency}} revenue (last 6 months). Diversifying reduces risk.",
-+      "renewal_due": "The retainer “{{contract}}” for {{client}} ends on {{date}}. Schedule the renewal now.",
-+      "negative_margin": "Negative margin in {{month}} ({{currency}}): you spent more than you earned.",
-+      "missing_expenses": "No expenses captured for {{month}}. Without them, P&L and forecasts are incomplete."
++      "client_concentration": "{client} is {share}% of your {currency} revenue (last 6 months). Diversifying reduces risk.",
++      "renewal_due": "The retainer “{contract}” for {client} ends on {date}. Schedule the renewal now.",
++      "negative_margin": "Negative margin in {month} ({currency}): you spent more than you earned.",
++      "missing_expenses": "No expenses captured for {month}. Without them, P&L and forecasts are incomplete."
 +    },
 +    "pnl": {
 +      "title": "Income statement (monthly)",
@@ -10730,6 +11261,35 @@ index a94ab8a..69da573 100644
 +      "projected_cash": "Projected cash",
 +      "assumptions": "Assumptions: active retainers per their cycle and term; extras and expenses as a rolling 3-month average.",
 +      "empty": "Create retainer contracts and capture expenses to project."
++    },
++    "import": {
++      "button": "Import bank statement",
++      "title": "Import bank statement",
++      "description": "Upload your bank's CSV or paste the transactions from your online banking. The AI interprets and categorizes them; you review before importing.",
++      "file_label": "File (.csv or .txt)",
++      "paste_label": "Or paste the text here",
++      "parse": "Interpret with AI",
++      "parsing": "Interpreting…",
++      "review_title": "Review the transactions",
++      "review_hint": "Checked outflows will be imported as expenses. Inflows are shown for reference only; record them as payments on the client's project.",
++      "col_date": "Date",
++      "col_concept": "Concept",
++      "col_amount": "Amount",
++      "col_category": "Category",
++      "inflow": "Inflow",
++      "commit": "Import {count} expenses",
++      "committing": "Importing…",
++      "success": "{count} expenses imported.",
++      "nothing": "No transactions detected in the text.",
++      "no_selection": "Select at least one outflow.",
++      "back": "Back"
++    },
++    "analysis": {
++      "title": "AI CFO analysis",
++      "generate": "Generate analysis",
++      "generating": "Analyzing your finances… (may take up to a minute)",
++      "description": "The AI reviews your P&L, forecast, collections and clients, and gives you a diagnosis with concrete actions.",
++      "regenerate": "Refresh analysis"
 +    }
    }
  }
@@ -10747,10 +11307,10 @@ index 2c77344..1b8d346 100644
    }
  }
 diff --git a/packages/i18n/src/locales/id/common.json b/packages/i18n/src/locales/id/common.json
-index 7d26685..06f5c3f 100644
+index 7d26685..6fe9cb4 100644
 --- a/packages/i18n/src/locales/id/common.json
 +++ b/packages/i18n/src/locales/id/common.json
-@@ -867,5 +867,271 @@
+@@ -867,5 +867,300 @@
        "description": "Ekspor item kerja ke file JSON.",
        "short_description": "Ekspor sebagai json"
      }
@@ -10782,7 +11342,7 @@ index 7d26685..06f5c3f 100644
 +    "delete_error": "File could not be deleted. Please try again.",
 +    "rename_success": "File renamed successfully.",
 +    "rename_error": "File could not be renamed. Please try again.",
-+    "upload_error": "\"{{name}}\" could not be uploaded. Please try again.",
++    "upload_error": "\"{name}\" could not be uploaded. Please try again.",
 +    "delete_confirm_prefix": "Are you sure you want to delete the file",
 +    "delete_confirm_suffix": "? The file will be deleted permanently. This action cannot be undone.",
 +    "preview": "Preview",
@@ -10802,8 +11362,8 @@ index 7d26685..06f5c3f 100644
 +    "open_in_google_drive": "Open in Google Drive",
 +    "tags_label": "Tags",
 +    "tags_placeholder": "Type a tag and press Enter",
-+    "tags_max_error": "You can add up to {{max}} tags.",
-+    "tag_length_error": "A tag can be at most {{max}} characters long.",
++    "tags_max_error": "You can add up to {max} tags.",
++    "tag_length_error": "A tag can be at most {max} characters long.",
 +    "tag_remove": "Remove tag",
 +    "module_label": "Module",
 +    "module_none": "No module",
@@ -10838,9 +11398,9 @@ index 7d26685..06f5c3f 100644
 +    },
 +    "alerts": {
 +      "title": "Alerts",
-+      "overdue_since": "Overdue by {{days}} days",
++      "overdue_since": "Overdue by {days} days",
 +      "due_today": "Due today",
-+      "due_in_days": "Due in {{days}} days",
++      "due_in_days": "Due in {days} days",
 +      "empty": "No alerts: every client is up to date."
 +    },
 +    "clients": {
@@ -10963,19 +11523,19 @@ index 7d26685..06f5c3f 100644
 +    "tabs_forecast": "Forecast",
 +    "kpi_mrr": "Committed MRR",
 +    "kpi_runway": "Runway",
-+    "runway_months": "{{months}} months",
++    "runway_months": "{months} months",
 +    "runway_infinite": "No burn (positive flow)",
 +    "runway_unknown": "Capture your cash balance",
 +    "insights": {
 +      "title": "Suggestions",
 +      "empty": "No suggestions right now: everything looks in order.",
-+      "overdue_collection": "Collections pending: {{count}} overdue invoices. Prioritize contacting {{clients}}.",
-+      "low_runway": "Runway of {{months}} months in {{currency}}. Cut spend or speed up collections.",
++      "overdue_collection": "Collections pending: {count} overdue invoices. Prioritize contacting {clients}.",
++      "low_runway": "Runway of {months} months in {currency}. Cut spend or speed up collections.",
 +      "no_cash_snapshot": "Capture your cash balance in Statements to compute runway and cash projections.",
-+      "client_concentration": "{{client}} is {{share}}% of your {{currency}} revenue (last 6 months). Diversifying reduces risk.",
-+      "renewal_due": "The retainer “{{contract}}” for {{client}} ends on {{date}}. Schedule the renewal now.",
-+      "negative_margin": "Negative margin in {{month}} ({{currency}}): you spent more than you earned.",
-+      "missing_expenses": "No expenses captured for {{month}}. Without them, P&L and forecasts are incomplete."
++      "client_concentration": "{client} is {share}% of your {currency} revenue (last 6 months). Diversifying reduces risk.",
++      "renewal_due": "The retainer “{contract}” for {client} ends on {date}. Schedule the renewal now.",
++      "negative_margin": "Negative margin in {month} ({currency}): you spent more than you earned.",
++      "missing_expenses": "No expenses captured for {month}. Without them, P&L and forecasts are incomplete."
 +    },
 +    "pnl": {
 +      "title": "Income statement (monthly)",
@@ -11019,6 +11579,35 @@ index 7d26685..06f5c3f 100644
 +      "projected_cash": "Projected cash",
 +      "assumptions": "Assumptions: active retainers per their cycle and term; extras and expenses as a rolling 3-month average.",
 +      "empty": "Create retainer contracts and capture expenses to project."
++    },
++    "import": {
++      "button": "Import bank statement",
++      "title": "Import bank statement",
++      "description": "Upload your bank's CSV or paste the transactions from your online banking. The AI interprets and categorizes them; you review before importing.",
++      "file_label": "File (.csv or .txt)",
++      "paste_label": "Or paste the text here",
++      "parse": "Interpret with AI",
++      "parsing": "Interpreting…",
++      "review_title": "Review the transactions",
++      "review_hint": "Checked outflows will be imported as expenses. Inflows are shown for reference only; record them as payments on the client's project.",
++      "col_date": "Date",
++      "col_concept": "Concept",
++      "col_amount": "Amount",
++      "col_category": "Category",
++      "inflow": "Inflow",
++      "commit": "Import {count} expenses",
++      "committing": "Importing…",
++      "success": "{count} expenses imported.",
++      "nothing": "No transactions detected in the text.",
++      "no_selection": "Select at least one outflow.",
++      "back": "Back"
++    },
++    "analysis": {
++      "title": "AI CFO analysis",
++      "generate": "Generate analysis",
++      "generating": "Analyzing your finances… (may take up to a minute)",
++      "description": "The AI reviews your P&L, forecast, collections and clients, and gives you a diagnosis with concrete actions.",
++      "regenerate": "Refresh analysis"
 +    }
    }
  }
@@ -11036,10 +11625,10 @@ index 4a77755..a3f3b1c 100644
    }
  }
 diff --git a/packages/i18n/src/locales/it/common.json b/packages/i18n/src/locales/it/common.json
-index 6fda1b0..1db1705 100644
+index 6fda1b0..2503bac 100644
 --- a/packages/i18n/src/locales/it/common.json
 +++ b/packages/i18n/src/locales/it/common.json
-@@ -867,5 +867,271 @@
+@@ -867,5 +867,300 @@
        "description": "Esporta elementi di lavoro in un file JSON.",
        "short_description": "Esporta come JSON"
      }
@@ -11071,7 +11660,7 @@ index 6fda1b0..1db1705 100644
 +    "delete_error": "File could not be deleted. Please try again.",
 +    "rename_success": "File renamed successfully.",
 +    "rename_error": "File could not be renamed. Please try again.",
-+    "upload_error": "\"{{name}}\" could not be uploaded. Please try again.",
++    "upload_error": "\"{name}\" could not be uploaded. Please try again.",
 +    "delete_confirm_prefix": "Are you sure you want to delete the file",
 +    "delete_confirm_suffix": "? The file will be deleted permanently. This action cannot be undone.",
 +    "preview": "Preview",
@@ -11091,8 +11680,8 @@ index 6fda1b0..1db1705 100644
 +    "open_in_google_drive": "Open in Google Drive",
 +    "tags_label": "Tags",
 +    "tags_placeholder": "Type a tag and press Enter",
-+    "tags_max_error": "You can add up to {{max}} tags.",
-+    "tag_length_error": "A tag can be at most {{max}} characters long.",
++    "tags_max_error": "You can add up to {max} tags.",
++    "tag_length_error": "A tag can be at most {max} characters long.",
 +    "tag_remove": "Remove tag",
 +    "module_label": "Module",
 +    "module_none": "No module",
@@ -11127,9 +11716,9 @@ index 6fda1b0..1db1705 100644
 +    },
 +    "alerts": {
 +      "title": "Alerts",
-+      "overdue_since": "Overdue by {{days}} days",
++      "overdue_since": "Overdue by {days} days",
 +      "due_today": "Due today",
-+      "due_in_days": "Due in {{days}} days",
++      "due_in_days": "Due in {days} days",
 +      "empty": "No alerts: every client is up to date."
 +    },
 +    "clients": {
@@ -11252,19 +11841,19 @@ index 6fda1b0..1db1705 100644
 +    "tabs_forecast": "Forecast",
 +    "kpi_mrr": "Committed MRR",
 +    "kpi_runway": "Runway",
-+    "runway_months": "{{months}} months",
++    "runway_months": "{months} months",
 +    "runway_infinite": "No burn (positive flow)",
 +    "runway_unknown": "Capture your cash balance",
 +    "insights": {
 +      "title": "Suggestions",
 +      "empty": "No suggestions right now: everything looks in order.",
-+      "overdue_collection": "Collections pending: {{count}} overdue invoices. Prioritize contacting {{clients}}.",
-+      "low_runway": "Runway of {{months}} months in {{currency}}. Cut spend or speed up collections.",
++      "overdue_collection": "Collections pending: {count} overdue invoices. Prioritize contacting {clients}.",
++      "low_runway": "Runway of {months} months in {currency}. Cut spend or speed up collections.",
 +      "no_cash_snapshot": "Capture your cash balance in Statements to compute runway and cash projections.",
-+      "client_concentration": "{{client}} is {{share}}% of your {{currency}} revenue (last 6 months). Diversifying reduces risk.",
-+      "renewal_due": "The retainer “{{contract}}” for {{client}} ends on {{date}}. Schedule the renewal now.",
-+      "negative_margin": "Negative margin in {{month}} ({{currency}}): you spent more than you earned.",
-+      "missing_expenses": "No expenses captured for {{month}}. Without them, P&L and forecasts are incomplete."
++      "client_concentration": "{client} is {share}% of your {currency} revenue (last 6 months). Diversifying reduces risk.",
++      "renewal_due": "The retainer “{contract}” for {client} ends on {date}. Schedule the renewal now.",
++      "negative_margin": "Negative margin in {month} ({currency}): you spent more than you earned.",
++      "missing_expenses": "No expenses captured for {month}. Without them, P&L and forecasts are incomplete."
 +    },
 +    "pnl": {
 +      "title": "Income statement (monthly)",
@@ -11308,6 +11897,35 @@ index 6fda1b0..1db1705 100644
 +      "projected_cash": "Projected cash",
 +      "assumptions": "Assumptions: active retainers per their cycle and term; extras and expenses as a rolling 3-month average.",
 +      "empty": "Create retainer contracts and capture expenses to project."
++    },
++    "import": {
++      "button": "Import bank statement",
++      "title": "Import bank statement",
++      "description": "Upload your bank's CSV or paste the transactions from your online banking. The AI interprets and categorizes them; you review before importing.",
++      "file_label": "File (.csv or .txt)",
++      "paste_label": "Or paste the text here",
++      "parse": "Interpret with AI",
++      "parsing": "Interpreting…",
++      "review_title": "Review the transactions",
++      "review_hint": "Checked outflows will be imported as expenses. Inflows are shown for reference only; record them as payments on the client's project.",
++      "col_date": "Date",
++      "col_concept": "Concept",
++      "col_amount": "Amount",
++      "col_category": "Category",
++      "inflow": "Inflow",
++      "commit": "Import {count} expenses",
++      "committing": "Importing…",
++      "success": "{count} expenses imported.",
++      "nothing": "No transactions detected in the text.",
++      "no_selection": "Select at least one outflow.",
++      "back": "Back"
++    },
++    "analysis": {
++      "title": "AI CFO analysis",
++      "generate": "Generate analysis",
++      "generating": "Analyzing your finances… (may take up to a minute)",
++      "description": "The AI reviews your P&L, forecast, collections and clients, and gives you a diagnosis with concrete actions.",
++      "regenerate": "Refresh analysis"
 +    }
    }
  }
@@ -11325,10 +11943,10 @@ index db31c30..0b8533f 100644
    }
  }
 diff --git a/packages/i18n/src/locales/ja/common.json b/packages/i18n/src/locales/ja/common.json
-index 4899411..1a0c013 100644
+index 4899411..885fc8a 100644
 --- a/packages/i18n/src/locales/ja/common.json
 +++ b/packages/i18n/src/locales/ja/common.json
-@@ -867,5 +867,271 @@
+@@ -867,5 +867,300 @@
        "description": "作業項目をJSONファイルにエクスポートします。",
        "short_description": "JSONとしてエクスポート"
      }
@@ -11360,7 +11978,7 @@ index 4899411..1a0c013 100644
 +    "delete_error": "File could not be deleted. Please try again.",
 +    "rename_success": "File renamed successfully.",
 +    "rename_error": "File could not be renamed. Please try again.",
-+    "upload_error": "\"{{name}}\" could not be uploaded. Please try again.",
++    "upload_error": "\"{name}\" could not be uploaded. Please try again.",
 +    "delete_confirm_prefix": "Are you sure you want to delete the file",
 +    "delete_confirm_suffix": "? The file will be deleted permanently. This action cannot be undone.",
 +    "preview": "Preview",
@@ -11380,8 +11998,8 @@ index 4899411..1a0c013 100644
 +    "open_in_google_drive": "Open in Google Drive",
 +    "tags_label": "Tags",
 +    "tags_placeholder": "Type a tag and press Enter",
-+    "tags_max_error": "You can add up to {{max}} tags.",
-+    "tag_length_error": "A tag can be at most {{max}} characters long.",
++    "tags_max_error": "You can add up to {max} tags.",
++    "tag_length_error": "A tag can be at most {max} characters long.",
 +    "tag_remove": "Remove tag",
 +    "module_label": "Module",
 +    "module_none": "No module",
@@ -11416,9 +12034,9 @@ index 4899411..1a0c013 100644
 +    },
 +    "alerts": {
 +      "title": "Alerts",
-+      "overdue_since": "Overdue by {{days}} days",
++      "overdue_since": "Overdue by {days} days",
 +      "due_today": "Due today",
-+      "due_in_days": "Due in {{days}} days",
++      "due_in_days": "Due in {days} days",
 +      "empty": "No alerts: every client is up to date."
 +    },
 +    "clients": {
@@ -11541,19 +12159,19 @@ index 4899411..1a0c013 100644
 +    "tabs_forecast": "Forecast",
 +    "kpi_mrr": "Committed MRR",
 +    "kpi_runway": "Runway",
-+    "runway_months": "{{months}} months",
++    "runway_months": "{months} months",
 +    "runway_infinite": "No burn (positive flow)",
 +    "runway_unknown": "Capture your cash balance",
 +    "insights": {
 +      "title": "Suggestions",
 +      "empty": "No suggestions right now: everything looks in order.",
-+      "overdue_collection": "Collections pending: {{count}} overdue invoices. Prioritize contacting {{clients}}.",
-+      "low_runway": "Runway of {{months}} months in {{currency}}. Cut spend or speed up collections.",
++      "overdue_collection": "Collections pending: {count} overdue invoices. Prioritize contacting {clients}.",
++      "low_runway": "Runway of {months} months in {currency}. Cut spend or speed up collections.",
 +      "no_cash_snapshot": "Capture your cash balance in Statements to compute runway and cash projections.",
-+      "client_concentration": "{{client}} is {{share}}% of your {{currency}} revenue (last 6 months). Diversifying reduces risk.",
-+      "renewal_due": "The retainer “{{contract}}” for {{client}} ends on {{date}}. Schedule the renewal now.",
-+      "negative_margin": "Negative margin in {{month}} ({{currency}}): you spent more than you earned.",
-+      "missing_expenses": "No expenses captured for {{month}}. Without them, P&L and forecasts are incomplete."
++      "client_concentration": "{client} is {share}% of your {currency} revenue (last 6 months). Diversifying reduces risk.",
++      "renewal_due": "The retainer “{contract}” for {client} ends on {date}. Schedule the renewal now.",
++      "negative_margin": "Negative margin in {month} ({currency}): you spent more than you earned.",
++      "missing_expenses": "No expenses captured for {month}. Without them, P&L and forecasts are incomplete."
 +    },
 +    "pnl": {
 +      "title": "Income statement (monthly)",
@@ -11597,6 +12215,35 @@ index 4899411..1a0c013 100644
 +      "projected_cash": "Projected cash",
 +      "assumptions": "Assumptions: active retainers per their cycle and term; extras and expenses as a rolling 3-month average.",
 +      "empty": "Create retainer contracts and capture expenses to project."
++    },
++    "import": {
++      "button": "Import bank statement",
++      "title": "Import bank statement",
++      "description": "Upload your bank's CSV or paste the transactions from your online banking. The AI interprets and categorizes them; you review before importing.",
++      "file_label": "File (.csv or .txt)",
++      "paste_label": "Or paste the text here",
++      "parse": "Interpret with AI",
++      "parsing": "Interpreting…",
++      "review_title": "Review the transactions",
++      "review_hint": "Checked outflows will be imported as expenses. Inflows are shown for reference only; record them as payments on the client's project.",
++      "col_date": "Date",
++      "col_concept": "Concept",
++      "col_amount": "Amount",
++      "col_category": "Category",
++      "inflow": "Inflow",
++      "commit": "Import {count} expenses",
++      "committing": "Importing…",
++      "success": "{count} expenses imported.",
++      "nothing": "No transactions detected in the text.",
++      "no_selection": "Select at least one outflow.",
++      "back": "Back"
++    },
++    "analysis": {
++      "title": "AI CFO analysis",
++      "generate": "Generate analysis",
++      "generating": "Analyzing your finances… (may take up to a minute)",
++      "description": "The AI reviews your P&L, forecast, collections and clients, and gives you a diagnosis with concrete actions.",
++      "regenerate": "Refresh analysis"
 +    }
    }
  }
@@ -11614,10 +12261,10 @@ index 207ec74..5a69b51 100644
    }
  }
 diff --git a/packages/i18n/src/locales/ko/common.json b/packages/i18n/src/locales/ko/common.json
-index 73eea6b..6722342 100644
+index 73eea6b..66999f6 100644
 --- a/packages/i18n/src/locales/ko/common.json
 +++ b/packages/i18n/src/locales/ko/common.json
-@@ -867,5 +867,271 @@
+@@ -867,5 +867,300 @@
        "description": "작업 항목을 JSON 파일로 내보냅니다.",
        "short_description": "JSON으로 내보내기"
      }
@@ -11649,7 +12296,7 @@ index 73eea6b..6722342 100644
 +    "delete_error": "File could not be deleted. Please try again.",
 +    "rename_success": "File renamed successfully.",
 +    "rename_error": "File could not be renamed. Please try again.",
-+    "upload_error": "\"{{name}}\" could not be uploaded. Please try again.",
++    "upload_error": "\"{name}\" could not be uploaded. Please try again.",
 +    "delete_confirm_prefix": "Are you sure you want to delete the file",
 +    "delete_confirm_suffix": "? The file will be deleted permanently. This action cannot be undone.",
 +    "preview": "Preview",
@@ -11669,8 +12316,8 @@ index 73eea6b..6722342 100644
 +    "open_in_google_drive": "Open in Google Drive",
 +    "tags_label": "Tags",
 +    "tags_placeholder": "Type a tag and press Enter",
-+    "tags_max_error": "You can add up to {{max}} tags.",
-+    "tag_length_error": "A tag can be at most {{max}} characters long.",
++    "tags_max_error": "You can add up to {max} tags.",
++    "tag_length_error": "A tag can be at most {max} characters long.",
 +    "tag_remove": "Remove tag",
 +    "module_label": "Module",
 +    "module_none": "No module",
@@ -11705,9 +12352,9 @@ index 73eea6b..6722342 100644
 +    },
 +    "alerts": {
 +      "title": "Alerts",
-+      "overdue_since": "Overdue by {{days}} days",
++      "overdue_since": "Overdue by {days} days",
 +      "due_today": "Due today",
-+      "due_in_days": "Due in {{days}} days",
++      "due_in_days": "Due in {days} days",
 +      "empty": "No alerts: every client is up to date."
 +    },
 +    "clients": {
@@ -11830,19 +12477,19 @@ index 73eea6b..6722342 100644
 +    "tabs_forecast": "Forecast",
 +    "kpi_mrr": "Committed MRR",
 +    "kpi_runway": "Runway",
-+    "runway_months": "{{months}} months",
++    "runway_months": "{months} months",
 +    "runway_infinite": "No burn (positive flow)",
 +    "runway_unknown": "Capture your cash balance",
 +    "insights": {
 +      "title": "Suggestions",
 +      "empty": "No suggestions right now: everything looks in order.",
-+      "overdue_collection": "Collections pending: {{count}} overdue invoices. Prioritize contacting {{clients}}.",
-+      "low_runway": "Runway of {{months}} months in {{currency}}. Cut spend or speed up collections.",
++      "overdue_collection": "Collections pending: {count} overdue invoices. Prioritize contacting {clients}.",
++      "low_runway": "Runway of {months} months in {currency}. Cut spend or speed up collections.",
 +      "no_cash_snapshot": "Capture your cash balance in Statements to compute runway and cash projections.",
-+      "client_concentration": "{{client}} is {{share}}% of your {{currency}} revenue (last 6 months). Diversifying reduces risk.",
-+      "renewal_due": "The retainer “{{contract}}” for {{client}} ends on {{date}}. Schedule the renewal now.",
-+      "negative_margin": "Negative margin in {{month}} ({{currency}}): you spent more than you earned.",
-+      "missing_expenses": "No expenses captured for {{month}}. Without them, P&L and forecasts are incomplete."
++      "client_concentration": "{client} is {share}% of your {currency} revenue (last 6 months). Diversifying reduces risk.",
++      "renewal_due": "The retainer “{contract}” for {client} ends on {date}. Schedule the renewal now.",
++      "negative_margin": "Negative margin in {month} ({currency}): you spent more than you earned.",
++      "missing_expenses": "No expenses captured for {month}. Without them, P&L and forecasts are incomplete."
 +    },
 +    "pnl": {
 +      "title": "Income statement (monthly)",
@@ -11886,6 +12533,35 @@ index 73eea6b..6722342 100644
 +      "projected_cash": "Projected cash",
 +      "assumptions": "Assumptions: active retainers per their cycle and term; extras and expenses as a rolling 3-month average.",
 +      "empty": "Create retainer contracts and capture expenses to project."
++    },
++    "import": {
++      "button": "Import bank statement",
++      "title": "Import bank statement",
++      "description": "Upload your bank's CSV or paste the transactions from your online banking. The AI interprets and categorizes them; you review before importing.",
++      "file_label": "File (.csv or .txt)",
++      "paste_label": "Or paste the text here",
++      "parse": "Interpret with AI",
++      "parsing": "Interpreting…",
++      "review_title": "Review the transactions",
++      "review_hint": "Checked outflows will be imported as expenses. Inflows are shown for reference only; record them as payments on the client's project.",
++      "col_date": "Date",
++      "col_concept": "Concept",
++      "col_amount": "Amount",
++      "col_category": "Category",
++      "inflow": "Inflow",
++      "commit": "Import {count} expenses",
++      "committing": "Importing…",
++      "success": "{count} expenses imported.",
++      "nothing": "No transactions detected in the text.",
++      "no_selection": "Select at least one outflow.",
++      "back": "Back"
++    },
++    "analysis": {
++      "title": "AI CFO analysis",
++      "generate": "Generate analysis",
++      "generating": "Analyzing your finances… (may take up to a minute)",
++      "description": "The AI reviews your P&L, forecast, collections and clients, and gives you a diagnosis with concrete actions.",
++      "regenerate": "Refresh analysis"
 +    }
    }
  }
@@ -11903,10 +12579,10 @@ index 86ba3b7..ed2b818 100644
    }
  }
 diff --git a/packages/i18n/src/locales/pl/common.json b/packages/i18n/src/locales/pl/common.json
-index 4c4850c..1fe2944 100644
+index 4c4850c..704f161 100644
 --- a/packages/i18n/src/locales/pl/common.json
 +++ b/packages/i18n/src/locales/pl/common.json
-@@ -867,5 +867,271 @@
+@@ -867,5 +867,300 @@
        "description": "Eksportuj elementy do pliku JSON.",
        "short_description": "Eksportuj jako JSON"
      }
@@ -11938,7 +12614,7 @@ index 4c4850c..1fe2944 100644
 +    "delete_error": "File could not be deleted. Please try again.",
 +    "rename_success": "File renamed successfully.",
 +    "rename_error": "File could not be renamed. Please try again.",
-+    "upload_error": "\"{{name}}\" could not be uploaded. Please try again.",
++    "upload_error": "\"{name}\" could not be uploaded. Please try again.",
 +    "delete_confirm_prefix": "Are you sure you want to delete the file",
 +    "delete_confirm_suffix": "? The file will be deleted permanently. This action cannot be undone.",
 +    "preview": "Preview",
@@ -11958,8 +12634,8 @@ index 4c4850c..1fe2944 100644
 +    "open_in_google_drive": "Open in Google Drive",
 +    "tags_label": "Tags",
 +    "tags_placeholder": "Type a tag and press Enter",
-+    "tags_max_error": "You can add up to {{max}} tags.",
-+    "tag_length_error": "A tag can be at most {{max}} characters long.",
++    "tags_max_error": "You can add up to {max} tags.",
++    "tag_length_error": "A tag can be at most {max} characters long.",
 +    "tag_remove": "Remove tag",
 +    "module_label": "Module",
 +    "module_none": "No module",
@@ -11994,9 +12670,9 @@ index 4c4850c..1fe2944 100644
 +    },
 +    "alerts": {
 +      "title": "Alerts",
-+      "overdue_since": "Overdue by {{days}} days",
++      "overdue_since": "Overdue by {days} days",
 +      "due_today": "Due today",
-+      "due_in_days": "Due in {{days}} days",
++      "due_in_days": "Due in {days} days",
 +      "empty": "No alerts: every client is up to date."
 +    },
 +    "clients": {
@@ -12119,19 +12795,19 @@ index 4c4850c..1fe2944 100644
 +    "tabs_forecast": "Forecast",
 +    "kpi_mrr": "Committed MRR",
 +    "kpi_runway": "Runway",
-+    "runway_months": "{{months}} months",
++    "runway_months": "{months} months",
 +    "runway_infinite": "No burn (positive flow)",
 +    "runway_unknown": "Capture your cash balance",
 +    "insights": {
 +      "title": "Suggestions",
 +      "empty": "No suggestions right now: everything looks in order.",
-+      "overdue_collection": "Collections pending: {{count}} overdue invoices. Prioritize contacting {{clients}}.",
-+      "low_runway": "Runway of {{months}} months in {{currency}}. Cut spend or speed up collections.",
++      "overdue_collection": "Collections pending: {count} overdue invoices. Prioritize contacting {clients}.",
++      "low_runway": "Runway of {months} months in {currency}. Cut spend or speed up collections.",
 +      "no_cash_snapshot": "Capture your cash balance in Statements to compute runway and cash projections.",
-+      "client_concentration": "{{client}} is {{share}}% of your {{currency}} revenue (last 6 months). Diversifying reduces risk.",
-+      "renewal_due": "The retainer “{{contract}}” for {{client}} ends on {{date}}. Schedule the renewal now.",
-+      "negative_margin": "Negative margin in {{month}} ({{currency}}): you spent more than you earned.",
-+      "missing_expenses": "No expenses captured for {{month}}. Without them, P&L and forecasts are incomplete."
++      "client_concentration": "{client} is {share}% of your {currency} revenue (last 6 months). Diversifying reduces risk.",
++      "renewal_due": "The retainer “{contract}” for {client} ends on {date}. Schedule the renewal now.",
++      "negative_margin": "Negative margin in {month} ({currency}): you spent more than you earned.",
++      "missing_expenses": "No expenses captured for {month}. Without them, P&L and forecasts are incomplete."
 +    },
 +    "pnl": {
 +      "title": "Income statement (monthly)",
@@ -12175,6 +12851,35 @@ index 4c4850c..1fe2944 100644
 +      "projected_cash": "Projected cash",
 +      "assumptions": "Assumptions: active retainers per their cycle and term; extras and expenses as a rolling 3-month average.",
 +      "empty": "Create retainer contracts and capture expenses to project."
++    },
++    "import": {
++      "button": "Import bank statement",
++      "title": "Import bank statement",
++      "description": "Upload your bank's CSV or paste the transactions from your online banking. The AI interprets and categorizes them; you review before importing.",
++      "file_label": "File (.csv or .txt)",
++      "paste_label": "Or paste the text here",
++      "parse": "Interpret with AI",
++      "parsing": "Interpreting…",
++      "review_title": "Review the transactions",
++      "review_hint": "Checked outflows will be imported as expenses. Inflows are shown for reference only; record them as payments on the client's project.",
++      "col_date": "Date",
++      "col_concept": "Concept",
++      "col_amount": "Amount",
++      "col_category": "Category",
++      "inflow": "Inflow",
++      "commit": "Import {count} expenses",
++      "committing": "Importing…",
++      "success": "{count} expenses imported.",
++      "nothing": "No transactions detected in the text.",
++      "no_selection": "Select at least one outflow.",
++      "back": "Back"
++    },
++    "analysis": {
++      "title": "AI CFO analysis",
++      "generate": "Generate analysis",
++      "generating": "Analyzing your finances… (may take up to a minute)",
++      "description": "The AI reviews your P&L, forecast, collections and clients, and gives you a diagnosis with concrete actions.",
++      "regenerate": "Refresh analysis"
 +    }
    }
  }
@@ -12192,10 +12897,10 @@ index 3089b6d..58f309c 100644
    }
  }
 diff --git a/packages/i18n/src/locales/pt-BR/common.json b/packages/i18n/src/locales/pt-BR/common.json
-index 565e85d..7a46bf3 100644
+index 565e85d..4932571 100644
 --- a/packages/i18n/src/locales/pt-BR/common.json
 +++ b/packages/i18n/src/locales/pt-BR/common.json
-@@ -867,5 +867,271 @@
+@@ -867,5 +867,300 @@
        "description": "Exporte itens de trabalho para um arquivo JSON.",
        "short_description": "Exportar como JSON"
      }
@@ -12227,7 +12932,7 @@ index 565e85d..7a46bf3 100644
 +    "delete_error": "File could not be deleted. Please try again.",
 +    "rename_success": "File renamed successfully.",
 +    "rename_error": "File could not be renamed. Please try again.",
-+    "upload_error": "\"{{name}}\" could not be uploaded. Please try again.",
++    "upload_error": "\"{name}\" could not be uploaded. Please try again.",
 +    "delete_confirm_prefix": "Are you sure you want to delete the file",
 +    "delete_confirm_suffix": "? The file will be deleted permanently. This action cannot be undone.",
 +    "preview": "Preview",
@@ -12247,8 +12952,8 @@ index 565e85d..7a46bf3 100644
 +    "open_in_google_drive": "Open in Google Drive",
 +    "tags_label": "Tags",
 +    "tags_placeholder": "Type a tag and press Enter",
-+    "tags_max_error": "You can add up to {{max}} tags.",
-+    "tag_length_error": "A tag can be at most {{max}} characters long.",
++    "tags_max_error": "You can add up to {max} tags.",
++    "tag_length_error": "A tag can be at most {max} characters long.",
 +    "tag_remove": "Remove tag",
 +    "module_label": "Module",
 +    "module_none": "No module",
@@ -12283,9 +12988,9 @@ index 565e85d..7a46bf3 100644
 +    },
 +    "alerts": {
 +      "title": "Alerts",
-+      "overdue_since": "Overdue by {{days}} days",
++      "overdue_since": "Overdue by {days} days",
 +      "due_today": "Due today",
-+      "due_in_days": "Due in {{days}} days",
++      "due_in_days": "Due in {days} days",
 +      "empty": "No alerts: every client is up to date."
 +    },
 +    "clients": {
@@ -12408,19 +13113,19 @@ index 565e85d..7a46bf3 100644
 +    "tabs_forecast": "Forecast",
 +    "kpi_mrr": "Committed MRR",
 +    "kpi_runway": "Runway",
-+    "runway_months": "{{months}} months",
++    "runway_months": "{months} months",
 +    "runway_infinite": "No burn (positive flow)",
 +    "runway_unknown": "Capture your cash balance",
 +    "insights": {
 +      "title": "Suggestions",
 +      "empty": "No suggestions right now: everything looks in order.",
-+      "overdue_collection": "Collections pending: {{count}} overdue invoices. Prioritize contacting {{clients}}.",
-+      "low_runway": "Runway of {{months}} months in {{currency}}. Cut spend or speed up collections.",
++      "overdue_collection": "Collections pending: {count} overdue invoices. Prioritize contacting {clients}.",
++      "low_runway": "Runway of {months} months in {currency}. Cut spend or speed up collections.",
 +      "no_cash_snapshot": "Capture your cash balance in Statements to compute runway and cash projections.",
-+      "client_concentration": "{{client}} is {{share}}% of your {{currency}} revenue (last 6 months). Diversifying reduces risk.",
-+      "renewal_due": "The retainer “{{contract}}” for {{client}} ends on {{date}}. Schedule the renewal now.",
-+      "negative_margin": "Negative margin in {{month}} ({{currency}}): you spent more than you earned.",
-+      "missing_expenses": "No expenses captured for {{month}}. Without them, P&L and forecasts are incomplete."
++      "client_concentration": "{client} is {share}% of your {currency} revenue (last 6 months). Diversifying reduces risk.",
++      "renewal_due": "The retainer “{contract}” for {client} ends on {date}. Schedule the renewal now.",
++      "negative_margin": "Negative margin in {month} ({currency}): you spent more than you earned.",
++      "missing_expenses": "No expenses captured for {month}. Without them, P&L and forecasts are incomplete."
 +    },
 +    "pnl": {
 +      "title": "Income statement (monthly)",
@@ -12464,6 +13169,35 @@ index 565e85d..7a46bf3 100644
 +      "projected_cash": "Projected cash",
 +      "assumptions": "Assumptions: active retainers per their cycle and term; extras and expenses as a rolling 3-month average.",
 +      "empty": "Create retainer contracts and capture expenses to project."
++    },
++    "import": {
++      "button": "Import bank statement",
++      "title": "Import bank statement",
++      "description": "Upload your bank's CSV or paste the transactions from your online banking. The AI interprets and categorizes them; you review before importing.",
++      "file_label": "File (.csv or .txt)",
++      "paste_label": "Or paste the text here",
++      "parse": "Interpret with AI",
++      "parsing": "Interpreting…",
++      "review_title": "Review the transactions",
++      "review_hint": "Checked outflows will be imported as expenses. Inflows are shown for reference only; record them as payments on the client's project.",
++      "col_date": "Date",
++      "col_concept": "Concept",
++      "col_amount": "Amount",
++      "col_category": "Category",
++      "inflow": "Inflow",
++      "commit": "Import {count} expenses",
++      "committing": "Importing…",
++      "success": "{count} expenses imported.",
++      "nothing": "No transactions detected in the text.",
++      "no_selection": "Select at least one outflow.",
++      "back": "Back"
++    },
++    "analysis": {
++      "title": "AI CFO analysis",
++      "generate": "Generate analysis",
++      "generating": "Analyzing your finances… (may take up to a minute)",
++      "description": "The AI reviews your P&L, forecast, collections and clients, and gives you a diagnosis with concrete actions.",
++      "regenerate": "Refresh analysis"
 +    }
    }
  }
@@ -12481,10 +13215,10 @@ index c2a2d62..ffc5645 100644
    }
  }
 diff --git a/packages/i18n/src/locales/ro/common.json b/packages/i18n/src/locales/ro/common.json
-index e2b44ce..2f930eb 100644
+index e2b44ce..d0357fd 100644
 --- a/packages/i18n/src/locales/ro/common.json
 +++ b/packages/i18n/src/locales/ro/common.json
-@@ -867,5 +867,271 @@
+@@ -867,5 +867,300 @@
        "description": "Exportă activitățile într-un fișier JSON.",
        "short_description": "Exportă ca JSON"
      }
@@ -12516,7 +13250,7 @@ index e2b44ce..2f930eb 100644
 +    "delete_error": "File could not be deleted. Please try again.",
 +    "rename_success": "File renamed successfully.",
 +    "rename_error": "File could not be renamed. Please try again.",
-+    "upload_error": "\"{{name}}\" could not be uploaded. Please try again.",
++    "upload_error": "\"{name}\" could not be uploaded. Please try again.",
 +    "delete_confirm_prefix": "Are you sure you want to delete the file",
 +    "delete_confirm_suffix": "? The file will be deleted permanently. This action cannot be undone.",
 +    "preview": "Preview",
@@ -12536,8 +13270,8 @@ index e2b44ce..2f930eb 100644
 +    "open_in_google_drive": "Open in Google Drive",
 +    "tags_label": "Tags",
 +    "tags_placeholder": "Type a tag and press Enter",
-+    "tags_max_error": "You can add up to {{max}} tags.",
-+    "tag_length_error": "A tag can be at most {{max}} characters long.",
++    "tags_max_error": "You can add up to {max} tags.",
++    "tag_length_error": "A tag can be at most {max} characters long.",
 +    "tag_remove": "Remove tag",
 +    "module_label": "Module",
 +    "module_none": "No module",
@@ -12572,9 +13306,9 @@ index e2b44ce..2f930eb 100644
 +    },
 +    "alerts": {
 +      "title": "Alerts",
-+      "overdue_since": "Overdue by {{days}} days",
++      "overdue_since": "Overdue by {days} days",
 +      "due_today": "Due today",
-+      "due_in_days": "Due in {{days}} days",
++      "due_in_days": "Due in {days} days",
 +      "empty": "No alerts: every client is up to date."
 +    },
 +    "clients": {
@@ -12697,19 +13431,19 @@ index e2b44ce..2f930eb 100644
 +    "tabs_forecast": "Forecast",
 +    "kpi_mrr": "Committed MRR",
 +    "kpi_runway": "Runway",
-+    "runway_months": "{{months}} months",
++    "runway_months": "{months} months",
 +    "runway_infinite": "No burn (positive flow)",
 +    "runway_unknown": "Capture your cash balance",
 +    "insights": {
 +      "title": "Suggestions",
 +      "empty": "No suggestions right now: everything looks in order.",
-+      "overdue_collection": "Collections pending: {{count}} overdue invoices. Prioritize contacting {{clients}}.",
-+      "low_runway": "Runway of {{months}} months in {{currency}}. Cut spend or speed up collections.",
++      "overdue_collection": "Collections pending: {count} overdue invoices. Prioritize contacting {clients}.",
++      "low_runway": "Runway of {months} months in {currency}. Cut spend or speed up collections.",
 +      "no_cash_snapshot": "Capture your cash balance in Statements to compute runway and cash projections.",
-+      "client_concentration": "{{client}} is {{share}}% of your {{currency}} revenue (last 6 months). Diversifying reduces risk.",
-+      "renewal_due": "The retainer “{{contract}}” for {{client}} ends on {{date}}. Schedule the renewal now.",
-+      "negative_margin": "Negative margin in {{month}} ({{currency}}): you spent more than you earned.",
-+      "missing_expenses": "No expenses captured for {{month}}. Without them, P&L and forecasts are incomplete."
++      "client_concentration": "{client} is {share}% of your {currency} revenue (last 6 months). Diversifying reduces risk.",
++      "renewal_due": "The retainer “{contract}” for {client} ends on {date}. Schedule the renewal now.",
++      "negative_margin": "Negative margin in {month} ({currency}): you spent more than you earned.",
++      "missing_expenses": "No expenses captured for {month}. Without them, P&L and forecasts are incomplete."
 +    },
 +    "pnl": {
 +      "title": "Income statement (monthly)",
@@ -12753,6 +13487,35 @@ index e2b44ce..2f930eb 100644
 +      "projected_cash": "Projected cash",
 +      "assumptions": "Assumptions: active retainers per their cycle and term; extras and expenses as a rolling 3-month average.",
 +      "empty": "Create retainer contracts and capture expenses to project."
++    },
++    "import": {
++      "button": "Import bank statement",
++      "title": "Import bank statement",
++      "description": "Upload your bank's CSV or paste the transactions from your online banking. The AI interprets and categorizes them; you review before importing.",
++      "file_label": "File (.csv or .txt)",
++      "paste_label": "Or paste the text here",
++      "parse": "Interpret with AI",
++      "parsing": "Interpreting…",
++      "review_title": "Review the transactions",
++      "review_hint": "Checked outflows will be imported as expenses. Inflows are shown for reference only; record them as payments on the client's project.",
++      "col_date": "Date",
++      "col_concept": "Concept",
++      "col_amount": "Amount",
++      "col_category": "Category",
++      "inflow": "Inflow",
++      "commit": "Import {count} expenses",
++      "committing": "Importing…",
++      "success": "{count} expenses imported.",
++      "nothing": "No transactions detected in the text.",
++      "no_selection": "Select at least one outflow.",
++      "back": "Back"
++    },
++    "analysis": {
++      "title": "AI CFO analysis",
++      "generate": "Generate analysis",
++      "generating": "Analyzing your finances… (may take up to a minute)",
++      "description": "The AI reviews your P&L, forecast, collections and clients, and gives you a diagnosis with concrete actions.",
++      "regenerate": "Refresh analysis"
 +    }
    }
  }
@@ -12770,10 +13533,10 @@ index e56d5aa..ff5227d 100644
    }
  }
 diff --git a/packages/i18n/src/locales/ru/common.json b/packages/i18n/src/locales/ru/common.json
-index c2881e5..4f61007 100644
+index c2881e5..ecac326 100644
 --- a/packages/i18n/src/locales/ru/common.json
 +++ b/packages/i18n/src/locales/ru/common.json
-@@ -867,5 +867,271 @@
+@@ -867,5 +867,300 @@
        "description": "Экспорт рабочих элементов в JSON-файл.",
        "short_description": "Экспорт в json"
      }
@@ -12805,7 +13568,7 @@ index c2881e5..4f61007 100644
 +    "delete_error": "File could not be deleted. Please try again.",
 +    "rename_success": "File renamed successfully.",
 +    "rename_error": "File could not be renamed. Please try again.",
-+    "upload_error": "\"{{name}}\" could not be uploaded. Please try again.",
++    "upload_error": "\"{name}\" could not be uploaded. Please try again.",
 +    "delete_confirm_prefix": "Are you sure you want to delete the file",
 +    "delete_confirm_suffix": "? The file will be deleted permanently. This action cannot be undone.",
 +    "preview": "Preview",
@@ -12825,8 +13588,8 @@ index c2881e5..4f61007 100644
 +    "open_in_google_drive": "Open in Google Drive",
 +    "tags_label": "Tags",
 +    "tags_placeholder": "Type a tag and press Enter",
-+    "tags_max_error": "You can add up to {{max}} tags.",
-+    "tag_length_error": "A tag can be at most {{max}} characters long.",
++    "tags_max_error": "You can add up to {max} tags.",
++    "tag_length_error": "A tag can be at most {max} characters long.",
 +    "tag_remove": "Remove tag",
 +    "module_label": "Module",
 +    "module_none": "No module",
@@ -12861,9 +13624,9 @@ index c2881e5..4f61007 100644
 +    },
 +    "alerts": {
 +      "title": "Alerts",
-+      "overdue_since": "Overdue by {{days}} days",
++      "overdue_since": "Overdue by {days} days",
 +      "due_today": "Due today",
-+      "due_in_days": "Due in {{days}} days",
++      "due_in_days": "Due in {days} days",
 +      "empty": "No alerts: every client is up to date."
 +    },
 +    "clients": {
@@ -12986,19 +13749,19 @@ index c2881e5..4f61007 100644
 +    "tabs_forecast": "Forecast",
 +    "kpi_mrr": "Committed MRR",
 +    "kpi_runway": "Runway",
-+    "runway_months": "{{months}} months",
++    "runway_months": "{months} months",
 +    "runway_infinite": "No burn (positive flow)",
 +    "runway_unknown": "Capture your cash balance",
 +    "insights": {
 +      "title": "Suggestions",
 +      "empty": "No suggestions right now: everything looks in order.",
-+      "overdue_collection": "Collections pending: {{count}} overdue invoices. Prioritize contacting {{clients}}.",
-+      "low_runway": "Runway of {{months}} months in {{currency}}. Cut spend or speed up collections.",
++      "overdue_collection": "Collections pending: {count} overdue invoices. Prioritize contacting {clients}.",
++      "low_runway": "Runway of {months} months in {currency}. Cut spend or speed up collections.",
 +      "no_cash_snapshot": "Capture your cash balance in Statements to compute runway and cash projections.",
-+      "client_concentration": "{{client}} is {{share}}% of your {{currency}} revenue (last 6 months). Diversifying reduces risk.",
-+      "renewal_due": "The retainer “{{contract}}” for {{client}} ends on {{date}}. Schedule the renewal now.",
-+      "negative_margin": "Negative margin in {{month}} ({{currency}}): you spent more than you earned.",
-+      "missing_expenses": "No expenses captured for {{month}}. Without them, P&L and forecasts are incomplete."
++      "client_concentration": "{client} is {share}% of your {currency} revenue (last 6 months). Diversifying reduces risk.",
++      "renewal_due": "The retainer “{contract}” for {client} ends on {date}. Schedule the renewal now.",
++      "negative_margin": "Negative margin in {month} ({currency}): you spent more than you earned.",
++      "missing_expenses": "No expenses captured for {month}. Without them, P&L and forecasts are incomplete."
 +    },
 +    "pnl": {
 +      "title": "Income statement (monthly)",
@@ -13042,6 +13805,35 @@ index c2881e5..4f61007 100644
 +      "projected_cash": "Projected cash",
 +      "assumptions": "Assumptions: active retainers per their cycle and term; extras and expenses as a rolling 3-month average.",
 +      "empty": "Create retainer contracts and capture expenses to project."
++    },
++    "import": {
++      "button": "Import bank statement",
++      "title": "Import bank statement",
++      "description": "Upload your bank's CSV or paste the transactions from your online banking. The AI interprets and categorizes them; you review before importing.",
++      "file_label": "File (.csv or .txt)",
++      "paste_label": "Or paste the text here",
++      "parse": "Interpret with AI",
++      "parsing": "Interpreting…",
++      "review_title": "Review the transactions",
++      "review_hint": "Checked outflows will be imported as expenses. Inflows are shown for reference only; record them as payments on the client's project.",
++      "col_date": "Date",
++      "col_concept": "Concept",
++      "col_amount": "Amount",
++      "col_category": "Category",
++      "inflow": "Inflow",
++      "commit": "Import {count} expenses",
++      "committing": "Importing…",
++      "success": "{count} expenses imported.",
++      "nothing": "No transactions detected in the text.",
++      "no_selection": "Select at least one outflow.",
++      "back": "Back"
++    },
++    "analysis": {
++      "title": "AI CFO analysis",
++      "generate": "Generate analysis",
++      "generating": "Analyzing your finances… (may take up to a minute)",
++      "description": "The AI reviews your P&L, forecast, collections and clients, and gives you a diagnosis with concrete actions.",
++      "regenerate": "Refresh analysis"
 +    }
    }
  }
@@ -13059,10 +13851,10 @@ index 80bbdd8..5647d12 100644
    }
  }
 diff --git a/packages/i18n/src/locales/sk/common.json b/packages/i18n/src/locales/sk/common.json
-index 4fc339c..fd9844a 100644
+index 4fc339c..1dd0fd1 100644
 --- a/packages/i18n/src/locales/sk/common.json
 +++ b/packages/i18n/src/locales/sk/common.json
-@@ -867,5 +867,271 @@
+@@ -867,5 +867,300 @@
        "description": "Exportujte položky do JSON.",
        "short_description": "Exportovať ako JSON"
      }
@@ -13094,7 +13886,7 @@ index 4fc339c..fd9844a 100644
 +    "delete_error": "File could not be deleted. Please try again.",
 +    "rename_success": "File renamed successfully.",
 +    "rename_error": "File could not be renamed. Please try again.",
-+    "upload_error": "\"{{name}}\" could not be uploaded. Please try again.",
++    "upload_error": "\"{name}\" could not be uploaded. Please try again.",
 +    "delete_confirm_prefix": "Are you sure you want to delete the file",
 +    "delete_confirm_suffix": "? The file will be deleted permanently. This action cannot be undone.",
 +    "preview": "Preview",
@@ -13114,8 +13906,8 @@ index 4fc339c..fd9844a 100644
 +    "open_in_google_drive": "Open in Google Drive",
 +    "tags_label": "Tags",
 +    "tags_placeholder": "Type a tag and press Enter",
-+    "tags_max_error": "You can add up to {{max}} tags.",
-+    "tag_length_error": "A tag can be at most {{max}} characters long.",
++    "tags_max_error": "You can add up to {max} tags.",
++    "tag_length_error": "A tag can be at most {max} characters long.",
 +    "tag_remove": "Remove tag",
 +    "module_label": "Module",
 +    "module_none": "No module",
@@ -13150,9 +13942,9 @@ index 4fc339c..fd9844a 100644
 +    },
 +    "alerts": {
 +      "title": "Alerts",
-+      "overdue_since": "Overdue by {{days}} days",
++      "overdue_since": "Overdue by {days} days",
 +      "due_today": "Due today",
-+      "due_in_days": "Due in {{days}} days",
++      "due_in_days": "Due in {days} days",
 +      "empty": "No alerts: every client is up to date."
 +    },
 +    "clients": {
@@ -13275,19 +14067,19 @@ index 4fc339c..fd9844a 100644
 +    "tabs_forecast": "Forecast",
 +    "kpi_mrr": "Committed MRR",
 +    "kpi_runway": "Runway",
-+    "runway_months": "{{months}} months",
++    "runway_months": "{months} months",
 +    "runway_infinite": "No burn (positive flow)",
 +    "runway_unknown": "Capture your cash balance",
 +    "insights": {
 +      "title": "Suggestions",
 +      "empty": "No suggestions right now: everything looks in order.",
-+      "overdue_collection": "Collections pending: {{count}} overdue invoices. Prioritize contacting {{clients}}.",
-+      "low_runway": "Runway of {{months}} months in {{currency}}. Cut spend or speed up collections.",
++      "overdue_collection": "Collections pending: {count} overdue invoices. Prioritize contacting {clients}.",
++      "low_runway": "Runway of {months} months in {currency}. Cut spend or speed up collections.",
 +      "no_cash_snapshot": "Capture your cash balance in Statements to compute runway and cash projections.",
-+      "client_concentration": "{{client}} is {{share}}% of your {{currency}} revenue (last 6 months). Diversifying reduces risk.",
-+      "renewal_due": "The retainer “{{contract}}” for {{client}} ends on {{date}}. Schedule the renewal now.",
-+      "negative_margin": "Negative margin in {{month}} ({{currency}}): you spent more than you earned.",
-+      "missing_expenses": "No expenses captured for {{month}}. Without them, P&L and forecasts are incomplete."
++      "client_concentration": "{client} is {share}% of your {currency} revenue (last 6 months). Diversifying reduces risk.",
++      "renewal_due": "The retainer “{contract}” for {client} ends on {date}. Schedule the renewal now.",
++      "negative_margin": "Negative margin in {month} ({currency}): you spent more than you earned.",
++      "missing_expenses": "No expenses captured for {month}. Without them, P&L and forecasts are incomplete."
 +    },
 +    "pnl": {
 +      "title": "Income statement (monthly)",
@@ -13331,6 +14123,35 @@ index 4fc339c..fd9844a 100644
 +      "projected_cash": "Projected cash",
 +      "assumptions": "Assumptions: active retainers per their cycle and term; extras and expenses as a rolling 3-month average.",
 +      "empty": "Create retainer contracts and capture expenses to project."
++    },
++    "import": {
++      "button": "Import bank statement",
++      "title": "Import bank statement",
++      "description": "Upload your bank's CSV or paste the transactions from your online banking. The AI interprets and categorizes them; you review before importing.",
++      "file_label": "File (.csv or .txt)",
++      "paste_label": "Or paste the text here",
++      "parse": "Interpret with AI",
++      "parsing": "Interpreting…",
++      "review_title": "Review the transactions",
++      "review_hint": "Checked outflows will be imported as expenses. Inflows are shown for reference only; record them as payments on the client's project.",
++      "col_date": "Date",
++      "col_concept": "Concept",
++      "col_amount": "Amount",
++      "col_category": "Category",
++      "inflow": "Inflow",
++      "commit": "Import {count} expenses",
++      "committing": "Importing…",
++      "success": "{count} expenses imported.",
++      "nothing": "No transactions detected in the text.",
++      "no_selection": "Select at least one outflow.",
++      "back": "Back"
++    },
++    "analysis": {
++      "title": "AI CFO analysis",
++      "generate": "Generate analysis",
++      "generating": "Analyzing your finances… (may take up to a minute)",
++      "description": "The AI reviews your P&L, forecast, collections and clients, and gives you a diagnosis with concrete actions.",
++      "regenerate": "Refresh analysis"
 +    }
    }
  }
@@ -13348,10 +14169,10 @@ index 0d09286..1156fc4 100644
    }
  }
 diff --git a/packages/i18n/src/locales/tr-TR/common.json b/packages/i18n/src/locales/tr-TR/common.json
-index 74bd5cb..3ee47db 100644
+index 74bd5cb..27a8d42 100644
 --- a/packages/i18n/src/locales/tr-TR/common.json
 +++ b/packages/i18n/src/locales/tr-TR/common.json
-@@ -867,5 +867,271 @@
+@@ -867,5 +867,300 @@
        "description": "İş öğelerini JSON dosyasına aktarın.",
        "short_description": "JSON olarak aktar"
      }
@@ -13383,7 +14204,7 @@ index 74bd5cb..3ee47db 100644
 +    "delete_error": "File could not be deleted. Please try again.",
 +    "rename_success": "File renamed successfully.",
 +    "rename_error": "File could not be renamed. Please try again.",
-+    "upload_error": "\"{{name}}\" could not be uploaded. Please try again.",
++    "upload_error": "\"{name}\" could not be uploaded. Please try again.",
 +    "delete_confirm_prefix": "Are you sure you want to delete the file",
 +    "delete_confirm_suffix": "? The file will be deleted permanently. This action cannot be undone.",
 +    "preview": "Preview",
@@ -13403,8 +14224,8 @@ index 74bd5cb..3ee47db 100644
 +    "open_in_google_drive": "Open in Google Drive",
 +    "tags_label": "Tags",
 +    "tags_placeholder": "Type a tag and press Enter",
-+    "tags_max_error": "You can add up to {{max}} tags.",
-+    "tag_length_error": "A tag can be at most {{max}} characters long.",
++    "tags_max_error": "You can add up to {max} tags.",
++    "tag_length_error": "A tag can be at most {max} characters long.",
 +    "tag_remove": "Remove tag",
 +    "module_label": "Module",
 +    "module_none": "No module",
@@ -13439,9 +14260,9 @@ index 74bd5cb..3ee47db 100644
 +    },
 +    "alerts": {
 +      "title": "Alerts",
-+      "overdue_since": "Overdue by {{days}} days",
++      "overdue_since": "Overdue by {days} days",
 +      "due_today": "Due today",
-+      "due_in_days": "Due in {{days}} days",
++      "due_in_days": "Due in {days} days",
 +      "empty": "No alerts: every client is up to date."
 +    },
 +    "clients": {
@@ -13564,19 +14385,19 @@ index 74bd5cb..3ee47db 100644
 +    "tabs_forecast": "Forecast",
 +    "kpi_mrr": "Committed MRR",
 +    "kpi_runway": "Runway",
-+    "runway_months": "{{months}} months",
++    "runway_months": "{months} months",
 +    "runway_infinite": "No burn (positive flow)",
 +    "runway_unknown": "Capture your cash balance",
 +    "insights": {
 +      "title": "Suggestions",
 +      "empty": "No suggestions right now: everything looks in order.",
-+      "overdue_collection": "Collections pending: {{count}} overdue invoices. Prioritize contacting {{clients}}.",
-+      "low_runway": "Runway of {{months}} months in {{currency}}. Cut spend or speed up collections.",
++      "overdue_collection": "Collections pending: {count} overdue invoices. Prioritize contacting {clients}.",
++      "low_runway": "Runway of {months} months in {currency}. Cut spend or speed up collections.",
 +      "no_cash_snapshot": "Capture your cash balance in Statements to compute runway and cash projections.",
-+      "client_concentration": "{{client}} is {{share}}% of your {{currency}} revenue (last 6 months). Diversifying reduces risk.",
-+      "renewal_due": "The retainer “{{contract}}” for {{client}} ends on {{date}}. Schedule the renewal now.",
-+      "negative_margin": "Negative margin in {{month}} ({{currency}}): you spent more than you earned.",
-+      "missing_expenses": "No expenses captured for {{month}}. Without them, P&L and forecasts are incomplete."
++      "client_concentration": "{client} is {share}% of your {currency} revenue (last 6 months). Diversifying reduces risk.",
++      "renewal_due": "The retainer “{contract}” for {client} ends on {date}. Schedule the renewal now.",
++      "negative_margin": "Negative margin in {month} ({currency}): you spent more than you earned.",
++      "missing_expenses": "No expenses captured for {month}. Without them, P&L and forecasts are incomplete."
 +    },
 +    "pnl": {
 +      "title": "Income statement (monthly)",
@@ -13620,6 +14441,35 @@ index 74bd5cb..3ee47db 100644
 +      "projected_cash": "Projected cash",
 +      "assumptions": "Assumptions: active retainers per their cycle and term; extras and expenses as a rolling 3-month average.",
 +      "empty": "Create retainer contracts and capture expenses to project."
++    },
++    "import": {
++      "button": "Import bank statement",
++      "title": "Import bank statement",
++      "description": "Upload your bank's CSV or paste the transactions from your online banking. The AI interprets and categorizes them; you review before importing.",
++      "file_label": "File (.csv or .txt)",
++      "paste_label": "Or paste the text here",
++      "parse": "Interpret with AI",
++      "parsing": "Interpreting…",
++      "review_title": "Review the transactions",
++      "review_hint": "Checked outflows will be imported as expenses. Inflows are shown for reference only; record them as payments on the client's project.",
++      "col_date": "Date",
++      "col_concept": "Concept",
++      "col_amount": "Amount",
++      "col_category": "Category",
++      "inflow": "Inflow",
++      "commit": "Import {count} expenses",
++      "committing": "Importing…",
++      "success": "{count} expenses imported.",
++      "nothing": "No transactions detected in the text.",
++      "no_selection": "Select at least one outflow.",
++      "back": "Back"
++    },
++    "analysis": {
++      "title": "AI CFO analysis",
++      "generate": "Generate analysis",
++      "generating": "Analyzing your finances… (may take up to a minute)",
++      "description": "The AI reviews your P&L, forecast, collections and clients, and gives you a diagnosis with concrete actions.",
++      "regenerate": "Refresh analysis"
 +    }
    }
  }
@@ -13637,10 +14487,10 @@ index f347e01..8640ecb 100644
    }
  }
 diff --git a/packages/i18n/src/locales/ua/common.json b/packages/i18n/src/locales/ua/common.json
-index 89bd906..e359c29 100644
+index 89bd906..06ed04c 100644
 --- a/packages/i18n/src/locales/ua/common.json
 +++ b/packages/i18n/src/locales/ua/common.json
-@@ -867,5 +867,271 @@
+@@ -867,5 +867,300 @@
        "description": "Експортуйте одиниці у формат JSON.",
        "short_description": "Експортувати як JSON"
      }
@@ -13672,7 +14522,7 @@ index 89bd906..e359c29 100644
 +    "delete_error": "File could not be deleted. Please try again.",
 +    "rename_success": "File renamed successfully.",
 +    "rename_error": "File could not be renamed. Please try again.",
-+    "upload_error": "\"{{name}}\" could not be uploaded. Please try again.",
++    "upload_error": "\"{name}\" could not be uploaded. Please try again.",
 +    "delete_confirm_prefix": "Are you sure you want to delete the file",
 +    "delete_confirm_suffix": "? The file will be deleted permanently. This action cannot be undone.",
 +    "preview": "Preview",
@@ -13692,8 +14542,8 @@ index 89bd906..e359c29 100644
 +    "open_in_google_drive": "Open in Google Drive",
 +    "tags_label": "Tags",
 +    "tags_placeholder": "Type a tag and press Enter",
-+    "tags_max_error": "You can add up to {{max}} tags.",
-+    "tag_length_error": "A tag can be at most {{max}} characters long.",
++    "tags_max_error": "You can add up to {max} tags.",
++    "tag_length_error": "A tag can be at most {max} characters long.",
 +    "tag_remove": "Remove tag",
 +    "module_label": "Module",
 +    "module_none": "No module",
@@ -13728,9 +14578,9 @@ index 89bd906..e359c29 100644
 +    },
 +    "alerts": {
 +      "title": "Alerts",
-+      "overdue_since": "Overdue by {{days}} days",
++      "overdue_since": "Overdue by {days} days",
 +      "due_today": "Due today",
-+      "due_in_days": "Due in {{days}} days",
++      "due_in_days": "Due in {days} days",
 +      "empty": "No alerts: every client is up to date."
 +    },
 +    "clients": {
@@ -13853,19 +14703,19 @@ index 89bd906..e359c29 100644
 +    "tabs_forecast": "Forecast",
 +    "kpi_mrr": "Committed MRR",
 +    "kpi_runway": "Runway",
-+    "runway_months": "{{months}} months",
++    "runway_months": "{months} months",
 +    "runway_infinite": "No burn (positive flow)",
 +    "runway_unknown": "Capture your cash balance",
 +    "insights": {
 +      "title": "Suggestions",
 +      "empty": "No suggestions right now: everything looks in order.",
-+      "overdue_collection": "Collections pending: {{count}} overdue invoices. Prioritize contacting {{clients}}.",
-+      "low_runway": "Runway of {{months}} months in {{currency}}. Cut spend or speed up collections.",
++      "overdue_collection": "Collections pending: {count} overdue invoices. Prioritize contacting {clients}.",
++      "low_runway": "Runway of {months} months in {currency}. Cut spend or speed up collections.",
 +      "no_cash_snapshot": "Capture your cash balance in Statements to compute runway and cash projections.",
-+      "client_concentration": "{{client}} is {{share}}% of your {{currency}} revenue (last 6 months). Diversifying reduces risk.",
-+      "renewal_due": "The retainer “{{contract}}” for {{client}} ends on {{date}}. Schedule the renewal now.",
-+      "negative_margin": "Negative margin in {{month}} ({{currency}}): you spent more than you earned.",
-+      "missing_expenses": "No expenses captured for {{month}}. Without them, P&L and forecasts are incomplete."
++      "client_concentration": "{client} is {share}% of your {currency} revenue (last 6 months). Diversifying reduces risk.",
++      "renewal_due": "The retainer “{contract}” for {client} ends on {date}. Schedule the renewal now.",
++      "negative_margin": "Negative margin in {month} ({currency}): you spent more than you earned.",
++      "missing_expenses": "No expenses captured for {month}. Without them, P&L and forecasts are incomplete."
 +    },
 +    "pnl": {
 +      "title": "Income statement (monthly)",
@@ -13909,6 +14759,35 @@ index 89bd906..e359c29 100644
 +      "projected_cash": "Projected cash",
 +      "assumptions": "Assumptions: active retainers per their cycle and term; extras and expenses as a rolling 3-month average.",
 +      "empty": "Create retainer contracts and capture expenses to project."
++    },
++    "import": {
++      "button": "Import bank statement",
++      "title": "Import bank statement",
++      "description": "Upload your bank's CSV or paste the transactions from your online banking. The AI interprets and categorizes them; you review before importing.",
++      "file_label": "File (.csv or .txt)",
++      "paste_label": "Or paste the text here",
++      "parse": "Interpret with AI",
++      "parsing": "Interpreting…",
++      "review_title": "Review the transactions",
++      "review_hint": "Checked outflows will be imported as expenses. Inflows are shown for reference only; record them as payments on the client's project.",
++      "col_date": "Date",
++      "col_concept": "Concept",
++      "col_amount": "Amount",
++      "col_category": "Category",
++      "inflow": "Inflow",
++      "commit": "Import {count} expenses",
++      "committing": "Importing…",
++      "success": "{count} expenses imported.",
++      "nothing": "No transactions detected in the text.",
++      "no_selection": "Select at least one outflow.",
++      "back": "Back"
++    },
++    "analysis": {
++      "title": "AI CFO analysis",
++      "generate": "Generate analysis",
++      "generating": "Analyzing your finances… (may take up to a minute)",
++      "description": "The AI reviews your P&L, forecast, collections and clients, and gives you a diagnosis with concrete actions.",
++      "regenerate": "Refresh analysis"
 +    }
    }
  }
@@ -13926,10 +14805,10 @@ index 742ef12..0a00df0 100644
    }
  }
 diff --git a/packages/i18n/src/locales/vi-VN/common.json b/packages/i18n/src/locales/vi-VN/common.json
-index f9aae43..6d24cfe 100644
+index f9aae43..73e2535 100644
 --- a/packages/i18n/src/locales/vi-VN/common.json
 +++ b/packages/i18n/src/locales/vi-VN/common.json
-@@ -867,5 +867,271 @@
+@@ -867,5 +867,300 @@
        "description": "Xuất mục công việc thành tệp JSON.",
        "short_description": "Xuất sang JSON"
      }
@@ -13961,7 +14840,7 @@ index f9aae43..6d24cfe 100644
 +    "delete_error": "File could not be deleted. Please try again.",
 +    "rename_success": "File renamed successfully.",
 +    "rename_error": "File could not be renamed. Please try again.",
-+    "upload_error": "\"{{name}}\" could not be uploaded. Please try again.",
++    "upload_error": "\"{name}\" could not be uploaded. Please try again.",
 +    "delete_confirm_prefix": "Are you sure you want to delete the file",
 +    "delete_confirm_suffix": "? The file will be deleted permanently. This action cannot be undone.",
 +    "preview": "Preview",
@@ -13981,8 +14860,8 @@ index f9aae43..6d24cfe 100644
 +    "open_in_google_drive": "Open in Google Drive",
 +    "tags_label": "Tags",
 +    "tags_placeholder": "Type a tag and press Enter",
-+    "tags_max_error": "You can add up to {{max}} tags.",
-+    "tag_length_error": "A tag can be at most {{max}} characters long.",
++    "tags_max_error": "You can add up to {max} tags.",
++    "tag_length_error": "A tag can be at most {max} characters long.",
 +    "tag_remove": "Remove tag",
 +    "module_label": "Module",
 +    "module_none": "No module",
@@ -14017,9 +14896,9 @@ index f9aae43..6d24cfe 100644
 +    },
 +    "alerts": {
 +      "title": "Alerts",
-+      "overdue_since": "Overdue by {{days}} days",
++      "overdue_since": "Overdue by {days} days",
 +      "due_today": "Due today",
-+      "due_in_days": "Due in {{days}} days",
++      "due_in_days": "Due in {days} days",
 +      "empty": "No alerts: every client is up to date."
 +    },
 +    "clients": {
@@ -14142,19 +15021,19 @@ index f9aae43..6d24cfe 100644
 +    "tabs_forecast": "Forecast",
 +    "kpi_mrr": "Committed MRR",
 +    "kpi_runway": "Runway",
-+    "runway_months": "{{months}} months",
++    "runway_months": "{months} months",
 +    "runway_infinite": "No burn (positive flow)",
 +    "runway_unknown": "Capture your cash balance",
 +    "insights": {
 +      "title": "Suggestions",
 +      "empty": "No suggestions right now: everything looks in order.",
-+      "overdue_collection": "Collections pending: {{count}} overdue invoices. Prioritize contacting {{clients}}.",
-+      "low_runway": "Runway of {{months}} months in {{currency}}. Cut spend or speed up collections.",
++      "overdue_collection": "Collections pending: {count} overdue invoices. Prioritize contacting {clients}.",
++      "low_runway": "Runway of {months} months in {currency}. Cut spend or speed up collections.",
 +      "no_cash_snapshot": "Capture your cash balance in Statements to compute runway and cash projections.",
-+      "client_concentration": "{{client}} is {{share}}% of your {{currency}} revenue (last 6 months). Diversifying reduces risk.",
-+      "renewal_due": "The retainer “{{contract}}” for {{client}} ends on {{date}}. Schedule the renewal now.",
-+      "negative_margin": "Negative margin in {{month}} ({{currency}}): you spent more than you earned.",
-+      "missing_expenses": "No expenses captured for {{month}}. Without them, P&L and forecasts are incomplete."
++      "client_concentration": "{client} is {share}% of your {currency} revenue (last 6 months). Diversifying reduces risk.",
++      "renewal_due": "The retainer “{contract}” for {client} ends on {date}. Schedule the renewal now.",
++      "negative_margin": "Negative margin in {month} ({currency}): you spent more than you earned.",
++      "missing_expenses": "No expenses captured for {month}. Without them, P&L and forecasts are incomplete."
 +    },
 +    "pnl": {
 +      "title": "Income statement (monthly)",
@@ -14198,6 +15077,35 @@ index f9aae43..6d24cfe 100644
 +      "projected_cash": "Projected cash",
 +      "assumptions": "Assumptions: active retainers per their cycle and term; extras and expenses as a rolling 3-month average.",
 +      "empty": "Create retainer contracts and capture expenses to project."
++    },
++    "import": {
++      "button": "Import bank statement",
++      "title": "Import bank statement",
++      "description": "Upload your bank's CSV or paste the transactions from your online banking. The AI interprets and categorizes them; you review before importing.",
++      "file_label": "File (.csv or .txt)",
++      "paste_label": "Or paste the text here",
++      "parse": "Interpret with AI",
++      "parsing": "Interpreting…",
++      "review_title": "Review the transactions",
++      "review_hint": "Checked outflows will be imported as expenses. Inflows are shown for reference only; record them as payments on the client's project.",
++      "col_date": "Date",
++      "col_concept": "Concept",
++      "col_amount": "Amount",
++      "col_category": "Category",
++      "inflow": "Inflow",
++      "commit": "Import {count} expenses",
++      "committing": "Importing…",
++      "success": "{count} expenses imported.",
++      "nothing": "No transactions detected in the text.",
++      "no_selection": "Select at least one outflow.",
++      "back": "Back"
++    },
++    "analysis": {
++      "title": "AI CFO analysis",
++      "generate": "Generate analysis",
++      "generating": "Analyzing your finances… (may take up to a minute)",
++      "description": "The AI reviews your P&L, forecast, collections and clients, and gives you a diagnosis with concrete actions.",
++      "regenerate": "Refresh analysis"
 +    }
    }
  }
@@ -14215,10 +15123,10 @@ index 1e5d213..7e59d27 100644
    }
  }
 diff --git a/packages/i18n/src/locales/zh-CN/common.json b/packages/i18n/src/locales/zh-CN/common.json
-index dd67d92..e3c77d4 100644
+index dd67d92..99f027d 100644
 --- a/packages/i18n/src/locales/zh-CN/common.json
 +++ b/packages/i18n/src/locales/zh-CN/common.json
-@@ -867,5 +867,271 @@
+@@ -867,5 +867,300 @@
        "description": "将工作项导出为 JSON 文件。",
        "short_description": "导出为 JSON"
      }
@@ -14250,7 +15158,7 @@ index dd67d92..e3c77d4 100644
 +    "delete_error": "File could not be deleted. Please try again.",
 +    "rename_success": "File renamed successfully.",
 +    "rename_error": "File could not be renamed. Please try again.",
-+    "upload_error": "\"{{name}}\" could not be uploaded. Please try again.",
++    "upload_error": "\"{name}\" could not be uploaded. Please try again.",
 +    "delete_confirm_prefix": "Are you sure you want to delete the file",
 +    "delete_confirm_suffix": "? The file will be deleted permanently. This action cannot be undone.",
 +    "preview": "Preview",
@@ -14270,8 +15178,8 @@ index dd67d92..e3c77d4 100644
 +    "open_in_google_drive": "Open in Google Drive",
 +    "tags_label": "Tags",
 +    "tags_placeholder": "Type a tag and press Enter",
-+    "tags_max_error": "You can add up to {{max}} tags.",
-+    "tag_length_error": "A tag can be at most {{max}} characters long.",
++    "tags_max_error": "You can add up to {max} tags.",
++    "tag_length_error": "A tag can be at most {max} characters long.",
 +    "tag_remove": "Remove tag",
 +    "module_label": "Module",
 +    "module_none": "No module",
@@ -14306,9 +15214,9 @@ index dd67d92..e3c77d4 100644
 +    },
 +    "alerts": {
 +      "title": "Alerts",
-+      "overdue_since": "Overdue by {{days}} days",
++      "overdue_since": "Overdue by {days} days",
 +      "due_today": "Due today",
-+      "due_in_days": "Due in {{days}} days",
++      "due_in_days": "Due in {days} days",
 +      "empty": "No alerts: every client is up to date."
 +    },
 +    "clients": {
@@ -14431,19 +15339,19 @@ index dd67d92..e3c77d4 100644
 +    "tabs_forecast": "Forecast",
 +    "kpi_mrr": "Committed MRR",
 +    "kpi_runway": "Runway",
-+    "runway_months": "{{months}} months",
++    "runway_months": "{months} months",
 +    "runway_infinite": "No burn (positive flow)",
 +    "runway_unknown": "Capture your cash balance",
 +    "insights": {
 +      "title": "Suggestions",
 +      "empty": "No suggestions right now: everything looks in order.",
-+      "overdue_collection": "Collections pending: {{count}} overdue invoices. Prioritize contacting {{clients}}.",
-+      "low_runway": "Runway of {{months}} months in {{currency}}. Cut spend or speed up collections.",
++      "overdue_collection": "Collections pending: {count} overdue invoices. Prioritize contacting {clients}.",
++      "low_runway": "Runway of {months} months in {currency}. Cut spend or speed up collections.",
 +      "no_cash_snapshot": "Capture your cash balance in Statements to compute runway and cash projections.",
-+      "client_concentration": "{{client}} is {{share}}% of your {{currency}} revenue (last 6 months). Diversifying reduces risk.",
-+      "renewal_due": "The retainer “{{contract}}” for {{client}} ends on {{date}}. Schedule the renewal now.",
-+      "negative_margin": "Negative margin in {{month}} ({{currency}}): you spent more than you earned.",
-+      "missing_expenses": "No expenses captured for {{month}}. Without them, P&L and forecasts are incomplete."
++      "client_concentration": "{client} is {share}% of your {currency} revenue (last 6 months). Diversifying reduces risk.",
++      "renewal_due": "The retainer “{contract}” for {client} ends on {date}. Schedule the renewal now.",
++      "negative_margin": "Negative margin in {month} ({currency}): you spent more than you earned.",
++      "missing_expenses": "No expenses captured for {month}. Without them, P&L and forecasts are incomplete."
 +    },
 +    "pnl": {
 +      "title": "Income statement (monthly)",
@@ -14487,6 +15395,35 @@ index dd67d92..e3c77d4 100644
 +      "projected_cash": "Projected cash",
 +      "assumptions": "Assumptions: active retainers per their cycle and term; extras and expenses as a rolling 3-month average.",
 +      "empty": "Create retainer contracts and capture expenses to project."
++    },
++    "import": {
++      "button": "Import bank statement",
++      "title": "Import bank statement",
++      "description": "Upload your bank's CSV or paste the transactions from your online banking. The AI interprets and categorizes them; you review before importing.",
++      "file_label": "File (.csv or .txt)",
++      "paste_label": "Or paste the text here",
++      "parse": "Interpret with AI",
++      "parsing": "Interpreting…",
++      "review_title": "Review the transactions",
++      "review_hint": "Checked outflows will be imported as expenses. Inflows are shown for reference only; record them as payments on the client's project.",
++      "col_date": "Date",
++      "col_concept": "Concept",
++      "col_amount": "Amount",
++      "col_category": "Category",
++      "inflow": "Inflow",
++      "commit": "Import {count} expenses",
++      "committing": "Importing…",
++      "success": "{count} expenses imported.",
++      "nothing": "No transactions detected in the text.",
++      "no_selection": "Select at least one outflow.",
++      "back": "Back"
++    },
++    "analysis": {
++      "title": "AI CFO analysis",
++      "generate": "Generate analysis",
++      "generating": "Analyzing your finances… (may take up to a minute)",
++      "description": "The AI reviews your P&L, forecast, collections and clients, and gives you a diagnosis with concrete actions.",
++      "regenerate": "Refresh analysis"
 +    }
    }
  }
@@ -14504,10 +15441,10 @@ index 0fe15a3..c1d6427 100644
    }
  }
 diff --git a/packages/i18n/src/locales/zh-TW/common.json b/packages/i18n/src/locales/zh-TW/common.json
-index 834a2d9..d628c9e 100644
+index 834a2d9..3692228 100644
 --- a/packages/i18n/src/locales/zh-TW/common.json
 +++ b/packages/i18n/src/locales/zh-TW/common.json
-@@ -867,5 +867,271 @@
+@@ -867,5 +867,300 @@
        "description": "將工作事項匯出為 JSON 檔案。",
        "short_description": "匯出為 JSON"
      }
@@ -14539,7 +15476,7 @@ index 834a2d9..d628c9e 100644
 +    "delete_error": "File could not be deleted. Please try again.",
 +    "rename_success": "File renamed successfully.",
 +    "rename_error": "File could not be renamed. Please try again.",
-+    "upload_error": "\"{{name}}\" could not be uploaded. Please try again.",
++    "upload_error": "\"{name}\" could not be uploaded. Please try again.",
 +    "delete_confirm_prefix": "Are you sure you want to delete the file",
 +    "delete_confirm_suffix": "? The file will be deleted permanently. This action cannot be undone.",
 +    "preview": "Preview",
@@ -14559,8 +15496,8 @@ index 834a2d9..d628c9e 100644
 +    "open_in_google_drive": "Open in Google Drive",
 +    "tags_label": "Tags",
 +    "tags_placeholder": "Type a tag and press Enter",
-+    "tags_max_error": "You can add up to {{max}} tags.",
-+    "tag_length_error": "A tag can be at most {{max}} characters long.",
++    "tags_max_error": "You can add up to {max} tags.",
++    "tag_length_error": "A tag can be at most {max} characters long.",
 +    "tag_remove": "Remove tag",
 +    "module_label": "Module",
 +    "module_none": "No module",
@@ -14595,9 +15532,9 @@ index 834a2d9..d628c9e 100644
 +    },
 +    "alerts": {
 +      "title": "Alerts",
-+      "overdue_since": "Overdue by {{days}} days",
++      "overdue_since": "Overdue by {days} days",
 +      "due_today": "Due today",
-+      "due_in_days": "Due in {{days}} days",
++      "due_in_days": "Due in {days} days",
 +      "empty": "No alerts: every client is up to date."
 +    },
 +    "clients": {
@@ -14720,19 +15657,19 @@ index 834a2d9..d628c9e 100644
 +    "tabs_forecast": "Forecast",
 +    "kpi_mrr": "Committed MRR",
 +    "kpi_runway": "Runway",
-+    "runway_months": "{{months}} months",
++    "runway_months": "{months} months",
 +    "runway_infinite": "No burn (positive flow)",
 +    "runway_unknown": "Capture your cash balance",
 +    "insights": {
 +      "title": "Suggestions",
 +      "empty": "No suggestions right now: everything looks in order.",
-+      "overdue_collection": "Collections pending: {{count}} overdue invoices. Prioritize contacting {{clients}}.",
-+      "low_runway": "Runway of {{months}} months in {{currency}}. Cut spend or speed up collections.",
++      "overdue_collection": "Collections pending: {count} overdue invoices. Prioritize contacting {clients}.",
++      "low_runway": "Runway of {months} months in {currency}. Cut spend or speed up collections.",
 +      "no_cash_snapshot": "Capture your cash balance in Statements to compute runway and cash projections.",
-+      "client_concentration": "{{client}} is {{share}}% of your {{currency}} revenue (last 6 months). Diversifying reduces risk.",
-+      "renewal_due": "The retainer “{{contract}}” for {{client}} ends on {{date}}. Schedule the renewal now.",
-+      "negative_margin": "Negative margin in {{month}} ({{currency}}): you spent more than you earned.",
-+      "missing_expenses": "No expenses captured for {{month}}. Without them, P&L and forecasts are incomplete."
++      "client_concentration": "{client} is {share}% of your {currency} revenue (last 6 months). Diversifying reduces risk.",
++      "renewal_due": "The retainer “{contract}” for {client} ends on {date}. Schedule the renewal now.",
++      "negative_margin": "Negative margin in {month} ({currency}): you spent more than you earned.",
++      "missing_expenses": "No expenses captured for {month}. Without them, P&L and forecasts are incomplete."
 +    },
 +    "pnl": {
 +      "title": "Income statement (monthly)",
@@ -14776,6 +15713,35 @@ index 834a2d9..d628c9e 100644
 +      "projected_cash": "Projected cash",
 +      "assumptions": "Assumptions: active retainers per their cycle and term; extras and expenses as a rolling 3-month average.",
 +      "empty": "Create retainer contracts and capture expenses to project."
++    },
++    "import": {
++      "button": "Import bank statement",
++      "title": "Import bank statement",
++      "description": "Upload your bank's CSV or paste the transactions from your online banking. The AI interprets and categorizes them; you review before importing.",
++      "file_label": "File (.csv or .txt)",
++      "paste_label": "Or paste the text here",
++      "parse": "Interpret with AI",
++      "parsing": "Interpreting…",
++      "review_title": "Review the transactions",
++      "review_hint": "Checked outflows will be imported as expenses. Inflows are shown for reference only; record them as payments on the client's project.",
++      "col_date": "Date",
++      "col_concept": "Concept",
++      "col_amount": "Amount",
++      "col_category": "Category",
++      "inflow": "Inflow",
++      "commit": "Import {count} expenses",
++      "committing": "Importing…",
++      "success": "{count} expenses imported.",
++      "nothing": "No transactions detected in the text.",
++      "no_selection": "Select at least one outflow.",
++      "back": "Back"
++    },
++    "analysis": {
++      "title": "AI CFO analysis",
++      "generate": "Generate analysis",
++      "generating": "Analyzing your finances… (may take up to a minute)",
++      "description": "The AI reviews your P&L, forecast, collections and clients, and gives you a diagnosis with concrete actions.",
++      "regenerate": "Refresh analysis"
 +    }
    }
  }

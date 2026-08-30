@@ -25,6 +25,19 @@ Añade a Plane CE una wiki a nivel de organización y un gestor de archivos
   renovaciones a 60 días, margen negativo y recordatorios de captura. Las
   sugerencias viajan como datos estructurados (kind + severidad) y el frontend
   pone el texto, así que se traducen como todo lo demás.
+- **Importación de estados de cuenta con IA**: en Estados, sube el CSV del
+  banco o pega el texto de la banca en línea; el LLM configurado en god-mode
+  interpreta y categoriza los movimientos, el usuario revisa (categorías
+  editables, filas desmarcables) y los egresos se importan como gastos. Los
+  abonos se muestran solo como referencia. Los modelos configurados actúan
+  como cadena de fallback (los gratuitos de OpenRouter se saturan seguido);
+  si todos fallan se devuelve 503 con un mensaje accionable.
+- **Análisis del CFO IA**: botón en Resumen que envía P&L, proyección,
+  cobranza y clientes al LLM y devuelve un diagnóstico ejecutivo con acciones,
+  en español y solo con cifras reales del contexto.
+- **Formato ICU en i18n**: Plane usa i18next-icu, así que las plantillas con
+  parámetros llevan llaves simples `{param}` — `{{param}}` se renderiza
+  literal. Todas las plantillas de finance/drive están en ICU.
 - El perfil de cliente se crea **implícitamente** al registrar cualquier
   contrato, cobro o pago (y el dashboard auto-repara datos huérfanos): sin
   esto, capturar datos sin pasar por "convertir en cliente" dejaba el

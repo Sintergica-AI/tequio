@@ -10,6 +10,9 @@ from plane.finance.views import (
     ExpenseDetailEndpoint,
     ExpensesEndpoint,
     FinanceForecastEndpoint,
+    FinanceImportCommitEndpoint,
+    FinanceImportParseEndpoint,
+    FinanceAnalyzeEndpoint,
     FinanceInsightsEndpoint,
     FinancePnlEndpoint,
     ContractsEndpoint,
@@ -42,6 +45,17 @@ urlpatterns = [
     path("workspaces/<str:slug>/finance/pnl/", FinancePnlEndpoint.as_view(), name="finance-pnl"),
     path("workspaces/<str:slug>/finance/forecast/", FinanceForecastEndpoint.as_view(), name="finance-forecast"),
     path("workspaces/<str:slug>/finance/insights/", FinanceInsightsEndpoint.as_view(), name="finance-insights"),
+    path(
+        "workspaces/<str:slug>/finance/import/parse/",
+        FinanceImportParseEndpoint.as_view(),
+        name="finance-import-parse",
+    ),
+    path(
+        "workspaces/<str:slug>/finance/import/commit/",
+        FinanceImportCommitEndpoint.as_view(),
+        name="finance-import-commit",
+    ),
+    path("workspaces/<str:slug>/finance/analyze/", FinanceAnalyzeEndpoint.as_view(), name="finance-analyze"),
     path(
         "workspaces/<str:slug>/finance/dashboard/",
         FinanceDashboardEndpoint.as_view(),

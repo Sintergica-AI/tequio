@@ -376,3 +376,88 @@ class FinanceInsightsEndpoint(BaseAPIView):
     def get(self, request, slug):
         workspace = Workspace.objects.get(slug=slug)
         return Response(build_insights(workspace), status=status.HTTP_200_OK)
+
+
+# --------------------------------------------------------------------------
+# Finance AI: bank statement import + CFO-style analysis
+# --------------------------------------------------------------------------
+from plane.finance.ai import FinanceAINotConfigured, FinanceAIUnavailable, analyze_finances, parse_bank_statement  # noqa: E402
+from plane.finance.ai import MAX_STATEMENT_CHARS  # noqa: E402
+from datetime import date as _date  # noqa: E402
+from plane.finance.services import build_dashboard  # noqa: E402
+from plane.utils.exception_logger import log_exception  # noqa: E402
+
+
+class FinanceImportParseEndpoint(BaseAPIView):
+    @allow_finance_access
+    def post(self, request, slug):
+        content = request.data.get("content") or ""
+        if not isinstance(content, str) or not content.strip():
+            return Response({"error": "El contenido está vacío."}, status=status.HTTP_400_BAD_REQUEST)
+        if len(content) > MAX_STATEMENT_CHARS:
+            return Response(
+                {"error": "El estado de cuenta es demasiado grande (máx. 200 mil caracteres)."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            transactions = parse_bank_statement(content)
+        except FinanceAINotConfigured as e:
+            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        except FinanceAIUnavailable as e:
+            return Response({"error": str(e)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        except Exception as e:
+            log_exception(e)
+            return Response(
+                {"error": "No se pudo interpretar el estado de cuenta. Inténtalo de nuevo."},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+        return Response({"transactions": transactions}, status=status.HTTP_200_OK)
+
+
+class FinanceImportCommitEndpoint(BaseAPIView):
+    @allow_finance_access
+    def post(self, request, slug):
+        workspace = Workspace.objects.get(slug=slug)
+        expenses = request.data.get("expenses") or []
+        if not isinstance(expenses, list) or not expenses:
+            return Response({"error": "No hay gastos que importar."}, status=status.HTTP_400_BAD_REQUEST)
+        if len(expenses) > 500:
+            return Response({"error": "Demasiados movimientos en una sola importación."}, status=status.HTTP_400_BAD_REQUEST)
+
+        serializer = ExpenseEntrySerializer(data=expenses, many=True)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        rows = serializer.save(workspace=workspace)
+        return Response(
+            {"created": len(rows), "expenses": ExpenseEntrySerializer(rows, many=True).data},
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class FinanceAnalyzeEndpoint(BaseAPIView):
+    @allow_finance_access
+    def post(self, request, slug):
+        workspace = Workspace.objects.get(slug=slug)
+        dashboard = build_dashboard(workspace)
+        context = {
+            "hoy": _date.today().isoformat(),
+            "totales": dashboard["totals"],
+            "clientes": dashboard["clients"],
+            "alertas": dashboard["alerts"][:10],
+            "pnl_12m": build_pnl(workspace)["months"],
+            "proyeccion_6m": build_forecast(workspace),
+            "hallazgos": build_insights(workspace)["insights"],
+        }
+        try:
+            analysis = analyze_finances(context)
+        except FinanceAINotConfigured as e:
+            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        except FinanceAIUnavailable as e:
+            return Response({"error": str(e)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        except Exception as e:
+            log_exception(e)
+            return Response(
+                {"error": "El análisis no está disponible en este momento. Inténtalo de nuevo."},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+        return Response({"analysis": analysis}, status=status.HTTP_200_OK)
