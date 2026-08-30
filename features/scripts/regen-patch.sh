@@ -52,7 +52,11 @@ fi
 
 # `add -N` expande los directorios nuevos que git colapsa a "?? dir/".
 git add -A -N -- "${PATHS[@]}" >/dev/null 2>&1 || true
-git diff HEAD -- "${PATHS[@]}" > "$TMP"
+# --binary: sin el, los assets (favicons, og-images, media del login) salen como
+# "Binary files differ" y el repo no puede reproducir el arbol. git apply los
+# aplica sin problema; el fallback patch(1) de remote-deploy.sh no los entiende,
+# pero ese fallback solo corre cuando git apply fallo, y ahi ya hay que mirar.
+git diff --binary HEAD -- "${PATHS[@]}" > "$TMP"
 
 N=$(grep -c "^diff --git" "$TMP" || true)
 if [ "$N" -lt "$MIN_TOTAL" ]; then

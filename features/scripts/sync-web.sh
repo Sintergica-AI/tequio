@@ -61,7 +61,7 @@ done
 # Poda: los archivos que nunca llegaron a git (untracked y luego borrados) no
 # aparecen en `git status`, así que se comparan directamente los directorios que
 # esta función posee. Sin esto quedaría código muerto que el build sigue compilando.
-OWNED_DIRS="apps/web/core/components/drive apps/web/core/components/assistant apps/web/core/components/pages/workspace packages/editor/src/core/extensions/code"
+OWNED_DIRS="apps/web/public/media apps/web/core/components/drive apps/web/core/components/assistant apps/web/core/components/pages/workspace packages/editor/src/core/extensions/code"
 for d in $OWNED_DIRS; do
   [ -d "$SRC/$d" ] || continue
   local_files=$(cd "$SRC/$d" && ls -1 2>/dev/null | sort)
