@@ -39,13 +39,31 @@ mkdir -p "$STAGE/$NAME/backend-layers/plane-backend-patch"
 cp /opt/plane-backend-patch/*.py /opt/plane-backend-patch/Dockerfile \
    "$STAGE/$NAME/backend-layers/plane-backend-patch/"
 
-mkdir -p "$STAGE/$NAME/backend-layers/sintergica-features"
-cp /opt/sintergica-features/*.py /opt/sintergica-features/*.sh \
-   "$STAGE/$NAME/backend-layers/sintergica-features/" 2>/dev/null || true
-# backend/ son los módulos Django propios (finance, assistant, drive, wiki).
-rsync -a --exclude '__pycache__/' \
-  /opt/sintergica-features/backend/ \
-  "$STAGE/$NAME/backend-layers/sintergica-features/backend/"
+# El contexto EXACTO con el que se construyo la imagen de backend desplegada.
+# NO se copian los *.py sueltos de la raiz de /opt/sintergica-features: son
+# restos de despliegues anteriores (comprobado el 30 Ago: el patch_ce_features.py
+# de la raiz era del dia 29 y NO llevaba el default de idioma que si esta en
+# produccion). Empaquetarlos haria que quien reconstruya desde este tarball
+# obtenga un binario DISTINTO al desplegado, que es justo lo que la definicion
+# de "Corresponding Source" prohibe. La carpeta backend-build/ es la que usa
+# backend-rebuild.sh como contexto de docker build, e incluye su Dockerfile.
+BUILD_CTX=/opt/sintergica-features/backend-build
+[ -d "$BUILD_CTX" ] || { echo "FATAL: no existe $BUILD_CTX"; exit 1; }
+rsync -a --exclude '__pycache__/' "$BUILD_CTX/" \
+  "$STAGE/$NAME/backend-layers/sintergica-features/"
+
+# Los scripts de despliegue son parte del fuente correspondiente: la GPL §1
+# incluye "los scripts usados para controlar la compilacion e instalacion".
+mkdir -p "$STAGE/$NAME/backend-layers/scripts"
+cp /opt/sintergica-features/*.sh "$STAGE/$NAME/backend-layers/scripts/" 2>/dev/null || true
+
+# Asercion de correspondencia: el patcher empaquetado tiene que ser byte a byte
+# el que produjo la imagen en marcha. Si difieren, el tarball mentiria.
+if ! cmp -s "$BUILD_CTX/patch_ce_features.py" \
+            "$STAGE/$NAME/backend-layers/sintergica-features/patch_ce_features.py"; then
+  echo "FATAL: el patcher empaquetado no coincide con el contexto del build."
+  exit 1
+fi
 
 echo "=== 3/5 Escribiendo README y licencia ==="
 cp "$SRC/LICENSE.txt" "$STAGE/$NAME/LICENSE.txt"
