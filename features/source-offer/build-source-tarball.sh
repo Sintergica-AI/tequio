@@ -49,6 +49,17 @@ cp /opt/plane-backend-patch/*.py /opt/plane-backend-patch/Dockerfile \
 # backend-rebuild.sh como contexto de docker build, e incluye su Dockerfile.
 BUILD_CTX=/opt/sintergica-features/backend-build
 [ -d "$BUILD_CTX" ] || { echo "FATAL: no existe $BUILD_CTX"; exit 1; }
+# Conviven backend-build-dev/ y backend-build-mig/, contextos de rondas
+# anteriores. La ruta de arriba es literal a proposito (nada de backend-build*),
+# pero si alguna vez el contexto real fuera otro, empaquetariamos el equivocado
+# sin enterarnos: se exige que backend-build/ sea el mas reciente de todos.
+NEWEST=$(ls -1dt /opt/sintergica-features/backend-build* 2>/dev/null | head -1)
+if [ "$NEWEST" != "$BUILD_CTX" ]; then
+  echo "FATAL: el contexto mas reciente es $NEWEST, no $BUILD_CTX."
+  echo "       Se construyo desde otro sitio o hay un contexto huerfano mas nuevo."
+  echo "       Comprueba cual produjo la imagen antes de publicar nada."
+  exit 1
+fi
 rsync -a --exclude '__pycache__/' "$BUILD_CTX/" \
   "$STAGE/$NAME/backend-layers/sintergica-features/"
 
