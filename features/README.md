@@ -104,7 +104,7 @@ incrusten otros, así que no bloquea estos iframes salientes.
 - Migración `finance.0004` (campo `role` en finance_access, aditiva).
   Verificación: `verify8.py`, 24 comprobaciones en producción.
 
-**Asistente conversacional** (`plane.assistant`) — *fase 1 (sólo lectura) completa*
+**Asistente conversacional** (`plane.assistant`) — *fases 1 y 2 completas*
 - Chat con contexto real del workspace: responde consultando work items, proyectos,
   ciclos, módulos, miembros y páginas mediante 9 herramientas sobre el ORM.
 - Conversaciones persistentes y **privadas de su autor** (sin override de admin),
@@ -133,10 +133,26 @@ Base: `/api/workspaces/<slug>/assistant/`
 | GET | `/config/` | proveedor, modelos permitidos, herramientas, cuota |
 | GET POST | `/conversations/` | listar / crear |
 | GET PATCH DELETE | `/conversations/<id>/` | sólo el dueño; ajeno → 404 |
-| POST | `/conversations/<id>/messages/` | **SSE**: `token`, `tool_call`, `tool_result`, `done`, `error` |
+| POST | `/conversations/<id>/messages/` | **SSE**: `token`, `tool_call`, `tool_result`, `pending_action`, `awaiting_confirmation`, `done`, `error` |
+| POST | `/actions/<id>/` | `{decision:"confirm"\|"reject"}` → SSE; **único punto que escribe** |
 
-La fase 2 (acciones de escritura con confirmación humana) está diseñada pero no
-implementada: `WRITE_TOOLS` está vacío y `/config/` devuelve `can_write: false`.
+**Fase 2: escritura con confirmación humana.** Cuatro herramientas —
+`create_work_item`, `update_work_item`, `add_comment`, `add_to_cycle`— que el
+modelo **propone** y que sólo se ejecutan al pulsar un botón. El loop nunca las
+despacha: valida la propuesta, crea una fila `Action` pendiente y corta el turno.
+`POST /actions/<id>/` con `confirm` es el único sitio del código que escribe en
+el workspace, y revalida permisos y existencia porque entre la propuesta y el
+clic pueden haber cambiado.
+
+Eso no es cortesía de interfaz: los títulos, descripciones y comentarios los
+escribe cualquiera del equipo y acaban en el contexto del modelo, así que una
+descripción puede intentar dar órdenes. El clic es la frontera.
+
+Detalle que hay que respetar al tocar esto: un turno con `tool_calls` sin su
+mensaje `tool` rompe la siguiente petición al proveedor. Por eso al decidir (o
+al escribir otro mensaje ignorando el botón) se cierran **todos** los
+`tool_calls` sin resolver. Escribir exige rol ≥ 15 en el proyecto; a quien no
+puede escribir no se le ofrecen siquiera esas herramientas.
 
 ### Tres trampas del streaming (documentadas para no repetirlas)
 
@@ -162,7 +178,7 @@ sync-web.sh            → sólo frontend: copia archivos, reconstruye la imagen
 sync-admin.sh          → lo mismo para apps/admin (god-mode); sync-web.sh no lo cubre
 fix-live-image.sh      → parche puntual del compose para el servicio live
 verify*.py             → pruebas funcionales que se ejecutan dentro del contenedor api
-                         (verify5.py = asistente, 72 comprobaciones, sin llamar al proveedor)
+                         (verify5.py = asistente, 100 comprobaciones, sin llamar al proveedor)
 ```
 
 ## Notas de mantenimiento

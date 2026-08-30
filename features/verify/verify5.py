@@ -68,7 +68,7 @@ try:
     check("miembro: config → 200", r.status_code == 200, f"status {r.status_code}")
     if r.status_code == 200:
         cfg = r.json()
-        check("config expone can_write=False en fase 1", cfg.get("can_write") is False)
+        check("config expone can_write (fase 2)", isinstance(cfg.get("can_write"), bool))
         check("config lista las herramientas", len(cfg.get("tools", [])) == len(TOOL_SCHEMAS))
         check("config informa la cuota", "monthly_token_cap" in cfg.get("usage", {}))
 
@@ -135,7 +135,8 @@ try:
 
     # ------------------------------------------------------------------
     print("\nHERRAMIENTAS: ALCANCE")
-    check("fase 1 no declara herramientas de escritura", WRITE_TOOLS == set())
+    check("las herramientas de escritura están separadas de las de lectura",
+          WRITE_TOOLS and not (WRITE_TOOLS & set(HANDLERS)))
     check(
         "cada schema tiene handler",
         all(t["function"]["name"] in HANDLERS for t in TOOL_SCHEMAS),
@@ -198,6 +199,11 @@ try:
 
     res = dispatch("get_work_item", ctx, {})
     check("get_work_item sin identifier → error legible", "error" in res)
+
+    _sample = Issue.issue_objects.filter(project_id__in=ctx.project_ids).select_related("project").first()
+    ident_ok = f"{_sample.project.identifier}-{_sample.sequence_id}" if _sample else None
+    sample_project = _sample.project if _sample else None
+    check("hay un work item de muestra para las pruebas", ident_ok is not None, str(ident_ok))
 
     res = dispatch("work_item_stats", ctx, {"group_by": "state_group"})
     check("work_item_stats agrupa", "buckets" in res and "total" in res)
@@ -428,6 +434,125 @@ try:
     check("404 → no diagnostica de más y ofrece salida", "otro modelo" in msg, msg)
     msg = llm.friendly_error(WeirdVendorError("boom"), "m/z")
     check("excepción desconocida → mensaje genérico sin volcado", "boom" not in msg, msg)
+
+    # ------------------------------------------------------------------
+    print("\nFASE 2: ESCRITURA CON CONFIRMACIÓN")
+    from plane.assistant import actions as write_actions
+    from plane.assistant.models import Action
+    from plane.assistant.permissions import writable_project_ids
+    from plane.assistant.registry import all_tool_schemas, execute_action, preview_action
+    from plane.db.models import Issue, IssueComment
+
+    writable = writable_project_ids(admin, slug)
+    check("el admin puede escribir en sus proyectos", len(writable) > 0, str(len(writable)))
+    check(
+        "WRITE_TOOLS ya no está vacío",
+        WRITE_TOOLS == {"create_work_item", "update_work_item", "add_comment", "add_to_cycle"},
+        str(sorted(WRITE_TOOLS)),
+    )
+    check(
+        "sin permiso de escritura no se ofrecen esas herramientas",
+        len(all_tool_schemas(False)) == len(TOOL_SCHEMAS),
+    )
+    check(
+        "con permiso sí se ofrecen",
+        len(all_tool_schemas(True)) == len(TOOL_SCHEMAS) + 4,
+    )
+    r = ca.get(f"{base}/config/")
+    check("config refleja can_write del usuario", r.json()["can_write"] is True)
+
+    # --- preview no escribe NADA ---
+    issues_before = Issue.objects.count()
+    comments_before = IssueComment.objects.count()
+    prev = preview_action("create_work_item", ctx, {"project": sample_project.name, "name": "PRUEBA verify5"})
+    check("preview describe la acción", "label" in prev and "PRUEBA verify5" in prev["label"], str(prev)[:90])
+    prev2 = preview_action("add_comment", ctx, {"identifier": ident_ok, "comment": "hola"})
+    check("preview de comentario describe", "label" in prev2, str(prev2)[:90])
+    check(
+        "NINGÚN preview creó nada",
+        Issue.objects.count() == issues_before and IssueComment.objects.count() == comments_before,
+    )
+
+    # --- validación en la propuesta, no al pulsar ---
+    bad = preview_action("create_work_item", ctx, {"project": "no-existe-xyz", "name": "x"})
+    check("proyecto inexistente → error en el preview", "error" in bad, str(bad)[:90])
+    bad = preview_action("update_work_item", ctx, {"identifier": ident_ok, "state": "estado-fantasma"})
+    check("estado inexistente → error y lista los válidos", "error" in bad and "Estados" in bad["error"])
+    bad = preview_action("update_work_item", ctx, {"identifier": ident_ok})
+    check("sin cambios → error legible", "error" in bad)
+    bad = preview_action("add_comment", ctx, {"identifier": ident_ok, "comment": "   "})
+    check("comentario vacío → error", "error" in bad)
+    bad = preview_action("create_work_item", ctx, {"project": sample_project.name, "name": "x", "target_date": "mañana"})
+    check("fecha no ISO → error", "error" in bad)
+
+    # --- el loop PROPONE, no ejecuta ---
+    def _wtc(index, cid, name, args):
+        return SimpleNamespace(index=index, id=cid, function=SimpleNamespace(name=name, arguments=args))
+
+    class WriteCompletions:
+        def __init__(self):
+            self.round = 0
+
+        async def create(self, **kwargs):
+            self.round += 1
+            if self.round == 1:
+                return _aiter([
+                    _chunk(tool_calls=[_wtc(0, "call_w1", "add_comment",
+                        json.dumps({"identifier": ident_ok, "comment": "Comentario del asistente"}))])
+                ])
+            return _aiter([_chunk(content="Listo, lo comenté.")])
+
+    class WriteClient:
+        def __init__(self):
+            self.chat = SimpleNamespace(completions=WriteCompletions())
+
+    llm.get_client = lambda config: WriteClient()
+    convw = Conversation.objects.create(
+        workspace=ws, owner=admin, title="escritura", provider="fake", model=""
+    )
+    created_conversations.append(str(convw.id))
+    Message.objects.create(conversation=convw, role="user", content="comenta ahí", sequence=1)
+
+    async def _collect_w():
+        return [f async for f in llm.run_turn(convw, ctx, config, can_write=True)]
+
+    ev = "".join(asyncio.run(_collect_w()))
+    check("emite pending_action", "event: pending_action" in ev)
+    check("corta el turno esperando confirmación", "event: awaiting_confirmation" in ev)
+    check("NO emitió done (el turno no concluyó)", "event: done" not in ev)
+    check(
+        "el comentario NO se creó",
+        IssueComment.objects.count() == comments_before,
+        f"{IssueComment.objects.count()} vs {comments_before}",
+    )
+    pend = Action.objects.filter(conversation=convw, status="pending")
+    check("queda 1 acción pendiente", pend.count() == 1, str(pend.count()))
+    act = pend.first()
+    check("la acción guarda la etiqueta del botón", "label" in (act.result or {}), str(act.result)[:80])
+
+    # --- otro usuario no puede confirmarla ---
+    if other:
+        r = cb.post(f"{base}/actions/{act.id}/", data=json.dumps({"decision": "confirm"}), content_type=J)
+        check("otro usuario NO puede confirmarla → 404", r.status_code == 404, f"status {r.status_code}")
+        check("y sigue sin ejecutarse", IssueComment.objects.count() == comments_before)
+
+    r = ca.post(f"{base}/actions/{act.id}/", data=json.dumps({"decision": "invento"}), content_type=J)
+    check("decision inválida → 400", r.status_code == 400, f"status {r.status_code}")
+
+    # --- rechazar no escribe y cierra el turno ---
+    llm.get_client = lambda config: WriteClient()
+    r = ca.post(f"{base}/actions/{act.id}/", data=json.dumps({"decision": "reject"}), content_type=J)
+    body = asyncio.run(_drain(r))
+    check("rechazar responde SSE", r.status_code == 200 and b"event: action_result" in body)
+    check("rechazar NO escribió nada", IssueComment.objects.count() == comments_before)
+    act.refresh_from_db()
+    check("la acción queda como rejected", act.status == "rejected", act.status)
+    check(
+        "el turno queda con transcript válido (cada tool_call tiene su tool)",
+        convw.messages.filter(role="tool", tool_call_id="call_w1").exists(),
+    )
+    r = ca.post(f"{base}/actions/{act.id}/", data=json.dumps({"decision": "confirm"}), content_type=J)
+    check("una acción ya resuelta no se puede reconfirmar → 409", r.status_code == 409, f"status {r.status_code}")
 
     # ------------------------------------------------------------------
     print("\nBORRADO")

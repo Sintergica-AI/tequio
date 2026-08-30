@@ -3606,12 +3606,81 @@ index 452d214..433b38e 100644
 +    ]),
 +  ]),
 +];
+diff --git a/apps/web/core/components/assistant/action-card.tsx b/apps/web/core/components/assistant/action-card.tsx
+new file mode 100644
+index 0000000..599df90
+--- /dev/null
++++ b/apps/web/core/components/assistant/action-card.tsx
+@@ -0,0 +1,63 @@
++/**
++ * Sintergica CE extension: la propuesta de escritura y su botón.
++ *
++ * Este clic es la única vía por la que el asistente escribe en el workspace.
++ * No es una cortesía de interfaz: los títulos, descripciones y comentarios los
++ * escribe cualquiera del equipo y acaban dentro del contexto del modelo, así
++ * que una descripción puede intentar dar órdenes. El clic humano es lo que
++ * impide que ese texto se convierta en un cambio real.
++ *
++ * Derived from Plane CE code (AGPL-3.0-only).
++ */
++
++import { observer } from "mobx-react";
++import { Check, Loader2, X } from "lucide-react";
++// plane imports
++import { cn } from "@plane/utils";
++// services
++import type { TAssistantAction } from "@/services/assistant.service";
++
++type TAssistantActionCardProps = {
++  action: TAssistantAction;
++  isDeciding: boolean;
++  disabled: boolean;
++  onDecide: (decision: "confirm" | "reject") => void;
++};
++
++export const AssistantActionCard = observer(function AssistantActionCard(
++  props: TAssistantActionCardProps
++) {
++  const { action, isDeciding, disabled, onDecide } = props;
++
++  return (
++    <div className="rounded-lg border border-subtle bg-layer-1 p-3">
++      <p className="text-13 font-medium text-primary">{action.label}</p>
++      {action.detail && <p className="mt-0.5 text-11 text-tertiary">{action.detail}</p>}
++      <div className="mt-2.5 flex items-center gap-2">
++        <button
++          type="button"
++          onClick={() => onDecide("confirm")}
++          disabled={disabled}
++          className={cn(
++            "flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-11 font-medium transition-colors",
++            disabled
++              ? "cursor-not-allowed bg-layer-2 text-placeholder"
++              : "bg-accent-primary text-on-color hover:bg-accent-primary-hover"
++          )}
++        >
++          {isDeciding ? <Loader2 className="size-3 animate-spin" /> : <Check className="size-3" />}
++          Confirmar
++        </button>
++        <button
++          type="button"
++          onClick={() => onDecide("reject")}
++          disabled={disabled}
++          className="flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-11 text-secondary transition-colors hover:bg-layer-2 disabled:cursor-not-allowed disabled:opacity-50"
++        >
++          <X className="size-3" />
++          Descartar
++        </button>
++      </div>
++    </div>
++  );
++});
 diff --git a/apps/web/core/components/assistant/composer.tsx b/apps/web/core/components/assistant/composer.tsx
 new file mode 100644
-index 0000000..470cc84
+index 0000000..95b75a8
 --- /dev/null
 +++ b/apps/web/core/components/assistant/composer.tsx
-@@ -0,0 +1,101 @@
+@@ -0,0 +1,104 @@
 +/**
 + * Sintergica CE extension: the assistant's input box.
 + * Derived from Plane CE code (AGPL-3.0-only).
@@ -3628,13 +3697,14 @@ index 0000000..470cc84
 +type TAssistantComposerProps = {
 +  isStreaming: boolean;
 +  disabled?: boolean;
++  canWrite?: boolean;
 +  placeholder?: string;
 +  onSubmit: (value: string) => void;
 +  onStop: () => void;
 +};
 +
 +export function AssistantComposer(props: TAssistantComposerProps) {
-+  const { isStreaming, disabled, placeholder, onSubmit, onStop } = props;
++  const { isStreaming, disabled, canWrite, placeholder, onSubmit, onStop } = props;
 +  const [value, setValue] = useState("");
 +  const textareaRef = useRef<HTMLTextAreaElement>(null);
 +
@@ -3708,17 +3778,19 @@ index 0000000..470cc84
 +        )}
 +      </div>
 +      <p className="mt-1.5 px-1 text-11 text-tertiary">
-+        Sólo lectura: consulta tus proyectos, no los modifica.
++        {canWrite
++          ? "Puede proponer cambios; ninguno se aplica hasta que lo confirmes."
++          : "Sólo lectura: consulta tus proyectos, no los modifica."}
 +      </p>
 +    </div>
 +  );
 +}
 diff --git a/apps/web/core/components/assistant/conversation.tsx b/apps/web/core/components/assistant/conversation.tsx
 new file mode 100644
-index 0000000..dc9dd47
+index 0000000..71a15e3
 --- /dev/null
 +++ b/apps/web/core/components/assistant/conversation.tsx
-@@ -0,0 +1,109 @@
+@@ -0,0 +1,135 @@
 +/**
 + * Sintergica CE extension: the scrolling transcript.
 + * Derived from Plane CE code (AGPL-3.0-only).
@@ -3730,10 +3802,11 @@ index 0000000..dc9dd47
 +// plane imports
 +import { PiChatLogo } from "@plane/propel/icons";
 +// services
-+import type { TAssistantMessage } from "@/services/assistant.service";
++import type { TAssistantAction, TAssistantMessage } from "@/services/assistant.service";
 +// store
 +import type { TToolTraceEntry } from "@/store/assistant.store";
 +// local imports
++import { AssistantActionCard } from "./action-card";
 +import { AssistantMessage } from "./message";
 +import { AssistantToolTrace } from "./tool-trace";
 +
@@ -3750,20 +3823,35 @@ index 0000000..dc9dd47
 +  linkMap: Record<string, string>;
 +  isStreaming: boolean;
 +  errorMessage: string | null;
++  pendingActions: TAssistantAction[];
++  decidingActionId: string | null;
 +  onSuggestion: (value: string) => void;
++  onDecide: (actionId: string, decision: "confirm" | "reject") => void;
 +};
 +
 +export const AssistantConversation = observer(function AssistantConversation(
 +  props: TAssistantConversationProps
 +) {
-+  const { messages, streamingContent, toolTrace, linkMap, isStreaming, errorMessage, onSuggestion } = props;
++  const {
++    messages,
++    streamingContent,
++    toolTrace,
++    linkMap,
++    isStreaming,
++    errorMessage,
++    pendingActions,
++    decidingActionId,
++    onSuggestion,
++    onDecide,
++  } = props;
 +  const bottomRef = useRef<HTMLDivElement>(null);
 +
 +  useEffect(() => {
 +    bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-+  }, [messages.length, streamingContent, toolTrace.length]);
++  }, [messages.length, streamingContent, toolTrace.length, pendingActions.length]);
 +
-+  const isEmpty = messages.length === 0 && !streamingContent && !isStreaming;
++  const isEmpty =
++    messages.length === 0 && !streamingContent && !isStreaming && pendingActions.length === 0;
 +
 +  if (isEmpty) {
 +    return (
@@ -3816,6 +3904,16 @@ index 0000000..dc9dd47
 +          <span>Pensando…</span>
 +        </div>
 +      )}
++
++      {pendingActions.map((action) => (
++        <AssistantActionCard
++          key={action.id}
++          action={action}
++          isDeciding={decidingActionId === action.id}
++          disabled={isStreaming || decidingActionId !== null}
++          onDecide={(decision) => onDecide(action.id, decision)}
++        />
++      ))}
 +
 +      {errorMessage && (
 +        <div className="flex items-start gap-2 rounded-md border border-subtle bg-layer-1 px-3 py-2 text-11 text-danger-primary">
@@ -4000,15 +4098,16 @@ index 0000000..81b482f
 +});
 diff --git a/apps/web/core/components/assistant/index.ts b/apps/web/core/components/assistant/index.ts
 new file mode 100644
-index 0000000..cbdae7e
+index 0000000..6744cb0
 --- /dev/null
 +++ b/apps/web/core/components/assistant/index.ts
-@@ -0,0 +1,14 @@
+@@ -0,0 +1,15 @@
 +/**
 + * Sintergica CE extension: assistant components.
 + * Derived from Plane CE code (AGPL-3.0-only).
 + */
 +
++export * from "./action-card";
 +export * from "./composer";
 +export * from "./conversation";
 +export * from "./header";
@@ -4397,10 +4496,10 @@ index 0000000..f0ea564
 +});
 diff --git a/apps/web/core/components/assistant/root.tsx b/apps/web/core/components/assistant/root.tsx
 new file mode 100644
-index 0000000..a30be0d
+index 0000000..3fd6423
 --- /dev/null
 +++ b/apps/web/core/components/assistant/root.tsx
-@@ -0,0 +1,101 @@
+@@ -0,0 +1,107 @@
 +/**
 + * Sintergica CE extension: the assistant chat, shared by the docked panel and
 + * the full-page route.
@@ -4486,13 +4585,19 @@ index 0000000..a30be0d
 +          linkMap={assistant.linkMap}
 +          isStreaming={assistant.isStreaming}
 +          errorMessage={assistant.errorMessage}
++          pendingActions={assistant.pendingActions}
++          decidingActionId={assistant.decidingActionId}
 +          onSuggestion={send}
++          onDecide={(actionId, decision) =>
++            void assistant.decideAction(workspaceSlug, actionId, decision)
++          }
 +        />
 +      )}
 +
 +      <AssistantComposer
 +        isStreaming={assistant.isStreaming}
 +        disabled={disabled}
++        canWrite={config?.can_write ?? false}
 +        placeholder={
 +          quotaExhausted ? "Se alcanzó el tope de tokens del mes" : "Pregunta sobre tus proyectos…"
 +        }
@@ -12984,10 +13089,10 @@ index 0000000..88015cd
 +}
 diff --git a/apps/web/core/store/assistant.store.ts b/apps/web/core/store/assistant.store.ts
 new file mode 100644
-index 0000000..d2d9355
+index 0000000..1bc5194
 --- /dev/null
 +++ b/apps/web/core/store/assistant.store.ts
-@@ -0,0 +1,437 @@
+@@ -0,0 +1,420 @@
 +/**
 + * Sintergica CE extension: AI assistant store.
 + * Derived from Plane CE code (AGPL-3.0-only).
@@ -13219,24 +13324,7 @@ index 0000000..d2d9355
 +    } finally {
 +      runInAction(() => {
 +        // Text that arrived before an error or a stop is still worth keeping.
-+        if (this.streamingContent) {
-+          this.messagesByConversation[conversationId!] = [
-+            ...(this.messagesByConversation[conversationId!] ?? []),
-+            {
-+              id: `partial-${Date.now()}`,
-+              role: "assistant",
-+              content: this.streamingContent,
-+              tool_name: null,
-+              tool_calls: null,
-+              sequence: optimisticUser.sequence + 1,
-+              model: "",
-+              input_tokens: 0,
-+              output_tokens: 0,
-+              created_at: new Date().toISOString(),
-+            },
-+          ];
-+          this.streamingContent = "";
-+        }
++        this.flushStreamingContent(conversationId!);
 +        this.isStreaming = false;
 +        this.abortController = null;
 +      });

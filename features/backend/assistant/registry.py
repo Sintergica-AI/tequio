@@ -4,7 +4,7 @@
 # OpenRouter and the OpenAI-compatible endpoints of Anthropic and Gemini all
 # accept — so one definition serves every provider in the god-mode selector.
 
-from plane.assistant import tools
+from plane.assistant import actions, tools
 from plane.assistant.tools import ToolError
 from plane.utils.exception_logger import log_exception
 
@@ -176,7 +176,41 @@ HANDLERS = {
     "search_pages": tools.search_pages,
 }
 
-WRITE_TOOLS = set()  # phase 2 populates this; anything here needs confirmation
+# Las de escritura no se despachan aquí: el loop crea una acción pendiente y
+# sólo un clic humano las ejecuta. Ver actions.py.
+WRITE_TOOLS = actions.WRITE_TOOL_NAMES
+
+
+def all_tool_schemas(can_write):
+    """Un usuario que no puede escribir en ningún proyecto no ve siquiera las
+    herramientas de escritura: así el modelo no propone algo que va a fallar."""
+    return TOOL_SCHEMAS + (actions.WRITE_TOOL_SCHEMAS if can_write else [])
+
+
+def preview_action(name, ctx, arguments):
+    """Valida una herramienta de escritura y describe lo que haría. No escribe."""
+    if not isinstance(arguments, dict):
+        return {"error": "Los argumentos deben ser un objeto JSON."}
+    try:
+        return actions.preview(name, ctx, arguments)
+    except ToolError as exc:
+        return {"error": str(exc)}
+    except Exception as exc:  # noqa: BLE001
+        log_exception(exc)
+        return {"error": f"No se pudo preparar {name}: {exc.__class__.__name__}"}
+
+
+def execute_action(name, ctx, arguments):
+    """Ejecuta una acción ya confirmada por una persona."""
+    if not isinstance(arguments, dict):
+        return {"error": "Los argumentos deben ser un objeto JSON."}
+    try:
+        return actions.execute(name, ctx, arguments)
+    except ToolError as exc:
+        return {"error": str(exc)}
+    except Exception as exc:  # noqa: BLE001
+        log_exception(exc)
+        return {"error": f"Falló {name}: {exc.__class__.__name__}"}
 
 
 def dispatch(name, ctx, arguments):

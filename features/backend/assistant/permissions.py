@@ -52,6 +52,32 @@ def accessible_project_ids(user, slug):
     )
 
 
+def can_write_in_project(user, project_id):
+    """Escribir exige MIEMBRO o ADMIN del proyecto. Un invitado (rol 5) puede
+    leer lo suyo pero no modificar nada, igual que en la interfaz."""
+    return ProjectMember.objects.filter(
+        member=user,
+        project_id=project_id,
+        is_active=True,
+        role__gte=MEMBER_ROLE,
+        project__archived_at__isnull=True,
+    ).exists()
+
+
+def writable_project_ids(user, slug):
+    """Proyectos donde el usuario puede escribir. Si está vacío, el asistente no
+    llega a ofrecerle las herramientas de escritura."""
+    return list(
+        ProjectMember.objects.filter(
+            member=user,
+            workspace__slug=slug,
+            is_active=True,
+            role__gte=MEMBER_ROLE,
+            project__archived_at__isnull=True,
+        ).values_list("project_id", flat=True)
+    )
+
+
 def forbidden(detail="You don't have the required permissions."):
     return Response({"error": detail}, status=status.HTTP_403_FORBIDDEN)
 

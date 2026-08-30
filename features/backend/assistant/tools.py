@@ -343,7 +343,10 @@ def search_work_items(
     return result
 
 
-def get_work_item(ctx, identifier):
+def resolve_issue(ctx, identifier):
+    """Un work item por su identificador legible (SIN-123) o su UUID, siempre
+    dentro del alcance del usuario. Compartido con las herramientas de
+    escritura, que necesitan resolverlo antes de proponer un cambio."""
     if not identifier:
         raise ToolError("Falta 'identifier' (por ejemplo SIN-123).")
     issue = None
@@ -368,6 +371,11 @@ def get_work_item(ctx, identifier):
         raise ToolError(
             f"No encuentro el work item '{identifier}' entre los proyectos del usuario."
         )
+    return issue
+
+
+def get_work_item(ctx, identifier):
+    issue = resolve_issue(ctx, identifier)
 
     cycle = (
         CycleIssue.objects.filter(issue=issue).select_related("cycle").first()

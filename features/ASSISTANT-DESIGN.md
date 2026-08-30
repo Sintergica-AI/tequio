@@ -3,10 +3,9 @@
 Feature para plane.sintergica.ai. Replica el panel "Plane AI" de la edición
 Commercial, que **no existe en CE** (ver "Punto de partida").
 
-> **Estado (29 ago 2026).** Fase 1 **completa y desplegada en producción**:
-> backend (`assistant.0001_initial` aplicada, `verify5.py` en 72/72) y frontend
-> (panel acoplado, ruta `/:slug/assistant`, streaming token a token verificado
-> en el navegador). Pendiente: la fase 2 (§2).
+> **Estado (30 ago 2026).** Fases 1 y 2 **completas y desplegadas en
+> producción**. `verify5.py` en 100/100, incluidas las pruebas de que ninguna
+> herramienta de escritura toca nada sin el clic humano.
 
 ---
 
@@ -38,15 +37,38 @@ El asistente responde sobre el workspace real: work items, proyectos, ciclos,
 módulos, miembros, páginas. Conversaciones persistentes, streaming token a token,
 selector de modelo por conversación. Sin capacidad de modificar nada.
 
-**Fase 2 — Acciones con confirmación.**
-El modelo puede *proponer* cambios (mover a ciclo, asignar, cambiar estado,
-comentar, crear work item). El backend **nunca los ejecuta solo**: emite una
-acción pendiente, el frontend la pinta como botón —igual que el "Add to cycle"
-de la captura— y solo al pulsarlo se ejecuta y se reanuda la conversación.
+**Fase 2 — Acciones con confirmación (construida).**
+Cuatro herramientas de escritura: `create_work_item`, `update_work_item`,
+`add_comment`, `add_to_cycle`. El modelo las *propone*; el backend **nunca las
+ejecuta solo**.
 
-Recomiendo construir la Fase 1 completa y desplegarla antes de tocar la Fase 2:
-la Fase 1 es la que define si el asistente es útil, y la Fase 2 hereda toda su
-infraestructura sin retrabajo.
+El recorrido, que es donde está la garantía:
+
+1. El loop ve una herramienta de `WRITE_TOOLS` y **no la despacha**. Llama a
+   `actions.preview()`, que valida y describe sin escribir nada.
+2. Si la propuesta es inválida (proyecto inexistente, estado que no existe,
+   fecha mal formada), el error vuelve al modelo como resultado de herramienta
+   y se corrige en la misma vuelta. Nunca se pinta un botón que fallará.
+3. Si es válida, se crea una fila `Action` en estado `pending`, se emite
+   `pending_action` y **el turno se corta ahí** (`awaiting_confirmation`).
+4. `POST /assistant/actions/<id>/` con `{"decision":"confirm"}` es el **único**
+   sitio que llama a `actions.execute()`. Revalida permisos y existencia,
+   porque entre la propuesta y el clic pueden haber cambiado.
+5. Se cierra el turno y se reanuda el loop con el resultado.
+
+**Por qué el corte del turno es obligatorio, no estético.** Un turno del
+asistente con `tool_calls` sin su mensaje `tool` correspondiente hace que el
+proveedor rechace la siguiente petición. Por eso `_close_pending_actions()`
+responde a *todos* los `tool_calls` sin resolver: el confirmado con su
+resultado, sus hermanos como no confirmados. Y si el usuario ignora el botón y
+sigue escribiendo, el endpoint de mensajes los cierra como "continuó sin
+confirmar" antes de llamar al modelo. Sin eso, una propuesta ignorada dejaría
+la conversación rota para siempre.
+
+**Permisos.** Escribir exige ser miembro o admin del proyecto (rol ≥ 15); un
+invitado lee lo suyo y no modifica nada. `/config/` devuelve `can_write` por
+**usuario**, y a quien no puede escribir en ningún proyecto ni siquiera se le
+ofrecen esas herramientas al modelo — así no propone algo que va a fallar.
 
 ---
 

@@ -4,6 +4,7 @@
 from django.urls import path
 
 from plane.assistant.views import (
+    AssistantActionEndpoint,
     AssistantConfigEndpoint,
     ConversationDetailEndpoint,
     ConversationMessagesEndpoint,
@@ -25,6 +26,11 @@ urlpatterns = [
         "workspaces/<str:slug>/assistant/conversations/<uuid:pk>/",
         ConversationDetailEndpoint.as_view(),
         name="assistant-conversation-detail",
+    ),
+    path(
+        "workspaces/<str:slug>/assistant/actions/<uuid:pk>/",
+        AssistantActionEndpoint.as_view(),
+        name="assistant-action",
     ),
     path(
         "workspaces/<str:slug>/assistant/conversations/<uuid:pk>/messages/",

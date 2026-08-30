@@ -6,6 +6,8 @@ from rest_framework import status
 from rest_framework.response import Response
 
 from plane.app.views.base import BaseAPIView
+from django.utils import timezone
+
 from plane.assistant.llm import (
     AssistantNotConfigured,
     get_config,
@@ -13,14 +15,16 @@ from plane.assistant.llm import (
     next_sequence,
     run_turn,
     sse,
+    wrap_tool_result,
 )
-from plane.assistant.models import Conversation, Message
+from plane.assistant.models import Action, Conversation, Message
 from plane.assistant.permissions import (
     accessible_project_ids,
     allow_assistant,
     get_workspace,
+    writable_project_ids,
 )
-from plane.assistant.registry import TOOL_SCHEMAS
+from plane.assistant.registry import TOOL_SCHEMAS, WRITE_TOOLS, execute_action
 from plane.assistant.serializers import (
     ConversationDetailSerializer,
     ConversationSerializer,
@@ -56,7 +60,9 @@ class AssistantConfigEndpoint(BaseAPIView):
                 "model": config["model"],
                 "models": config["models"],
                 "tools": [t["function"]["name"] for t in TOOL_SCHEMAS],
-                "can_write": False,  # phase 1 is read-only
+                # Depende del usuario, no de la instancia: un invitado sin
+                # proyectos escribibles no ve las herramientas de escritura.
+                "can_write": bool(writable_project_ids(request.user, slug)),
                 "usage": {
                     "tokens_this_month": used,
                     "monthly_token_cap": config["monthly_token_cap"],
@@ -216,6 +222,12 @@ class ConversationMessagesEndpoint(BaseAPIView):
             conversation.save(update_fields=["title"])
 
         ctx = _build_context(request, slug)
+        can_write = bool(writable_project_ids(request.user, slug))
+
+        # Si quedaron acciones sin decidir de un turno anterior, sus tool_calls
+        # están sin respuesta y el proveedor rechazaría la petición. Se dan por
+        # no confirmadas: el usuario ha seguido escribiendo en vez de pulsar.
+        _close_pending_actions(conversation, reason="El usuario continuó sin confirmarla.")
 
         # Generador ASÍNCRONO: uno síncrono NO se transmite. Django lo consume
         # con `await sync_to_async(list)(...)`, es decir lo materializa entero
@@ -223,7 +235,7 @@ class ConversationMessagesEndpoint(BaseAPIView):
         async def stream():
             yield sse("start", {"conversation_id": str(conversation.id)})
             try:
-                async for frame in run_turn(conversation, ctx, config):
+                async for frame in run_turn(conversation, ctx, config, can_write=can_write):
                     yield frame
             except AssistantNotConfigured as exc:
                 yield sse("error", {"code": "NotConfigured", "message": str(exc)})
@@ -241,5 +253,125 @@ class ConversationMessagesEndpoint(BaseAPIView):
         # Declaring the encoding is the middleware's own opt-out (it returns
         # early when Content-Encoding is already set) and it is accurate —
         # "identity" means no transformation was applied.
+        response["Content-Encoding"] = "identity"
+        return response
+
+
+def _close_pending_actions(conversation, reason, decided=None, decided_result=None, decided_status=None):
+    """Responde a TODOS los tool_calls de escritura que sigan sin respuesta.
+
+    Es lo que mantiene el transcript válido: un turno del asistente con
+    tool_calls y sin su mensaje `tool` correspondiente hace que el proveedor
+    rechace la siguiente petición. `decided` es la acción que la persona sí
+    resolvió; sus hermanas del mismo turno se marcan como no confirmadas.
+    """
+    pending = list(Action.objects.filter(conversation=conversation, status="pending"))
+    if not pending:
+        return
+    for action in pending:
+        if decided is not None and action.id == decided.id:
+            payload = decided_result or {}
+            # El estado lo decide quien llama, no la forma del resultado: un
+            # rechazo tampoco trae "error" y se marcaba como ejecutado.
+            status_value = decided_status or ("failed" if payload.get("error") else "executed")
+        else:
+            payload = {"cancelada": reason}
+            status_value = "rejected"
+        Message.objects.create(
+            conversation=conversation,
+            role="tool",
+            content=wrap_tool_result(action.tool_name, payload),
+            tool_call_id=action.tool_call_id,
+            tool_name=action.tool_name,
+            sequence=next_sequence(conversation),
+        )
+        action.status = status_value
+        action.result = payload
+        action.executed_at = timezone.now()
+        action.save(update_fields=["status", "result", "executed_at", "updated_at"])
+
+
+class AssistantActionEndpoint(BaseAPIView):
+    """Confirma o descarta una acción propuesta y reanuda el turno.
+
+    Nada del asistente escribe en el workspace sin pasar por aquí con
+    decision="confirm": es el único sitio que llama a execute_action.
+    """
+
+    use_read_replica = False
+
+    @allow_assistant
+    def post(self, request, slug, pk):
+        action = (
+            Action.objects.filter(
+                pk=pk, conversation__workspace__slug=slug, conversation__owner=request.user
+            )
+            .select_related("conversation")
+            .first()
+        )
+        if not action:
+            return Response({"error": "Not found."}, status=status.HTTP_404_NOT_FOUND)
+        if action.status != "pending":
+            return Response(
+                {"error": f"Esa acción ya está en estado '{action.status}'."},
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        decision = request.data.get("decision")
+        if decision not in ("confirm", "reject"):
+            return Response(
+                {"error": "decision debe ser 'confirm' o 'reject'."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        conversation = action.conversation
+        config = get_config()
+        if not config["enabled"] or not config["configured"]:
+            return Response(
+                {"error": "El asistente no está configurado."},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
+        ctx = _build_context(request, slug)
+        can_write = bool(writable_project_ids(request.user, slug))
+
+        if decision == "confirm":
+            if action.tool_name not in WRITE_TOOLS:
+                return Response(
+                    {"error": "Esa acción no es una herramienta de escritura."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            # execute_action revalida permisos y existencia: entre la propuesta
+            # y el clic pueden haber cambiado.
+            result = execute_action(action.tool_name, ctx, action.arguments)
+        else:
+            result = {"cancelada": "El usuario rechazó la acción."}
+
+        _close_pending_actions(
+            conversation,
+            reason="El usuario confirmó otra acción de la misma propuesta.",
+            decided=action,
+            decided_result=result,
+            decided_status=(
+                "rejected"
+                if decision == "reject"
+                else ("failed" if result.get("error") else "executed")
+            ),
+        )
+
+        async def stream():
+            yield sse(
+                "action_result",
+                {"id": str(action.id), "decision": decision, "result": result},
+            )
+            try:
+                async for frame in run_turn(conversation, ctx, config, can_write=can_write):
+                    yield frame
+            except Exception as exc:  # noqa: BLE001
+                yield sse("error", {"code": exc.__class__.__name__, "message": str(exc)[:500]})
+
+        response = StreamingHttpResponse(stream(), content_type="text/event-stream")
+        response["Cache-Control"] = "no-cache, no-transform"
+        response["X-Accel-Buffering"] = "no"
         response["Content-Encoding"] = "identity"
         return response
