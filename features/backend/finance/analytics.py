@@ -61,9 +61,16 @@ def _monthly_expense_sums(workspace, month_keys):
 
 
 # --------------------------------------------------------------------- P&L
-def build_pnl(workspace, today=None, months=PNL_MONTHS):
+def build_pnl(workspace, today=None, months=PNL_MONTHS, date_from=None, date_to=None):
     today = today or date.today()
-    month_list = _month_range(today.year, today.month, months)
+    if date_from or date_to:
+        end = date_to or today
+        start = date_from or date(*_add_months(end.year, end.month, -(PNL_MONTHS - 1)), 1)
+        span = (end.year - start.year) * 12 + (end.month - start.month) + 1
+        months = max(1, min(span, 36))
+        month_list = _month_range(end.year, end.month, months)
+    else:
+        month_list = _month_range(today.year, today.month, months)
     month_keys = [f"{y:04d}-{m:02d}" for y, m in month_list]
     start = date(month_list[0][0], month_list[0][1], 1)
 

@@ -4,18 +4,71 @@ from decimal import Decimal
 
 from rest_framework import serializers
 
-from plane.finance.models import CashSnapshot, Contract, ExpenseEntry, FinanceAccess, FinanceProfile, Invoice, Payment
+import re as _re
+
+from plane.finance.models import (
+    CashSnapshot,
+    Contract,
+    ExpenseEntry,
+    FinanceAccess,
+    FinanceAnalysis,
+    FinanceProfile,
+    Invoice,
+    Payment,
+)
 from plane.finance.services import invoice_effective_status
+
+RFC_RE = _re.compile(r"^[A-ZÑ&]{3,4}\d{6}[A-Z0-9]{3}$")
+COLOR_RE = _re.compile(r"^#[0-9a-fA-F]{6}$")
 
 
 class FinanceProfileSerializer(serializers.ModelSerializer):
+    csf_name = serializers.SerializerMethodField()
+
     class Meta:
         model = FinanceProfile
         fields = [
             "id", "project", "workspace", "default_currency", "billing_day", "notes",
+            "legal_name", "rfc", "tax_regime", "tax_zip", "billing_email", "color",
+            "csf_asset", "csf_name",
             "created_at", "updated_at",
         ]
-        read_only_fields = ["id", "project", "workspace", "created_at", "updated_at"]
+        read_only_fields = ["id", "project", "workspace", "csf_asset", "csf_name", "created_at", "updated_at"]
+
+    def get_csf_name(self, obj):
+        if obj.csf_asset_id and obj.csf_asset and obj.csf_asset.is_uploaded:
+            return (obj.csf_asset.attributes or {}).get("name", "CSF.pdf")
+        return None
+
+    def validate_rfc(self, value):
+        value = (value or "").strip().upper()
+        if value and not RFC_RE.fullmatch(value):
+            raise serializers.ValidationError("El RFC no tiene un formato válido.")
+        return value
+
+    def validate_color(self, value):
+        value = (value or "").strip()
+        if value and not COLOR_RE.fullmatch(value):
+            raise serializers.ValidationError("El color debe ser hexadecimal (#RRGGBB).")
+        return value
+
+    def validate_tax_zip(self, value):
+        value = (value or "").strip()
+        if value and not _re.fullmatch(r"\d{5}", value):
+            raise serializers.ValidationError("El código postal debe tener 5 dígitos.")
+        return value
+
+    def validate_billing_email(self, value):
+        value = (value or "").strip()
+        if value:
+            from django.core.validators import validate_email
+            from django.core.exceptions import ValidationError as DjangoValidationError
+
+            try:
+                validate_email(value)
+            except DjangoValidationError:
+                raise serializers.ValidationError("El correo de facturación no es válido.")
+        return value
 
 
 class ContractSerializer(serializers.ModelSerializer):
@@ -153,6 +206,20 @@ class ExpenseEntrySerializer(serializers.ModelSerializer):
         if not re.fullmatch(r"\d{4}-(0[1-9]|1[0-2])", value or ""):
             raise serializers.ValidationError("Month must be in YYYY-MM format.")
         return value
+
+
+class FinanceAnalysisSerializer(serializers.ModelSerializer):
+    created_by_display_name = serializers.CharField(
+        source="created_by.display_name", read_only=True, default=""
+    )
+
+    class Meta:
+        model = FinanceAnalysis
+        fields = [
+            "id", "workspace", "content", "period_from", "period_to",
+            "created_by", "created_by_display_name", "created_at",
+        ]
+        read_only_fields = fields
 
 
 class CashSnapshotSerializer(serializers.ModelSerializer):

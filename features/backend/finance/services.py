@@ -9,12 +9,17 @@ from decimal import Decimal
 from django.db import IntegrityError
 from django.db.models import Sum
 
-from plane.finance.models import Contract, FinanceProfile, Invoice, Payment
+from plane.finance.models import CLIENT_COLOR_PALETTE, Contract, FinanceProfile, Invoice, Payment
 
 CYCLE_STEP_MONTHS = {"monthly": 1, "quarterly": 3, "yearly": 12}
 MAX_PERIODS = 24
 UPCOMING_WINDOW_DAYS = 7
 CURRENCIES = ("MXN", "USD")
+
+
+def _months_back(d, months):
+    y, m = _add_months(d.year, d.month, -months)
+    return date(y, m, 1)
 
 
 def _add_months(year, month, months):
@@ -100,14 +105,21 @@ def _zero_by_currency():
     return {c: Decimal("0") for c in CURRENCIES}
 
 
-def project_financials(project, today=None, materialize=True):
-    """Everything the client card / project summary needs, per currency."""
+def project_financials(project, today=None, materialize=True, date_from=None, date_to=None):
+    """Everything the client card / project summary needs, per currency.
+    date_from/date_to (dates) restrict REVENUE only; outstanding/overdue are
+    point-in-time and ignore the range."""
     today = today or date.today()
     if materialize:
         materialize_retainer_invoices(project, today)
 
     revenue = _zero_by_currency()
-    for row in Payment.objects.filter(project=project).values("currency").annotate(total=Sum("amount")):
+    payments_qs = Payment.objects.filter(project=project)
+    if date_from:
+        payments_qs = payments_qs.filter(paid_at__gte=date_from)
+    if date_to:
+        payments_qs = payments_qs.filter(paid_at__lte=date_to)
+    for row in payments_qs.values("currency").annotate(total=Sum("amount")):
         if row["currency"] in revenue:
             revenue[row["currency"]] += row["total"] or Decimal("0")
 
@@ -180,10 +192,30 @@ def _backfill_profiles(workspace):
         )
 
 
-def build_dashboard(workspace, today=None):
+def _assign_missing_colors(profiles):
+    """Give every client a distinct palette color the first time it shows up.
+    Idempotent; user-set colors are never touched."""
+    used = [p.color for p in profiles if p.color]
+    idx = 0
+    for profile in profiles:
+        if profile.color:
+            continue
+        color = next((c for c in CLIENT_COLOR_PALETTE if c not in used), None)
+        if color is None:
+            color = CLIENT_COLOR_PALETTE[idx % len(CLIENT_COLOR_PALETTE)]
+            idx += 1
+        profile.color = color
+        used.append(color)
+        profile.save(update_fields=["color", "updated_at"])
+
+
+def build_dashboard(workspace, today=None, date_from=None, date_to=None):
     today = today or date.today()
     _backfill_profiles(workspace)
-    profiles = FinanceProfile.objects.filter(workspace=workspace).select_related("project")
+    profiles = list(
+        FinanceProfile.objects.filter(workspace=workspace).select_related("project", "csf_asset")
+    )
+    _assign_missing_colors(profiles)
 
     totals = {
         c: {"revenue_ytd": Decimal("0"), "outstanding": Decimal("0"), "overdue_amount": Decimal("0")}
@@ -194,7 +226,7 @@ def build_dashboard(workspace, today=None):
 
     for profile in profiles:
         project = profile.project
-        fin = project_financials(project, today)
+        fin = project_financials(project, today, date_from=date_from, date_to=date_to)
         for c in CURRENCIES:
             totals[c]["outstanding"] += Decimal(str(fin["outstanding"][c]))
             totals[c]["overdue_amount"] += Decimal(str(fin["overdue_amount"][c]))
@@ -202,6 +234,10 @@ def build_dashboard(workspace, today=None):
             {
                 "project_id": str(project.id),
                 "project_name": project.name,
+                "color": profile.color,
+                "legal_name": profile.legal_name,
+                "rfc": profile.rfc,
+                "has_csf": bool(profile.csf_asset_id and profile.csf_asset and profile.csf_asset.is_uploaded),
                 "status": fin["status"],
                 "active_retainer": fin["active_retainer"],
                 "revenue": fin["revenue"],
@@ -239,32 +275,40 @@ def build_dashboard(workspace, today=None):
                     }
                 )
 
-    # revenue YTD per currency (single query across the workspace's client projects)
-    year_start = date(today.year, 1, 1)
+    # revenue per currency: YTD by default, the filtered range when one is set
     project_ids = [p.project_id for p in profiles]
-    for row in (
-        Payment.objects.filter(project_id__in=project_ids, paid_at__gte=year_start)
-        .values("currency")
-        .annotate(total=Sum("amount"))
-    ):
+    revenue_start = date_from or date(today.year, 1, 1)
+    revenue_qs = Payment.objects.filter(project_id__in=project_ids, paid_at__gte=revenue_start)
+    if date_to:
+        revenue_qs = revenue_qs.filter(paid_at__lte=date_to)
+    for row in revenue_qs.values("currency").annotate(total=Sum("amount")):
         if row["currency"] in totals:
             totals[row["currency"]]["revenue_ytd"] += row["total"] or Decimal("0")
 
-    # monthly revenue, last 12 months, per currency
-    start_year, start_month = _add_months(today.year, today.month, -11)
+    # monthly revenue per currency: the filtered month window (cap 24), or the
+    # last 12 months by default
+    if date_from or date_to:
+        end = date_to or today
+        start = date_from or _months_back(end, 11)
+        span = (end.year - start.year) * 12 + (end.month - start.month) + 1
+        month_count = max(1, min(span, 24))
+        start_year, start_month = start.year, start.month
+    else:
+        month_count = 12
+        start_year, start_month = _add_months(today.year, today.month, -11)
     monthly_start = date(start_year, start_month, 1)
+    monthly_qs = Payment.objects.filter(project_id__in=project_ids, paid_at__gte=monthly_start)
+    if date_to:
+        monthly_qs = monthly_qs.filter(paid_at__lte=date_to)
     buckets = defaultdict(lambda: {c: Decimal("0") for c in CURRENCIES})
-    for row in (
-        Payment.objects.filter(project_id__in=project_ids, paid_at__gte=monthly_start)
-        .values("currency", "paid_at", "amount")
-    ):
+    for row in monthly_qs.values("currency", "paid_at", "amount"):
         key = f"{row['paid_at'].year:04d}-{row['paid_at'].month:02d}"
         if row["currency"] in CURRENCIES:
             buckets[key][row["currency"]] += row["amount"]
 
     monthly_revenue = []
     y, m = start_year, start_month
-    for _ in range(12):
+    for _ in range(month_count):
         key = f"{y:04d}-{m:02d}"
         entry = {"month": key}
         for c in CURRENCIES:

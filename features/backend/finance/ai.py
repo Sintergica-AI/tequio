@@ -20,7 +20,26 @@ PROVIDER_BASE_URLS = {
 }
 
 MAX_STATEMENT_CHARS = 200_000
+MAX_PDF_PAGES = 60
 VALID_CATEGORIES = ("payroll", "infrastructure", "marketing", "admin", "taxes", "other")
+
+
+class PdfWithoutText(Exception):
+    """The PDF has no extractable text layer (probably a scan)."""
+
+
+def extract_pdf_text(file_obj):
+    """Text of a bank-statement PDF, page by page. Raises PdfWithoutText when
+    the file has no text layer (a scanned statement) so the caller can give an
+    actionable message instead of sending garbage to the model."""
+    from pypdf import PdfReader
+
+    reader = PdfReader(file_obj)
+    pages = reader.pages[:MAX_PDF_PAGES]
+    text = "\n".join((page.extract_text() or "") for page in pages)
+    if len(text.strip()) < 40:
+        raise PdfWithoutText()
+    return text
 
 
 class FinanceAINotConfigured(Exception):

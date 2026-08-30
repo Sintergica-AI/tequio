@@ -13,6 +13,9 @@ from plane.finance.views import (
     FinanceImportCommitEndpoint,
     FinanceImportParseEndpoint,
     FinanceAnalyzeEndpoint,
+    FinanceAnalysesEndpoint,
+    FinanceAnalysisDetailEndpoint,
+    ProjectFinanceCsfEndpoint,
     FinanceInsightsEndpoint,
     FinancePnlEndpoint,
     ContractsEndpoint,
@@ -56,6 +59,12 @@ urlpatterns = [
         name="finance-import-commit",
     ),
     path("workspaces/<str:slug>/finance/analyze/", FinanceAnalyzeEndpoint.as_view(), name="finance-analyze"),
+    path("workspaces/<str:slug>/finance/analyses/", FinanceAnalysesEndpoint.as_view(), name="finance-analyses"),
+    path(
+        "workspaces/<str:slug>/finance/analyses/<uuid:pk>/",
+        FinanceAnalysisDetailEndpoint.as_view(),
+        name="finance-analysis-detail",
+    ),
     path(
         "workspaces/<str:slug>/finance/dashboard/",
         FinanceDashboardEndpoint.as_view(),
@@ -75,6 +84,11 @@ urlpatterns = [
         "workspaces/<str:slug>/projects/<uuid:project_id>/finance/profile/",
         ProjectFinanceProfileEndpoint.as_view(),
         name="finance-profile",
+    ),
+    path(
+        "workspaces/<str:slug>/projects/<uuid:project_id>/finance/profile/csf/",
+        ProjectFinanceCsfEndpoint.as_view(),
+        name="finance-profile-csf",
     ),
     path(
         "workspaces/<str:slug>/projects/<uuid:project_id>/finance/summary/",

@@ -16,6 +16,13 @@ CURRENCY_CHOICES = (
 )
 
 
+# Distinct, readable colors assigned to clients (auto-picked, user-editable).
+CLIENT_COLOR_PALETTE = (
+    "#3f76ff", "#f59e0b", "#16a34a", "#dc2626", "#8b5cf6", "#0891b2",
+    "#db2777", "#65a30d", "#ea580c", "#6366f1", "#0d9488", "#b91c1c",
+)
+
+
 class FinanceProfile(ProjectBaseModel):
     """The existence of this row marks a project as a client."""
 
@@ -24,6 +31,18 @@ class FinanceProfile(ProjectBaseModel):
         default=1, validators=[MinValueValidator(1), MaxValueValidator(28)]
     )
     notes = models.TextField(blank=True, default="")
+    # fiscal identity (Mexican invoicing data)
+    legal_name = models.CharField(max_length=255, blank=True, default="")
+    rfc = models.CharField(max_length=13, blank=True, default="")
+    tax_regime = models.CharField(max_length=100, blank=True, default="")
+    tax_zip = models.CharField(max_length=5, blank=True, default="")
+    billing_email = models.CharField(max_length=255, blank=True, default="")
+    # display color used to attribute revenue to this client in charts
+    color = models.CharField(max_length=7, blank=True, default="")
+    # Constancia de Situación Fiscal (PDF stored through FileAsset/MinIO)
+    csf_asset = models.ForeignKey(
+        "db.FileAsset", on_delete=models.SET_NULL, null=True, blank=True, related_name="+"
+    )
 
     class Meta:
         verbose_name = "Finance Profile"
@@ -202,6 +221,27 @@ class CashSnapshot(BaseModel):
 
     def __str__(self):
         return f"{self.as_of} {self.amount} {self.currency}"
+
+
+class FinanceAnalysis(BaseModel):
+    """A saved CFO AI analysis. Content is the generated text; the period
+    records the date filter active when it was generated (both optional)."""
+
+    workspace = models.ForeignKey(
+        "db.Workspace", on_delete=models.CASCADE, related_name="finance_analyses"
+    )
+    content = models.TextField()
+    period_from = models.DateField(null=True, blank=True)
+    period_to = models.DateField(null=True, blank=True)
+
+    class Meta:
+        verbose_name = "Finance Analysis"
+        verbose_name_plural = "Finance Analyses"
+        db_table = "finance_analyses"
+        ordering = ("-created_at",)
+
+    def __str__(self):
+        return f"FinanceAnalysis<{self.workspace_id}, {self.created_at}>"
 
 
 class FinanceAccess(BaseModel):
