@@ -9,8 +9,10 @@ from plane.app.views.base import BaseAPIView
 from plane.db.models import Project, Workspace, WorkspaceMember
 from plane.finance.models import Contract, FinanceAccess, FinanceProfile, Invoice, Payment
 from plane.finance.permissions import (
+    allow_collections_access,
     allow_finance_access,
     allow_finance_admin,
+    finance_role,
     has_finance_access,
     is_workspace_admin,
 )
@@ -69,10 +71,13 @@ class FinanceMeEndpoint(BaseAPIView):
                 {"error": "You don't have the required permissions."},
                 status=status.HTTP_403_FORBIDDEN,
             )
+        role = finance_role(request.user, slug)
         return Response(
             {
-                "has_access": has_finance_access(request.user, slug),
-                "is_admin": is_workspace_admin(request.user, slug),
+                "has_access": role in ("admin", "finance"),
+                "is_admin": role == "admin",
+                "role": role,
+                "has_collections": role is not None,
             },
             status=status.HTTP_200_OK,
         )
@@ -98,6 +103,36 @@ class FinanceAccessEndpoint(BaseAPIView):
     @allow_finance_admin
     def post(self, request, slug):
         workspace = Workspace.objects.get(slug=slug)
+
+        # single-member upsert from the members page: {member_id, role}
+        # role "none" removes the row.
+        single_member = request.data.get("member_id")
+        if single_member:
+            role = request.data.get("role", "finance")
+            if role not in ("finance", "collections", "none"):
+                return Response({"error": "Invalid role."}, status=status.HTTP_400_BAD_REQUEST)
+            if not WorkspaceMember.objects.filter(
+                workspace=workspace, member_id=single_member, is_active=True
+            ).exists():
+                return Response(
+                    {"error": "The user is not an active member of this workspace."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            if role == "none":
+                for row in FinanceAccess.objects.filter(workspace=workspace, member_id=single_member):
+                    row.delete(soft=False)
+                return Response(status=status.HTTP_204_NO_CONTENT)
+            row, created = FinanceAccess.objects.get_or_create(
+                workspace=workspace, member_id=single_member, defaults={"role": role}
+            )
+            if not created and row.role != role:
+                row.role = role
+                row.save(update_fields=["role", "updated_at"])
+            return Response(
+                FinanceAccessSerializer(row).data,
+                status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
+            )
+
         member_ids = request.data.get("member_ids") or []
         if not isinstance(member_ids, list) or not member_ids:
             return Response({"error": "member_ids is required."}, status=status.HTTP_400_BAD_REQUEST)
@@ -309,6 +344,80 @@ class PaymentDetailEndpoint(BaseAPIView):
         row = Payment.objects.get(pk=pk, project_id=project_id, workspace__slug=slug)
         row.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+# --------------------------------------------------------------------------
+# Cobranza (collections role): only pending charges + payment recording.
+# Deliberately exposes NO revenue, KPIs, P&L, contracts or client fiscal data.
+# --------------------------------------------------------------------------
+
+
+class FinanceCollectionsEndpoint(BaseAPIView):
+    @allow_collections_access
+    def get(self, request, slug):
+        from datetime import date as _dt
+
+        today = _dt.today()
+        workspace = Workspace.objects.get(slug=slug)
+        for profile in FinanceProfile.objects.filter(workspace=workspace).select_related("project"):
+            materialize_retainer_invoices(profile.project)
+        invoices = list(
+            Invoice.objects.filter(workspace=workspace, status="pending").select_related("project")
+        )
+        paid = _paid_map(invoices)
+        rows = []
+        for inv in invoices:
+            paid_amount = paid.get(inv.id) or 0
+            remaining = inv.amount - paid_amount
+            if remaining <= 0:
+                continue
+            rows.append(
+                {
+                    "id": str(inv.id),
+                    "project_id": str(inv.project_id),
+                    "project_name": inv.project.name,
+                    "concept": inv.concept,
+                    "amount": float(inv.amount),
+                    "paid_amount": float(paid_amount),
+                    "remaining": float(remaining),
+                    "currency": inv.currency,
+                    "issue_date": inv.issue_date.isoformat(),
+                    "due_date": inv.due_date.isoformat(),
+                    "status": "overdue" if inv.due_date < today else "pending",
+                    "days": (today - inv.due_date).days if inv.due_date < today else (inv.due_date - today).days,
+                }
+            )
+        rows.sort(key=lambda r: (0 if r["status"] == "overdue" else 1, r["due_date"]))
+        return Response({"invoices": rows}, status=status.HTTP_200_OK)
+
+
+class FinanceCollectionsPaymentEndpoint(BaseAPIView):
+    @allow_collections_access
+    def post(self, request, slug, invoice_id):
+        invoice = Invoice.objects.get(pk=invoice_id, workspace__slug=slug)
+        if invoice.status != "pending":
+            return Response(
+                {"error": "Este cobro ya no está pendiente."}, status=status.HTTP_400_BAD_REQUEST
+            )
+        data = {
+            "invoice": str(invoice.id),
+            "amount": request.data.get("amount"),
+            "currency": invoice.currency,
+            "paid_at": request.data.get("paid_at"),
+            "method": request.data.get("method", "transfer"),
+            "reference": request.data.get("reference", ""),
+            "notes": request.data.get("notes", ""),
+        }
+        serializer = PaymentSerializer(data=data, context={"project_id": str(invoice.project_id)})
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        serializer.save(project_id=invoice.project_id, workspace_id=invoice.workspace_id)
+        # fully covered -> mark as paid (same rule as the full payments endpoint)
+        paid = _paid_map([invoice]).get(invoice.id)
+        if paid is not None and paid >= invoice.amount:
+            invoice.status = "paid"
+            invoice.save(update_fields=["status", "updated_at"])
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
 
 
 # --------------------------------------------------------------------------

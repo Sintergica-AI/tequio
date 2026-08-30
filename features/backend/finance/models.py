@@ -245,8 +245,13 @@ class FinanceAnalysis(BaseModel):
 
 
 class FinanceAccess(BaseModel):
-    """Workspace-level allowlist: members allowed to view/manage finance data.
-    Workspace admins have implicit access and are not required to be listed."""
+    """Workspace-level allowlist: members with a finance role. Workspace admins
+    have implicit full access and are not required to be listed.
+
+    Roles: "finance" sees and manages everything; "collections" (cobranza) only
+    sees pending charges and records payments against them."""
+
+    ROLE_CHOICES = (("finance", "Finance"), ("collections", "Collections"))
 
     workspace = models.ForeignKey(
         "db.Workspace", on_delete=models.CASCADE, related_name="finance_access"
@@ -254,6 +259,7 @@ class FinanceAccess(BaseModel):
     member = models.ForeignKey(
         settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="finance_access"
     )
+    role = models.CharField(max_length=20, choices=ROLE_CHOICES, default="finance")
 
     class Meta:
         verbose_name = "Finance Access"

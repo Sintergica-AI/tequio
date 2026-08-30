@@ -91,6 +91,19 @@ incrusten otros, así que no bloquea estos iframes salientes.
   `finance_profiles` + tabla `finance_analyses`. Verificación: `verify7.py`
   (29 comprobaciones) + E2E real de PDF→IA y análisis guardado.
 
+**Roles financieros por miembro + Cobranza** *(ronda de agosto 2026)*
+- El acceso a Finanzas se gestiona en **Configuración → Miembros**: columna
+  "Finanzas" por miembro (solo admins) con Sin acceso / Financiero / Cobranza.
+  Upsert por miembro (`POST finance/access/ {member_id, role}`; `role:"none"`
+  retira). La pestaña "Acceso" del dashboard desapareció.
+- **Rol Cobranza**: solo ve `finance/collections/` (cobros pendientes/vencidos
+  de todos los clientes, con restante y días) y registra pagos contra ellos.
+  Todo lo demás (dashboard, P&L, gastos, análisis, fiscal) responde 403; el
+  frontend le muestra únicamente la vista de cobranza, sin pestañas.
+  Financiero y admin son supraconjuntos: también ven la pestaña Cobranza.
+- Migración `finance.0004` (campo `role` en finance_access, aditiva).
+  Verificación: `verify8.py`, 24 comprobaciones en producción.
+
 **Asistente conversacional** (`plane.assistant`) — *fase 1 (sólo lectura) completa*
 - Chat con contexto real del workspace: responde consultando work items, proyectos,
   ciclos, módulos, miembros y páginas mediante 9 herramientas sobre el ORM.

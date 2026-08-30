@@ -6367,7 +6367,7 @@ index 0000000..00482d1
 +}
 diff --git a/apps/web/core/components/finance/access-gate.tsx b/apps/web/core/components/finance/access-gate.tsx
 new file mode 100644
-index 0000000..09223a3
+index 0000000..9bb5753
 --- /dev/null
 +++ b/apps/web/core/components/finance/access-gate.tsx
 @@ -0,0 +1,46 @@
@@ -6404,7 +6404,7 @@ index 0000000..09223a3
 +      </div>
 +    );
 +
-+  if (!accessInfo.has_access)
++  if (!accessInfo.has_access && !accessInfo.has_collections)
 +    return (
 +      <div className="flex h-full w-full flex-col items-center justify-center gap-4 px-6 text-center">
 +        <Banknote className="size-10 text-tertiary" strokeWidth={1.5} />
@@ -6416,192 +6416,6 @@ index 0000000..09223a3
 +    );
 +
 +  return <>{children}</>;
-+});
-diff --git a/apps/web/core/components/finance/access/access-root.tsx b/apps/web/core/components/finance/access/access-root.tsx
-new file mode 100644
-index 0000000..fa96997
---- /dev/null
-+++ b/apps/web/core/components/finance/access/access-root.tsx
-@@ -0,0 +1,180 @@
-+/**
-+ * Sintergica CE extension: finance access management tab.
-+ * Derived from Plane CE code (AGPL-3.0-only).
-+ */
-+
-+import { useState } from "react";
-+import { observer } from "mobx-react";
-+import useSWR from "swr";
-+// plane imports
-+import { useTranslation } from "@plane/i18n";
-+import { Button } from "@plane/propel/button";
-+import { TOAST_TYPE, setToast } from "@plane/propel/toast";
-+import { AlertModalCore, Spinner } from "@plane/ui";
-+import { getFileURL } from "@plane/utils";
-+// components
-+import { MemberDropdown } from "@/components/dropdowns/member/dropdown";
-+// hooks
-+import { useFinance } from "@/hooks/store/use-finance";
-+// services
-+import type { TFinanceAccessRow } from "@/services/finance.service";
-+
-+type TFinanceAccessRootProps = {
-+  workspaceSlug: string;
-+};
-+
-+export const FinanceAccessRoot = observer(function FinanceAccessRoot(props: TFinanceAccessRootProps) {
-+  const { workspaceSlug } = props;
-+  // plane hooks
-+  const { t } = useTranslation();
-+  // states
-+  const [selectedMemberIds, setSelectedMemberIds] = useState<string[]>([]);
-+  const [isGranting, setIsGranting] = useState(false);
-+  const [rowToRevoke, setRowToRevoke] = useState<TFinanceAccessRow | null>(null);
-+  const [isRevoking, setIsRevoking] = useState(false);
-+  // store hooks
-+  const finance = useFinance();
-+  // fetch the access list
-+  useSWR(`FINANCE_ACCESS_LIST_${workspaceSlug}`, () => finance.fetchAccessList(workspaceSlug));
-+  // derived values
-+  const accessRows = finance.accessListByWorkspace[workspaceSlug];
-+
-+  const handleGrantAccess = () => {
-+    const grantedMemberIds = new Set((accessRows ?? []).map((row) => row.member));
-+    const memberIdsToGrant = selectedMemberIds.filter((memberId) => !grantedMemberIds.has(memberId));
-+    if (memberIdsToGrant.length === 0) {
-+      setSelectedMemberIds([]);
-+      return;
-+    }
-+    setIsGranting(true);
-+    finance
-+      .grantAccess(workspaceSlug, memberIdsToGrant)
-+      // oxlint-disable-next-line promise/always-return
-+      .then(() => {
-+        setSelectedMemberIds([]);
-+        setToast({
-+          type: TOAST_TYPE.SUCCESS,
-+          title: "Success!",
-+          message: t("finance.access.added"),
-+        });
-+      })
-+      .catch((error) => {
-+        setToast({
-+          type: TOAST_TYPE.ERROR,
-+          title: "Error!",
-+          message: error?.error || t("finance.form.error"),
-+        });
-+      })
-+      .finally(() => setIsGranting(false));
-+  };
-+
-+  const handleRevokeAccess = async () => {
-+    if (!rowToRevoke) return;
-+    setIsRevoking(true);
-+    await finance
-+      .revokeAccess(workspaceSlug, rowToRevoke.id)
-+      // oxlint-disable-next-line promise/always-return
-+      .then(() => {
-+        setToast({
-+          type: TOAST_TYPE.SUCCESS,
-+          title: "Success!",
-+          message: t("finance.access.removed"),
-+        });
-+        setRowToRevoke(null);
-+      })
-+      .catch((error) => {
-+        setToast({
-+          type: TOAST_TYPE.ERROR,
-+          title: "Error!",
-+          message: error?.error || t("finance.form.error"),
-+        });
-+      })
-+      .finally(() => setIsRevoking(false));
-+  };
-+
-+  if (!accessRows)
-+    return (
-+      <div className="grid w-full place-items-center py-10">
-+        <Spinner />
-+      </div>
-+    );
-+
-+  return (
-+    <>
-+      <AlertModalCore
-+        handleClose={() => setRowToRevoke(null)}
-+        handleSubmit={handleRevokeAccess}
-+        isSubmitting={isRevoking}
-+        isOpen={!!rowToRevoke}
-+        title={t("finance.access.remove")}
-+        content={
-+          <>
-+            {t("finance.access.remove")}:{" "}
-+            <span className="font-medium break-words text-primary">
-+              {rowToRevoke?.member_display_name || rowToRevoke?.member_email}
-+            </span>
-+          </>
-+        }
-+      />
-+      <div className="flex w-full max-w-2xl flex-col gap-4">
-+        <div className="flex flex-col gap-1">
-+          <h3 className="text-16 font-semibold text-primary">{t("finance.access.title")}</h3>
-+          <p className="text-13 text-secondary">{t("finance.access.description")}</p>
-+        </div>
-+        {/* grant access */}
-+        <div className="flex items-center gap-2">
-+          <MemberDropdown
-+            multiple
-+            value={selectedMemberIds}
-+            onChange={(val: string[]) => setSelectedMemberIds(val)}
-+            buttonVariant="border-with-text"
-+            placeholder={t("finance.access.add")}
-+          />
-+          <Button
-+            variant="primary"
-+            size="lg"
-+            onClick={handleGrantAccess}
-+            loading={isGranting}
-+            disabled={selectedMemberIds.length === 0}
-+          >
-+            {t("finance.access.add")}
-+          </Button>
-+        </div>
-+        {/* current access rows */}
-+        {accessRows.length === 0 ? (
-+          <p className="text-13 text-tertiary">{t("finance.access.empty")}</p>
-+        ) : (
-+          <div className="flex flex-col rounded-md border border-subtle bg-surface-1">
-+            {accessRows.map((row) => (
-+              <div
-+                key={row.id}
-+                className="flex items-center gap-3 border-b border-subtle px-3 py-2.5 text-13 last:border-b-0"
-+              >
-+                {row.member_avatar_url && row.member_avatar_url.trim() !== "" ? (
-+                  <span className="relative flex size-6 flex-shrink-0 items-center justify-center overflow-hidden rounded-full">
-+                    <img
-+                      src={getFileURL(row.member_avatar_url)}
-+                      className="absolute top-0 left-0 h-full w-full rounded-full object-cover"
-+                      alt={row.member_display_name || row.member_email}
-+                    />
-+                  </span>
-+                ) : (
-+                  <span className="flex size-6 flex-shrink-0 items-center justify-center rounded-full bg-layer-3 text-11 text-tertiary capitalize">
-+                    {(row.member_display_name || row.member_email || "?")[0]}
-+                  </span>
-+                )}
-+                <div className="flex min-w-0 flex-1 flex-col">
-+                  <span className="truncate font-medium text-primary">{row.member_display_name}</span>
-+                  <span className="truncate text-11 text-tertiary">{row.member_email}</span>
-+                </div>
-+                <Button variant="secondary" size="lg" onClick={() => setRowToRevoke(row)}>
-+                  {t("finance.access.remove")}
-+                </Button>
-+              </div>
-+            ))}
-+          </div>
-+        )}
-+      </div>
-+    </>
-+  );
 +});
 diff --git a/apps/web/core/components/finance/clients/clients-root.tsx b/apps/web/core/components/finance/clients/clients-root.tsx
 new file mode 100644
@@ -6807,6 +6621,249 @@ index 0000000..7282f2d
 +          </div>
 +        )}
 +      </div>
++    </div>
++  );
++});
+diff --git a/apps/web/core/components/finance/collections/collections-root.tsx b/apps/web/core/components/finance/collections/collections-root.tsx
+new file mode 100644
+index 0000000..786f660
+--- /dev/null
++++ b/apps/web/core/components/finance/collections/collections-root.tsx
+@@ -0,0 +1,237 @@
++/**
++ * Sintergica CE extension: cobranza view — the only screen the "collections"
++ * role sees. Lists pending/overdue charges across all clients and lets the
++ * user record payments against them. No revenue, KPIs or client fiscal data.
++ * Derived from Plane CE code (AGPL-3.0-only).
++ */
++
++import { useEffect, useState } from "react";
++import { observer } from "mobx-react";
++import useSWR from "swr";
++// plane imports
++import { useTranslation } from "@plane/i18n";
++import { Button } from "@plane/propel/button";
++import { TOAST_TYPE, setToast } from "@plane/propel/toast";
++import { CustomSelect, EModalPosition, EModalWidth, Input, ModalCore, Spinner } from "@plane/ui";
++import { cn, renderFormattedDate } from "@plane/utils";
++// hooks
++import { useFinance } from "@/hooks/store/use-finance";
++// services
++import type { TCollectionInvoice, TPayment } from "@/services/finance.service";
++// local imports
++import { CurrencyAmount } from "../shared/currency-amount";
++
++const METHODS: TPayment["method"][] = ["transfer", "cash", "card", "other"];
++
++// ------------------------------------------------------- payment modal
++const CollectionPaymentModal = observer(function CollectionPaymentModal(props: {
++  workspaceSlug: string;
++  invoice: TCollectionInvoice | null;
++  onClose: () => void;
++}) {
++  const { workspaceSlug, invoice, onClose } = props;
++  const { t } = useTranslation();
++  const finance = useFinance();
++  // states
++  const [amount, setAmount] = useState("");
++  const [paidAt, setPaidAt] = useState("");
++  const [method, setMethod] = useState<TPayment["method"]>("transfer");
++  const [reference, setReference] = useState("");
++  const [isSubmitting, setIsSubmitting] = useState(false);
++
++  useEffect(() => {
++    if (!invoice) return;
++    setAmount(String(invoice.remaining));
++    setPaidAt(new Date().toISOString().slice(0, 10));
++    setMethod("transfer");
++    setReference("");
++  }, [invoice]);
++
++  const parsedAmount = Number(amount);
++  const isValid = Number.isFinite(parsedAmount) && parsedAmount > 0 && !!paidAt;
++
++  const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
++    e.preventDefault();
++    if (!invoice || !isValid || isSubmitting) return;
++    setIsSubmitting(true);
++    try {
++      await finance.createCollectionPayment(workspaceSlug, invoice.id, {
++        amount,
++        paid_at: paidAt,
++        method,
++        reference,
++      });
++      setToast({ type: TOAST_TYPE.SUCCESS, title: "Success!", message: t("finance.collections.registered") });
++      onClose();
++    } catch (error: any) {
++      setToast({ type: TOAST_TYPE.ERROR, title: "Error!", message: error?.error || t("finance.form.error") });
++    } finally {
++      setIsSubmitting(false);
++    }
++  };
++
++  return (
++    <ModalCore isOpen={!!invoice} handleClose={onClose} position={EModalPosition.TOP} width={EModalWidth.XXL}>
++      {invoice && (
++        <form onSubmit={handleSubmit} className="space-y-4 p-5">
++          <h3 className="text-16 font-semibold text-primary">{t("finance.collections.register")}</h3>
++          <div className="rounded-md border border-subtle bg-layer-1 p-3 text-13">
++            <p className="font-medium text-primary">{invoice.concept}</p>
++            <p className="mt-0.5 text-tertiary">
++              {invoice.project_name} · {t("finance.collections.remaining")}:{" "}
++              <CurrencyAmount amount={invoice.remaining} currency={invoice.currency} />
++            </p>
++          </div>
++          <div className="grid grid-cols-2 gap-3">
++            <div className="space-y-1.5">
++              <label htmlFor="collection-payment-amount" className="text-11 font-medium text-tertiary">
++                {t("finance.payment.amount")} ({invoice.currency})
++              </label>
++              <Input
++                id="collection-payment-amount"
++                type="number"
++                min="0.01"
++                step="0.01"
++                value={amount}
++                hasError={!isValid && amount !== ""}
++                onChange={(e) => setAmount(e.target.value)}
++                className="w-full text-13"
++              />
++            </div>
++            <div className="space-y-1.5">
++              <label htmlFor="collection-payment-date" className="text-11 font-medium text-tertiary">
++                {t("finance.payment.paid_at")}
++              </label>
++              <Input
++                id="collection-payment-date"
++                type="date"
++                value={paidAt}
++                onChange={(e) => setPaidAt(e.target.value)}
++                className="w-full text-13"
++              />
++            </div>
++            <div className="space-y-1.5">
++              <span className="text-11 font-medium text-tertiary">{t("finance.payment.method")}</span>
++              <CustomSelect
++                value={method}
++                onChange={(value: TPayment["method"]) => setMethod(value)}
++                label={<span className="text-13 text-primary">{t(`finance.payment.method_${method}`)}</span>}
++                className="w-full"
++                buttonClassName="w-full justify-between border-[0.5px] border-subtle-1 bg-layer-2 px-3 py-2"
++              >
++                {METHODS.map((option) => (
++                  <CustomSelect.Option key={option} value={option}>
++                    {t(`finance.payment.method_${option}`)}
++                  </CustomSelect.Option>
++                ))}
++              </CustomSelect>
++            </div>
++            <div className="space-y-1.5">
++              <label htmlFor="collection-payment-reference" className="text-11 font-medium text-tertiary">
++                {t("finance.payment.reference")}
++              </label>
++              <Input
++                id="collection-payment-reference"
++                value={reference}
++                onChange={(e) => setReference(e.target.value)}
++                className="w-full text-13"
++              />
++            </div>
++          </div>
++          <div className="flex items-center justify-end gap-2">
++            <Button variant="secondary" size="lg" onClick={onClose}>
++              {t("common.cancel")}
++            </Button>
++            <Button variant="primary" size="lg" type="submit" loading={isSubmitting} disabled={!isValid}>
++              {t("finance.collections.register")}
++            </Button>
++          </div>
++        </form>
++      )}
++    </ModalCore>
++  );
++});
++
++// ------------------------------------------------------------- root
++const ROW_GRID_CLASSNAME =
++  "grid grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)_120px_130px_130px_110px_120px] items-center gap-2";
++
++type TFinanceCollectionsRootProps = {
++  workspaceSlug: string;
++};
++
++export const FinanceCollectionsRoot = observer(function FinanceCollectionsRoot(props: TFinanceCollectionsRootProps) {
++  const { workspaceSlug } = props;
++  const { t } = useTranslation();
++  const finance = useFinance();
++  // states
++  const [invoiceToPay, setInvoiceToPay] = useState<TCollectionInvoice | null>(null);
++  // fetch
++  const { isLoading } = useSWR(`FINANCE_COLLECTIONS_${workspaceSlug}`, () => finance.fetchCollections(workspaceSlug));
++  // derived values
++  const invoices = finance.collectionsByWorkspace[workspaceSlug];
++
++  if (invoices === undefined && isLoading)
++    return (
++      <div className="grid h-full w-full place-items-center">
++        <Spinner />
++      </div>
++    );
++
++  return (
++    <div className="flex flex-col gap-3">
++      <CollectionPaymentModal
++        workspaceSlug={workspaceSlug}
++        invoice={invoiceToPay}
++        onClose={() => setInvoiceToPay(null)}
++      />
++      <div>
++        <h3 className="text-16 font-semibold text-primary">{t("finance.collections.title")}</h3>
++        <p className="mt-0.5 text-13 text-tertiary">{t("finance.collections.description")}</p>
++      </div>
++      {(invoices ?? []).length === 0 ? (
++        <p className="text-13 text-tertiary">{t("finance.collections.empty")}</p>
++      ) : (
++        <div>
++          <div className={cn(ROW_GRID_CLASSNAME, "border-b border-subtle py-2 text-11 font-medium text-tertiary")}>
++            <span>{t("finance.clients.name")}</span>
++            <span>{t("finance.invoice.concept")}</span>
++            <span>{t("finance.invoice.due_date")}</span>
++            <span>{t("finance.invoice.amount")}</span>
++            <span>{t("finance.collections.remaining")}</span>
++            <span>{t("finance.invoice.status")}</span>
++            <span />
++          </div>
++          {(invoices ?? []).map((invoice) => (
++            <div key={invoice.id} className={cn(ROW_GRID_CLASSNAME, "border-b border-subtle py-2.5 text-13")}>
++              <span className="truncate font-medium text-primary">{invoice.project_name}</span>
++              <span className="truncate text-secondary">{invoice.concept}</span>
++              <span className="text-tertiary">{renderFormattedDate(invoice.due_date)}</span>
++              <span className="text-secondary">
++                <CurrencyAmount amount={invoice.amount} currency={invoice.currency} />
++              </span>
++              <span className="font-medium text-primary">
++                <CurrencyAmount amount={invoice.remaining} currency={invoice.currency} />
++              </span>
++              <span
++                className={cn(
++                  "text-11 font-medium",
++                  invoice.status === "overdue" ? "text-danger-primary" : "text-secondary"
++                )}
++              >
++                {invoice.status === "overdue"
++                  ? t("finance.collections.overdue_days", { days: invoice.days })
++                  : t("finance.invoice.status_pending")}
++              </span>
++              <span className="flex justify-end">
++                <Button variant="secondary" size="lg" onClick={() => setInvoiceToPay(invoice)}>
++                  {t("finance.collections.register")}
++                </Button>
++              </span>
++            </div>
++          ))}
++        </div>
++      )}
 +    </div>
 +  );
 +});
@@ -9445,10 +9502,10 @@ index 0000000..57d51f2
 +});
 diff --git a/apps/web/core/components/finance/root.tsx b/apps/web/core/components/finance/root.tsx
 new file mode 100644
-index 0000000..041a522
+index 0000000..d8fe230
 --- /dev/null
 +++ b/apps/web/core/components/finance/root.tsx
-@@ -0,0 +1,127 @@
+@@ -0,0 +1,140 @@
 +/**
 + * Sintergica CE extension: workspace finance root
 + * (dashboard + clients + statements + forecast + access tabs).
@@ -9465,8 +9522,8 @@ index 0000000..041a522
 +// hooks
 +import { useFinance, useFinanceAccess } from "@/hooks/store/use-finance";
 +// local imports
-+import { FinanceAccessRoot } from "./access/access-root";
 +import { FinanceClientsRoot } from "./clients/clients-root";
++import { FinanceCollectionsRoot } from "./collections/collections-root";
 +import { FinanceAlertsList } from "./dashboard/alerts-list";
 +import { FinanceInsightsPanel } from "./dashboard/insights-panel";
 +import { FinanceAnalysisCard } from "./dashboard/analysis-card";
@@ -9480,7 +9537,7 @@ index 0000000..041a522
 +  workspaceSlug: string;
 +};
 +
-+type TFinanceTab = "overview" | "clients" | "statements" | "forecast" | "access";
++type TFinanceTab = "overview" | "clients" | "statements" | "forecast" | "collections";
 +
 +export const FinanceRoot = observer(function FinanceRoot(props: TFinanceRootProps) {
 +  const { workspaceSlug } = props;
@@ -9495,28 +9552,41 @@ index 0000000..041a522
 +  // derived values
 +  const rangeParams = useMemo(() => periodToParams(period), [period]);
 +  const rangeKey = `${period.from ?? ""}_${period.to ?? ""}`;
++  // full-access data only — the collections role would just collect 403s
++  const hasFullAccess = !!accessInfo?.has_access;
 +  // fetch the dashboard (period-aware)
-+  useSWR(`FINANCE_DASHBOARD_${workspaceSlug}_${rangeKey}`, () => finance.fetchDashboard(workspaceSlug, rangeParams));
++  useSWR(hasFullAccess ? `FINANCE_DASHBOARD_${workspaceSlug}_${rangeKey}` : null, () =>
++    finance.fetchDashboard(workspaceSlug, rangeParams)
++  );
 +  // command-center data for the overview (forecast key is shared with the Proyecciones tab)
-+  useSWR(activeTab === "overview" ? `FINANCE_INSIGHTS_${workspaceSlug}` : null, () =>
++  useSWR(hasFullAccess && activeTab === "overview" ? `FINANCE_INSIGHTS_${workspaceSlug}` : null, () =>
 +    finance.fetchInsights(workspaceSlug)
 +  );
-+  useSWR(activeTab === "overview" ? `FINANCE_FORECAST_${workspaceSlug}` : null, () =>
++  useSWR(hasFullAccess && activeTab === "overview" ? `FINANCE_FORECAST_${workspaceSlug}` : null, () =>
 +    finance.fetchForecast(workspaceSlug)
 +  );
 +  // derived values
 +  const dashboard = finance.dashboardByWorkspace[workspaceSlug];
 +  const forecast = finance.forecastByWorkspace[workspaceSlug];
-+  const isAdmin = !!accessInfo?.is_admin;
 +  const isFiltered = !!rangeParams;
++  // the collections (cobranza) role only ever sees the pending-charges view
++  const isCollectionsOnly = !!accessInfo && !accessInfo.has_access && accessInfo.has_collections;
 +  const tabs: { key: TFinanceTab; label: string }[] = [
 +    { key: "overview", label: t("finance.tabs.overview") },
 +    { key: "clients", label: t("finance.tabs.clients") },
++    { key: "collections", label: t("finance.collections.title") },
 +    { key: "statements", label: t("finance.tabs_statements") },
 +    { key: "forecast", label: t("finance.tabs_forecast") },
-+    ...(isAdmin ? [{ key: "access" as const, label: t("finance.tabs.access") }] : []),
 +  ];
-+  const showPeriodFilter = activeTab === "overview" || activeTab === "clients" || activeTab === "statements";
++  const showPeriodFilter =
++    !isCollectionsOnly && (activeTab === "overview" || activeTab === "clients" || activeTab === "statements");
++
++  if (isCollectionsOnly)
++    return (
++      <div className="h-full w-full overflow-y-auto px-page-x py-4">
++        <FinanceCollectionsRoot workspaceSlug={workspaceSlug} />
++      </div>
++    );
 +
 +  return (
 +    <div className="flex h-full w-full flex-col overflow-hidden">
@@ -9551,8 +9621,8 @@ index 0000000..041a522
 +            <FinancePeriodFilter value={period} onChange={setPeriod} />
 +          </div>
 +        )}
-+        {activeTab === "access" && isAdmin ? (
-+          <FinanceAccessRoot workspaceSlug={workspaceSlug} />
++        {activeTab === "collections" ? (
++          <FinanceCollectionsRoot workspaceSlug={workspaceSlug} />
 +        ) : activeTab === "statements" ? (
 +          <FinanceStatementsRoot workspaceSlug={workspaceSlug} rangeParams={rangeParams} rangeKey={rangeKey} />
 +        ) : activeTab === "forecast" ? (
@@ -11158,6 +11228,123 @@ index 3d605d6..c085247 100644
        </div>
      </div>
    );
+diff --git a/apps/web/core/components/workspace/settings/finance-role-column.tsx b/apps/web/core/components/workspace/settings/finance-role-column.tsx
+new file mode 100644
+index 0000000..020a2ce
+--- /dev/null
++++ b/apps/web/core/components/workspace/settings/finance-role-column.tsx
+@@ -0,0 +1,73 @@
++/**
++ * Sintergica CE extension: per-member finance role selector shown in the
++ * workspace members table (admins only). "Financiero" sees and manages all
++ * finance data; "Cobranza" only sees pending charges and records payments.
++ * Derived from Plane CE code (AGPL-3.0-only).
++ */
++
++import { observer } from "mobx-react";
++import useSWR from "swr";
++// plane imports
++import { useTranslation } from "@plane/i18n";
++import { TOAST_TYPE, setToast } from "@plane/propel/toast";
++import { CustomSelect } from "@plane/ui";
++// hooks
++import { useFinance } from "@/hooks/store/use-finance";
++// services
++import type { TFinanceRole } from "@/services/finance.service";
++
++type TFinanceRoleValue = TFinanceRole | "none";
++
++const ROLE_OPTIONS: TFinanceRoleValue[] = ["none", "finance", "collections"];
++
++type TFinanceRoleColumnProps = {
++  workspaceSlug: string;
++  memberId: string;
++  /** admins have implicit full access; the selector is meaningless for them */
++  isMemberAdmin: boolean;
++  isSuspended: boolean;
++};
++
++export const FinanceRoleColumn = observer(function FinanceRoleColumn(props: TFinanceRoleColumnProps) {
++  const { workspaceSlug, memberId, isMemberAdmin, isSuspended } = props;
++  const { t } = useTranslation();
++  // store hooks
++  const finance = useFinance();
++  // one fetch feeds every row (SWR dedupes by key)
++  useSWR(`FINANCE_ACCESS_LIST_${workspaceSlug}`, () => finance.fetchAccessList(workspaceSlug));
++  // derived values
++  const row = (finance.accessListByWorkspace[workspaceSlug] ?? []).find((r) => r.member === memberId);
++  const value: TFinanceRoleValue = row?.role ?? "none";
++
++  if (isSuspended) return null;
++  if (isMemberAdmin)
++    return <div className="w-28 text-13 text-tertiary">{t("finance.members.admin_implicit")}</div>;
++
++  const handleChange = async (next: TFinanceRoleValue) => {
++    if (next === value) return;
++    try {
++      await finance.setMemberFinanceRole(workspaceSlug, memberId, next);
++    } catch (error: any) {
++      setToast({ type: TOAST_TYPE.ERROR, title: "Error!", message: error?.error || t("finance.form.error") });
++    }
++  };
++
++  return (
++    <CustomSelect
++      value={value}
++      onChange={(next: TFinanceRoleValue) => void handleChange(next)}
++      label={
++        <span className={value === "none" ? "text-tertiary" : "text-primary"}>
++          {t(`finance.members.role_${value}`)}
++        </span>
++      }
++      buttonClassName="w-28 justify-between"
++    >
++      {ROLE_OPTIONS.map((option) => (
++        <CustomSelect.Option key={option} value={option}>
++          {t(`finance.members.role_${option}`)}
++        </CustomSelect.Option>
++      ))}
++    </CustomSelect>
++  );
++});
+diff --git a/apps/web/core/components/workspace/settings/useMemberColumns.tsx b/apps/web/core/components/workspace/settings/useMemberColumns.tsx
+index fc60ff5..921934e 100644
+--- a/apps/web/core/components/workspace/settings/useMemberColumns.tsx
++++ b/apps/web/core/components/workspace/settings/useMemberColumns.tsx
+@@ -12,6 +12,8 @@ import { renderFormattedDate } from "@plane/utils";
+ import { MemberHeaderColumn } from "@/components/project/member-header-column";
+ import type { RowData } from "@/components/workspace/settings/member-columns";
+ import { AccountTypeColumn, NameColumn } from "@/components/workspace/settings/member-columns";
++// Sintergica CE extension
++import { FinanceRoleColumn } from "@/components/workspace/settings/finance-role-column";
+ import { useMember } from "@/hooks/store/use-member";
+ import { useUser, useUserPermissions } from "@/hooks/store/user";
+ import type { IMemberFilters } from "@/store/member/utils";
+@@ -108,6 +110,24 @@ export const useMemberColumns = () => {
+       tdRender: (rowData: RowData) => <AccountTypeColumn rowData={rowData} workspaceSlug={workspaceSlug} />,
+     },
+ 
++    // Sintergica CE extension: finance role (finance / collections) per member,
++    // manageable only by workspace admins.
++    ...(isAdmin
++      ? [
++          {
++            key: "Finance role",
++            content: t("finance.members.column"),
++            tdRender: (rowData: RowData) => (
++              <FinanceRoleColumn
++                workspaceSlug={workspaceSlug?.toString() ?? ""}
++                memberId={rowData.member.id}
++                isMemberAdmin={rowData.role === EUserPermissions.ADMIN}
++                isSuspended={rowData.is_active === false}
++              />
++            ),
++          },
++        ]
++      : []),
+     {
+       key: "Authentication",
+       content: t("workspace_settings.settings.members.details.authentication"),
 diff --git a/apps/web/core/components/workspace/sidebar/helper.tsx b/apps/web/core/components/workspace/sidebar/helper.tsx
 index 9bf4a01..44dfad5 100644
 --- a/apps/web/core/components/workspace/sidebar/helper.tsx
@@ -11249,7 +11436,7 @@ index 3582215..fff4ada 100644
  
    // memoized navigation items and adding additional navigation items
 diff --git a/apps/web/core/components/workspace/sidebar/sidebar-item.tsx b/apps/web/core/components/workspace/sidebar/sidebar-item.tsx
-index 03d3015..caccdec 100644
+index 03d3015..35cc02a 100644
 --- a/apps/web/core/components/workspace/sidebar/sidebar-item.tsx
 +++ b/apps/web/core/components/workspace/sidebar/sidebar-item.tsx
 @@ -17,6 +17,7 @@ import { joinUrlPath } from "@plane/utils";
@@ -11277,7 +11464,7 @@ index 03d3015..caccdec 100644
 +  // Sintergica: finance is gated by a per-user allowlist, not just by role.
 +  // Hidden until the access check confirms (undefined while loading).
 +  const financeAccess = useFinanceAccess(item.key === "finance" ? slug : undefined);
-+  if (item.key === "finance" && !financeAccess?.has_access) return null;
++  if (item.key === "finance" && !financeAccess?.has_access && !financeAccess?.has_collections) return null;
 +
    if (!allowPermissions(item.access, EUserPermissionsLevel.WORKSPACE, slug)) return null;
  
@@ -11457,10 +11644,10 @@ index 0000000..393a6e7
 +};
 diff --git a/apps/web/core/services/assistant.service.ts b/apps/web/core/services/assistant.service.ts
 new file mode 100644
-index 0000000..ea5dfd8
+index 0000000..3c9e1d1
 --- /dev/null
 +++ b/apps/web/core/services/assistant.service.ts
-@@ -0,0 +1,212 @@
+@@ -0,0 +1,259 @@
 +/**
 + * Sintergica CE extension: AI assistant service.
 + *
@@ -11503,6 +11690,18 @@ index 0000000..ea5dfd8
 +  created_at: string;
 +};
 +
++export type TAssistantAction = {
++  id: string;
++  tool_name: string;
++  arguments: Record<string, unknown>;
++  status: "pending" | "confirmed" | "rejected" | "executed" | "failed";
++  label: string;
++  detail: string;
++  result: Record<string, unknown> | null;
++  executed_at: string | null;
++  created_at: string;
++};
++
 +export type TAssistantConversation = {
 +  id: string;
 +  title: string;
@@ -11514,6 +11713,7 @@ index 0000000..ea5dfd8
 +  created_at: string;
 +  updated_at: string;
 +  messages?: TAssistantMessage[];
++  pending_actions?: TAssistantAction[];
 +};
 +
 +export type TAssistantContext = {
@@ -11533,6 +11733,13 @@ index 0000000..ea5dfd8
 +      data: { name: string; summary: string; error: string | null; links: Record<string, string> };
 +    }
 +  | { event: "done"; data: { message_id: string; usage: { input: number; output: number } } }
++  // Fase 2: el turno se detiene aquí y espera un clic humano.
++  | { event: "pending_action"; data: { id: string; tool: string; label: string; detail: string } }
++  | { event: "awaiting_confirmation"; data: { count: number } }
++  | {
++      event: "action_result";
++      data: { id: string; decision: "confirm" | "reject"; result: Record<string, unknown> };
++    }
 +  | { event: "error"; data: { code: string; message: string } };
 +
 +export class AssistantService extends APIService {
@@ -11600,6 +11807,23 @@ index 0000000..ea5dfd8
 +  }
 +
 +  /**
++   * Confirms or rejects a proposed write action and streams the continuation.
++   * This is the ONLY path that makes the assistant write to the workspace.
++   */
++  async *decideAction(
++    workspaceSlug: string,
++    actionId: string,
++    decision: "confirm" | "reject",
++    signal?: AbortSignal
++  ): AsyncGenerator<TStreamEvent> {
++    yield* this.streamPost(
++      `${API_BASE_URL}${this.base(workspaceSlug)}/actions/${actionId}/`,
++      { decision },
++      signal
++    );
++  }
++
++  /**
 +   * Sends a message and yields every SSE frame as it arrives.
 +   * `signal` lets the caller stop a running answer.
 +   */
@@ -11609,16 +11833,26 @@ index 0000000..ea5dfd8
 +    payload: { content: string; context?: TAssistantContext; model?: string },
 +    signal?: AbortSignal
 +  ): AsyncGenerator<TStreamEvent> {
-+    const response = await fetch(
++    yield* this.streamPost(
 +      `${API_BASE_URL}${this.base(workspaceSlug)}/conversations/${conversationId}/messages/`,
-+      {
-+        method: "POST",
-+        credentials: "include",
-+        headers: { "Content-Type": "application/json" },
-+        body: JSON.stringify(payload),
-+        signal,
-+      }
++      payload,
++      signal
 +    );
++  }
++
++  /** POST que devuelve un cuerpo SSE, leído trama a trama. */
++  private async *streamPost(
++    url: string,
++    payload: unknown,
++    signal?: AbortSignal
++  ): AsyncGenerator<TStreamEvent> {
++    const response = await fetch(url, {
++      method: "POST",
++      credentials: "include",
++      headers: { "Content-Type": "application/json" },
++      body: JSON.stringify(payload),
++      signal,
++    });
 +
 +    if (!response.ok || !response.body) {
 +      let detail = `HTTP ${response.status}`;
@@ -11851,10 +12085,10 @@ index 0000000..e6e6213
 +}
 diff --git a/apps/web/core/services/finance.service.ts b/apps/web/core/services/finance.service.ts
 new file mode 100644
-index 0000000..1652190
+index 0000000..a75b967
 --- /dev/null
 +++ b/apps/web/core/services/finance.service.ts
-@@ -0,0 +1,647 @@
+@@ -0,0 +1,701 @@
 +/**
 + * Sintergica CE extension: finance module service.
 + * Derived from Plane CE code (AGPL-3.0-only).
@@ -11870,19 +12104,39 @@ index 0000000..1652190
 +
 +export type TCurrency = "MXN" | "USD";
 +
++export type TFinanceRole = "finance" | "collections";
++
 +export type TFinanceAccessInfo = {
 +  has_access: boolean;
 +  is_admin: boolean;
++  role: "admin" | TFinanceRole | null;
++  has_collections: boolean;
 +};
 +
 +export type TFinanceAccessRow = {
 +  id: string;
 +  workspace: string;
 +  member: string;
++  role: TFinanceRole;
 +  member_display_name: string;
 +  member_email: string;
 +  member_avatar_url: string;
 +  created_at: string;
++};
++
++export type TCollectionInvoice = {
++  id: string;
++  project_id: string;
++  project_name: string;
++  concept: string;
++  amount: number;
++  paid_amount: number;
++  remaining: number;
++  currency: TCurrency;
++  issue_date: string;
++  due_date: string;
++  status: "pending" | "overdue";
++  days: number;
 +};
 +
 +export type TFinanceProfile = {
@@ -12051,6 +12305,40 @@ index 0000000..1652190
 +
 +  async grantAccess(workspaceSlug: string, memberIds: string[]): Promise<TFinanceAccessRow[]> {
 +    return this.post(`${this.wsUrl(workspaceSlug)}/access/`, { member_ids: memberIds })
++      .then((response) => response?.data)
++      .catch((error) => {
++        throw error?.response?.data;
++      });
++  }
++
++  /** Members-page upsert: assign, change or remove ("none") a finance role. */
++  async setMemberFinanceRole(
++    workspaceSlug: string,
++    memberId: string,
++    role: TFinanceRole | "none"
++  ): Promise<TFinanceAccessRow | null> {
++    return this.post(`${this.wsUrl(workspaceSlug)}/access/`, { member_id: memberId, role })
++      .then((response) => response?.data ?? null)
++      .catch((error) => {
++        throw error?.response?.data;
++      });
++  }
++
++  // ---------------------------------------------------------- collections
++  async fetchCollections(workspaceSlug: string): Promise<{ invoices: TCollectionInvoice[] }> {
++    return this.get(`${this.wsUrl(workspaceSlug)}/collections/`)
++      .then((response) => response?.data)
++      .catch((error) => {
++        throw error?.response?.data;
++      });
++  }
++
++  async createCollectionPayment(
++    workspaceSlug: string,
++    invoiceId: string,
++    data: { amount: string; paid_at: string; method?: string; reference?: string; notes?: string }
++  ): Promise<TPayment> {
++    return this.post(`${this.wsUrl(workspaceSlug)}/collections/${invoiceId}/payments/`, data)
 +      .then((response) => response?.data)
 +      .catch((error) => {
 +        throw error?.response?.data;
@@ -12696,10 +12984,10 @@ index 0000000..88015cd
 +}
 diff --git a/apps/web/core/store/assistant.store.ts b/apps/web/core/store/assistant.store.ts
 new file mode 100644
-index 0000000..4dfd4bb
+index 0000000..d2d9355
 --- /dev/null
 +++ b/apps/web/core/store/assistant.store.ts
-@@ -0,0 +1,335 @@
+@@ -0,0 +1,437 @@
 +/**
 + * Sintergica CE extension: AI assistant store.
 + * Derived from Plane CE code (AGPL-3.0-only).
@@ -12708,10 +12996,12 @@ index 0000000..4dfd4bb
 +import { action, makeObservable, observable, runInAction } from "mobx";
 +// services
 +import type {
++  TAssistantAction,
 +  TAssistantConfig,
 +  TAssistantContext,
 +  TAssistantConversation,
 +  TAssistantMessage,
++  TStreamEvent,
 +} from "@/services/assistant.service";
 +import { AssistantService } from "@/services/assistant.service";
 +// store
@@ -12737,6 +13027,8 @@ index 0000000..4dfd4bb
 +  toolTrace: TToolTraceEntry[];
 +  linkMap: Record<string, string>;
 +  errorMessage: string | null;
++  pendingActions: TAssistantAction[];
++  decidingActionId: string | null;
 +  // actions
 +  togglePanel: (value?: boolean) => void;
 +  fetchConfig: (workspaceSlug: string) => Promise<TAssistantConfig | undefined>;
@@ -12745,6 +13037,7 @@ index 0000000..4dfd4bb
 +  startConversation: (workspaceSlug: string, context?: TAssistantContext) => Promise<string | undefined>;
 +  sendMessage: (workspaceSlug: string, content: string, context?: TAssistantContext) => Promise<void>;
 +  stopStreaming: () => void;
++  decideAction: (workspaceSlug: string, actionId: string, decision: "confirm" | "reject") => Promise<void>;
 +  renameConversation: (workspaceSlug: string, conversationId: string, title: string) => Promise<void>;
 +  setModel: (workspaceSlug: string, model: string) => Promise<void>;
 +  deleteConversation: (workspaceSlug: string, conversationId: string) => Promise<void>;
@@ -12764,6 +13057,9 @@ index 0000000..4dfd4bb
 +  toolTrace: TToolTraceEntry[] = [];
 +  linkMap: Record<string, string> = {};
 +  errorMessage: string | null = null;
++  /** Propuestas de escritura esperando un clic. Nada se escribe sin esto. */
++  pendingActions: TAssistantAction[] = [];
++  decidingActionId: string | null = null;
 +
 +  // Not observable: an in-flight stream is machinery, not rendered state.
 +  private abortController: AbortController | null = null;
@@ -12783,6 +13079,8 @@ index 0000000..4dfd4bb
 +      toolTrace: observable,
 +      linkMap: observable,
 +      errorMessage: observable,
++      pendingActions: observable,
++      decidingActionId: observable,
 +      togglePanel: action,
 +      fetchConfig: action,
 +      fetchConversations: action,
@@ -12790,6 +13088,7 @@ index 0000000..4dfd4bb
 +      startConversation: action,
 +      sendMessage: action,
 +      stopStreaming: action,
++      decideAction: action,
 +      renameConversation: action,
 +      setModel: action,
 +      deleteConversation: action,
@@ -12806,6 +13105,7 @@ index 0000000..4dfd4bb
 +    this.streamingContent = "";
 +    this.toolTrace = [];
 +    this.errorMessage = null;
++    this.pendingActions = [];
 +  };
 +
 +  fetchConfig = async (workspaceSlug: string) => {
@@ -12838,6 +13138,8 @@ index 0000000..4dfd4bb
 +      this.streamingContent = "";
 +      this.toolTrace = [];
 +      this.errorMessage = null;
++      // Una propuesta sin decidir sobrevive a recargar la página.
++      this.pendingActions = conversation.pending_actions ?? [];
 +    });
 +  };
 +
@@ -12905,62 +13207,7 @@ index 0000000..4dfd4bb
 +        this.abortController.signal
 +      );
 +      for await (const frame of stream) {
-+        runInAction(() => {
-+          switch (frame.event) {
-+            case "token":
-+              this.streamingContent += frame.data.delta;
-+              break;
-+            case "tool_call":
-+              this.toolTrace = [
-+                ...this.toolTrace,
-+                { name: frame.data.name, summary: "", error: null, done: false },
-+              ];
-+              break;
-+            case "tool_result": {
-+              // Close the last open entry for this tool rather than the last
-+              // entry overall: several tools can be in flight in one turn.
-+              const index = [...this.toolTrace]
-+                .map((entry, i) => ({ entry, i }))
-+                .reverse()
-+                .find(({ entry }) => entry.name === frame.data.name && !entry.done)?.i;
-+              if (index !== undefined) {
-+                const next = [...this.toolTrace];
-+                next[index] = {
-+                  ...next[index],
-+                  summary: frame.data.summary,
-+                  error: frame.data.error,
-+                  done: true,
-+                };
-+                this.toolTrace = next;
-+              }
-+              if (frame.data.links) this.linkMap = { ...this.linkMap, ...frame.data.links };
-+              break;
-+            }
-+            case "done":
-+              this.messagesByConversation[conversationId!] = [
-+                ...(this.messagesByConversation[conversationId!] ?? []),
-+                {
-+                  id: frame.data.message_id,
-+                  role: "assistant",
-+                  content: this.streamingContent,
-+                  tool_name: null,
-+                  tool_calls: null,
-+                  sequence: optimisticUser.sequence + 1,
-+                  model: "",
-+                  input_tokens: frame.data.usage?.input ?? 0,
-+                  output_tokens: frame.data.usage?.output ?? 0,
-+                  created_at: new Date().toISOString(),
-+                },
-+              ];
-+              this.streamingContent = "";
-+              break;
-+            case "error":
-+              this.errorMessage = frame.data.message;
-+              break;
-+            default:
-+              break;
-+          }
-+        });
++        runInAction(() => this.applyFrame(frame, conversationId!));
 +      }
 +    } catch (error) {
 +      runInAction(() => {
@@ -12997,8 +13244,151 @@ index 0000000..4dfd4bb
 +    }
 +  };
 +
++  /** Una trama SSE. Compartido por enviar mensaje y confirmar una acción. */
++  private applyFrame = (frame: TStreamEvent, conversationId: string) => {
++    const nextSequence = () => (this.messagesByConversation[conversationId]?.length ?? 0) + 1;
++    switch (frame.event) {
++      case "token":
++        this.streamingContent += frame.data.delta;
++        break;
++      case "tool_call":
++        this.toolTrace = [
++          ...this.toolTrace,
++          { name: frame.data.name, summary: "", error: null, done: false },
++        ];
++        break;
++      case "tool_result": {
++        // Close the last open entry for this tool rather than the last entry
++        // overall: several tools can be in flight in one turn.
++        const index = [...this.toolTrace]
++          .map((entry, i) => ({ entry, i }))
++          .reverse()
++          .find(({ entry }) => entry.name === frame.data.name && !entry.done)?.i;
++        if (index !== undefined) {
++          const next = [...this.toolTrace];
++          next[index] = { ...next[index], summary: frame.data.summary, error: frame.data.error, done: true };
++          this.toolTrace = next;
++        }
++        if (frame.data.links) this.linkMap = { ...this.linkMap, ...frame.data.links };
++        break;
++      }
++      case "pending_action":
++        this.pendingActions = [
++          ...this.pendingActions,
++          {
++            id: frame.data.id,
++            tool_name: frame.data.tool,
++            arguments: {},
++            status: "pending",
++            label: frame.data.label,
++            detail: frame.data.detail,
++            result: null,
++            executed_at: null,
++            created_at: new Date().toISOString(),
++          },
++        ];
++        break;
++      case "awaiting_confirmation":
++        // El turno terminó sin respuesta: la pelota está en el usuario.
++        this.flushStreamingContent(conversationId);
++        break;
++      case "action_result":
++        this.pendingActions = this.pendingActions.filter((a) => a.id !== frame.data.id);
++        break;
++      case "done":
++        this.messagesByConversation[conversationId] = [
++          ...(this.messagesByConversation[conversationId] ?? []),
++          {
++            id: frame.data.message_id,
++            role: "assistant",
++            content: this.streamingContent,
++            tool_name: null,
++            tool_calls: null,
++            sequence: nextSequence(),
++            model: "",
++            input_tokens: frame.data.usage?.input ?? 0,
++            output_tokens: frame.data.usage?.output ?? 0,
++            created_at: new Date().toISOString(),
++          },
++        ];
++        this.streamingContent = "";
++        break;
++      case "error":
++        this.errorMessage = frame.data.message;
++        break;
++      default:
++        break;
++    }
++  };
++
++  /** Conserva el texto que ya había llegado como un turno cerrado. */
++  private flushStreamingContent = (conversationId: string) => {
++    if (!this.streamingContent) return;
++    this.messagesByConversation[conversationId] = [
++      ...(this.messagesByConversation[conversationId] ?? []),
++      {
++        id: `partial-${Date.now()}`,
++        role: "assistant",
++        content: this.streamingContent,
++        tool_name: null,
++        tool_calls: null,
++        sequence: (this.messagesByConversation[conversationId]?.length ?? 0) + 1,
++        model: "",
++        input_tokens: 0,
++        output_tokens: 0,
++        created_at: new Date().toISOString(),
++      },
++    ];
++    this.streamingContent = "";
++  };
++
 +  stopStreaming = () => {
 +    this.abortController?.abort();
++  };
++
++  decideAction = async (
++    workspaceSlug: string,
++    actionId: string,
++    decision: "confirm" | "reject"
++  ) => {
++    const conversationId = this.activeConversationId;
++    if (!conversationId || this.isStreaming || this.decidingActionId) return;
++    runInAction(() => {
++      this.decidingActionId = actionId;
++      this.isStreaming = true;
++      this.errorMessage = null;
++      this.toolTrace = [];
++    });
++    this.abortController = new AbortController();
++    try {
++      const stream = this.service.decideAction(
++        workspaceSlug,
++        actionId,
++        decision,
++        this.abortController.signal
++      );
++      for await (const frame of stream) {
++        runInAction(() => this.applyFrame(frame, conversationId));
++      }
++    } catch (error) {
++      runInAction(() => {
++        if ((error as Error)?.name !== "AbortError") {
++          this.errorMessage = (error as Error)?.message ?? "Error de red";
++        }
++      });
++    } finally {
++      runInAction(() => {
++        this.flushStreamingContent(conversationId);
++        // Si el backend rechazó la petición, la acción sigue pendiente en su
++        // lado: se quita igualmente para no dejar un botón que no hace nada,
++        // y openConversation la recupera si de verdad sigue viva.
++        this.pendingActions = this.pendingActions.filter((a) => a.id !== actionId);
++        this.decidingActionId = null;
++        this.isStreaming = false;
++        this.abortController = null;
++      });
++      void this.fetchConversations(workspaceSlug).catch(() => undefined);
++    }
 +  };
 +
 +  renameConversation = async (workspaceSlug: string, conversationId: string, title: string) => {
@@ -13289,10 +13679,10 @@ index 0000000..dfbf334
 +}
 diff --git a/apps/web/core/store/finance.store.ts b/apps/web/core/store/finance.store.ts
 new file mode 100644
-index 0000000..728fc9e
+index 0000000..9894269
 --- /dev/null
 +++ b/apps/web/core/store/finance.store.ts
-@@ -0,0 +1,566 @@
+@@ -0,0 +1,606 @@
 +/**
 + * Sintergica CE extension: finance store.
 + * Derived from Plane CE code (AGPL-3.0-only).
@@ -13304,6 +13694,8 @@ index 0000000..728fc9e
 +// services
 +import type {
 +  TCashSnapshot,
++  TCollectionInvoice,
++  TFinanceRole,
 +  TFinanceAnalysis,
 +  TFinanceRangeParams,
 +  TContract,
@@ -13340,6 +13732,7 @@ index 0000000..728fc9e
 +  expensesByWorkspace: Record<string, TExpenseEntry[]>;
 +  cashByWorkspace: Record<string, TCashSnapshot[]>;
 +  analysesByWorkspace: Record<string, TFinanceAnalysis[]>;
++  collectionsByWorkspace: Record<string, TCollectionInvoice[]>;
 +  // helpers
 +  getAccessInfo: (workspaceSlug: string) => TFinanceAccessInfo | undefined;
 +  // actions
@@ -13347,6 +13740,13 @@ index 0000000..728fc9e
 +  fetchDashboard: (workspaceSlug: string, params?: TFinanceRangeParams) => Promise<TFinanceDashboard>;
 +  fetchAccessList: (workspaceSlug: string) => Promise<TFinanceAccessRow[]>;
 +  grantAccess: (workspaceSlug: string, memberIds: string[]) => Promise<void>;
++  setMemberFinanceRole: (workspaceSlug: string, memberId: string, role: TFinanceRole | "none") => Promise<void>;
++  fetchCollections: (workspaceSlug: string) => Promise<TCollectionInvoice[]>;
++  createCollectionPayment: (
++    workspaceSlug: string,
++    invoiceId: string,
++    data: { amount: string; paid_at: string; method?: string; reference?: string }
++  ) => Promise<void>;
 +  revokeAccess: (workspaceSlug: string, accessId: string) => Promise<void>;
 +  fetchProfile: (workspaceSlug: string, projectId: string) => Promise<TFinanceProfile | null>;
 +  saveProfile: (
@@ -13419,6 +13819,7 @@ index 0000000..728fc9e
 +  expensesByWorkspace: Record<string, TExpenseEntry[]> = {};
 +  cashByWorkspace: Record<string, TCashSnapshot[]> = {};
 +  analysesByWorkspace: Record<string, TFinanceAnalysis[]> = {};
++  collectionsByWorkspace: Record<string, TCollectionInvoice[]> = {};
 +  // internal: one in-flight access request per workspace
 +  private accessInFlight: Record<string, Promise<TFinanceAccessInfo | undefined>> = {};
 +  // root store
@@ -13444,6 +13845,7 @@ index 0000000..728fc9e
 +      expensesByWorkspace: observable,
 +      cashByWorkspace: observable,
 +      analysesByWorkspace: observable,
++      collectionsByWorkspace: observable,
 +      fetchAccessInfo: action,
 +      fetchDashboard: action,
 +      fetchAccessList: action,
@@ -13479,6 +13881,9 @@ index 0000000..728fc9e
 +      deleteAnalysis: action,
 +      uploadCsf: action,
 +      deleteCsf: action,
++      setMemberFinanceRole: action,
++      fetchCollections: action,
++      createCollectionPayment: action,
 +    });
 +    this.rootStore = store;
 +    this.service = new FinanceService();
@@ -13532,6 +13937,31 @@ index 0000000..728fc9e
 +  grantAccess = async (workspaceSlug: string, memberIds: string[]) => {
 +    await this.service.grantAccess(workspaceSlug, memberIds);
 +    await this.fetchAccessList(workspaceSlug);
++  };
++
++  setMemberFinanceRole = async (workspaceSlug: string, memberId: string, role: TFinanceRole | "none") => {
++    const row = await this.service.setMemberFinanceRole(workspaceSlug, memberId, role);
++    runInAction(() => {
++      const rest = (this.accessListByWorkspace[workspaceSlug] ?? []).filter((r) => r.member !== memberId);
++      set(this.accessListByWorkspace, [workspaceSlug], row ? [row, ...rest] : rest);
++    });
++  };
++
++  fetchCollections = async (workspaceSlug: string) => {
++    const data = await this.service.fetchCollections(workspaceSlug);
++    runInAction(() => {
++      set(this.collectionsByWorkspace, [workspaceSlug], data.invoices);
++    });
++    return data.invoices;
++  };
++
++  createCollectionPayment = async (
++    workspaceSlug: string,
++    invoiceId: string,
++    data: { amount: string; paid_at: string; method?: string; reference?: string }
++  ) => {
++    await this.service.createCollectionPayment(workspaceSlug, invoiceId, data);
++    await this.fetchCollections(workspaceSlug);
 +  };
 +
 +  revokeAccess = async (workspaceSlug: string, accessId: string) => {
@@ -14683,10 +15113,10 @@ index 0000000..8a34af5
 +  );
 +}
 diff --git a/packages/i18n/src/locales/cs/common.json b/packages/i18n/src/locales/cs/common.json
-index c1e9372..b90bdfd 100644
+index c1e9372..4903782 100644
 --- a/packages/i18n/src/locales/cs/common.json
 +++ b/packages/i18n/src/locales/cs/common.json
-@@ -867,5 +867,336 @@
+@@ -867,5 +867,352 @@
        "description": "Exportujte položky do JSON.",
        "short_description": "Exportovat jako JSON"
      }
@@ -15020,6 +15450,22 @@ index c1e9372..b90bdfd 100644
 +      "csf_pdf_only": "The CSF must be a PDF file.",
 +      "csf_too_big": "The PDF must be 10 MB or less.",
 +      "invalid_rfc": "Invalid RFC (e.g. XAXX010101000)."
++    },
++    "members": {
++      "column": "Finance",
++      "role_none": "No access",
++      "role_finance": "Finance",
++      "role_collections": "Collections",
++      "admin_implicit": "Admin (always)"
++    },
++    "collections": {
++      "title": "Collections",
++      "description": "Pending charges across all clients. Record payments here as they arrive.",
++      "empty": "No pending charges.",
++      "register": "Record payment",
++      "registered": "Payment recorded.",
++      "remaining": "Remaining",
++      "overdue_days": "Overdue by {days} d"
 +    }
    }
  }
@@ -15037,10 +15483,10 @@ index d340abf..9e643cc 100644
    }
  }
 diff --git a/packages/i18n/src/locales/de/common.json b/packages/i18n/src/locales/de/common.json
-index 1e18d4e..7f4dbc7 100644
+index 1e18d4e..b36aaba 100644
 --- a/packages/i18n/src/locales/de/common.json
 +++ b/packages/i18n/src/locales/de/common.json
-@@ -867,5 +867,336 @@
+@@ -867,5 +867,352 @@
        "description": "Arbeitselemente in JSON exportieren.",
        "short_description": "Als JSON exportieren"
      }
@@ -15374,6 +15820,22 @@ index 1e18d4e..7f4dbc7 100644
 +      "csf_pdf_only": "The CSF must be a PDF file.",
 +      "csf_too_big": "The PDF must be 10 MB or less.",
 +      "invalid_rfc": "Invalid RFC (e.g. XAXX010101000)."
++    },
++    "members": {
++      "column": "Finance",
++      "role_none": "No access",
++      "role_finance": "Finance",
++      "role_collections": "Collections",
++      "admin_implicit": "Admin (always)"
++    },
++    "collections": {
++      "title": "Collections",
++      "description": "Pending charges across all clients. Record payments here as they arrive.",
++      "empty": "No pending charges.",
++      "register": "Record payment",
++      "registered": "Payment recorded.",
++      "remaining": "Remaining",
++      "overdue_days": "Overdue by {days} d"
 +    }
    }
  }
@@ -15391,10 +15853,10 @@ index bf22b25..2ff9605 100644
    }
  }
 diff --git a/packages/i18n/src/locales/en/common.json b/packages/i18n/src/locales/en/common.json
-index a138304..7586da5 100644
+index a138304..a802d9a 100644
 --- a/packages/i18n/src/locales/en/common.json
 +++ b/packages/i18n/src/locales/en/common.json
-@@ -867,5 +867,336 @@
+@@ -867,5 +867,352 @@
        "description": "Export work items to a JSON file.",
        "short_description": "Export as json"
      }
@@ -15728,6 +16190,22 @@ index a138304..7586da5 100644
 +      "csf_pdf_only": "The CSF must be a PDF file.",
 +      "csf_too_big": "The PDF must be 10 MB or less.",
 +      "invalid_rfc": "Invalid RFC (e.g. XAXX010101000)."
++    },
++    "members": {
++      "column": "Finance",
++      "role_none": "No access",
++      "role_finance": "Finance",
++      "role_collections": "Collections",
++      "admin_implicit": "Admin (always)"
++    },
++    "collections": {
++      "title": "Collections",
++      "description": "Pending charges across all clients. Record payments here as they arrive.",
++      "empty": "No pending charges.",
++      "register": "Record payment",
++      "registered": "Payment recorded.",
++      "remaining": "Remaining",
++      "overdue_days": "Overdue by {days} d"
 +    }
    }
  }
@@ -15747,10 +16225,10 @@ index 883e981..b341231 100644
    }
  }
 diff --git a/packages/i18n/src/locales/es/common.json b/packages/i18n/src/locales/es/common.json
-index 64440c9..22c29a2 100644
+index 64440c9..5272473 100644
 --- a/packages/i18n/src/locales/es/common.json
 +++ b/packages/i18n/src/locales/es/common.json
-@@ -867,5 +867,336 @@
+@@ -867,5 +867,352 @@
        "description": "Exporta elementos de trabajo a un archivo JSON.",
        "short_description": "Exportar como json"
      }
@@ -16084,6 +16562,22 @@ index 64440c9..22c29a2 100644
 +      "csf_pdf_only": "La CSF debe ser un archivo PDF.",
 +      "csf_too_big": "El PDF no debe pesar más de 10 MB.",
 +      "invalid_rfc": "RFC inválido (ej. XAXX010101000)."
++    },
++    "members": {
++      "column": "Finanzas",
++      "role_none": "Sin acceso",
++      "role_finance": "Financiero",
++      "role_collections": "Cobranza",
++      "admin_implicit": "Admin (siempre)"
++    },
++    "collections": {
++      "title": "Cobranza",
++      "description": "Cobros pendientes de todos los clientes. Registra aquí los pagos conforme lleguen.",
++      "empty": "No hay cobros pendientes.",
++      "register": "Registrar pago",
++      "registered": "Pago registrado.",
++      "remaining": "Restante",
++      "overdue_days": "Vencido hace {days} d"
 +    }
    }
  }
@@ -16103,10 +16597,10 @@ index 3c04912..a28d094 100644
    }
  }
 diff --git a/packages/i18n/src/locales/fr/common.json b/packages/i18n/src/locales/fr/common.json
-index a94ab8a..f7aa951 100644
+index a94ab8a..9cc7bf5 100644
 --- a/packages/i18n/src/locales/fr/common.json
 +++ b/packages/i18n/src/locales/fr/common.json
-@@ -867,5 +867,336 @@
+@@ -867,5 +867,352 @@
        "description": "Exportez les éléments de travail vers un fichier JSON.",
        "short_description": "Exporter en json"
      }
@@ -16440,6 +16934,22 @@ index a94ab8a..f7aa951 100644
 +      "csf_pdf_only": "The CSF must be a PDF file.",
 +      "csf_too_big": "The PDF must be 10 MB or less.",
 +      "invalid_rfc": "Invalid RFC (e.g. XAXX010101000)."
++    },
++    "members": {
++      "column": "Finance",
++      "role_none": "No access",
++      "role_finance": "Finance",
++      "role_collections": "Collections",
++      "admin_implicit": "Admin (always)"
++    },
++    "collections": {
++      "title": "Collections",
++      "description": "Pending charges across all clients. Record payments here as they arrive.",
++      "empty": "No pending charges.",
++      "register": "Record payment",
++      "registered": "Payment recorded.",
++      "remaining": "Remaining",
++      "overdue_days": "Overdue by {days} d"
 +    }
    }
  }
@@ -16457,10 +16967,10 @@ index 2c77344..1b8d346 100644
    }
  }
 diff --git a/packages/i18n/src/locales/id/common.json b/packages/i18n/src/locales/id/common.json
-index 7d26685..70e74e2 100644
+index 7d26685..f945039 100644
 --- a/packages/i18n/src/locales/id/common.json
 +++ b/packages/i18n/src/locales/id/common.json
-@@ -867,5 +867,336 @@
+@@ -867,5 +867,352 @@
        "description": "Ekspor item kerja ke file JSON.",
        "short_description": "Ekspor sebagai json"
      }
@@ -16794,6 +17304,22 @@ index 7d26685..70e74e2 100644
 +      "csf_pdf_only": "The CSF must be a PDF file.",
 +      "csf_too_big": "The PDF must be 10 MB or less.",
 +      "invalid_rfc": "Invalid RFC (e.g. XAXX010101000)."
++    },
++    "members": {
++      "column": "Finance",
++      "role_none": "No access",
++      "role_finance": "Finance",
++      "role_collections": "Collections",
++      "admin_implicit": "Admin (always)"
++    },
++    "collections": {
++      "title": "Collections",
++      "description": "Pending charges across all clients. Record payments here as they arrive.",
++      "empty": "No pending charges.",
++      "register": "Record payment",
++      "registered": "Payment recorded.",
++      "remaining": "Remaining",
++      "overdue_days": "Overdue by {days} d"
 +    }
    }
  }
@@ -16811,10 +17337,10 @@ index 4a77755..a3f3b1c 100644
    }
  }
 diff --git a/packages/i18n/src/locales/it/common.json b/packages/i18n/src/locales/it/common.json
-index 6fda1b0..3e52775 100644
+index 6fda1b0..f72a15a 100644
 --- a/packages/i18n/src/locales/it/common.json
 +++ b/packages/i18n/src/locales/it/common.json
-@@ -867,5 +867,336 @@
+@@ -867,5 +867,352 @@
        "description": "Esporta elementi di lavoro in un file JSON.",
        "short_description": "Esporta come JSON"
      }
@@ -17148,6 +17674,22 @@ index 6fda1b0..3e52775 100644
 +      "csf_pdf_only": "The CSF must be a PDF file.",
 +      "csf_too_big": "The PDF must be 10 MB or less.",
 +      "invalid_rfc": "Invalid RFC (e.g. XAXX010101000)."
++    },
++    "members": {
++      "column": "Finance",
++      "role_none": "No access",
++      "role_finance": "Finance",
++      "role_collections": "Collections",
++      "admin_implicit": "Admin (always)"
++    },
++    "collections": {
++      "title": "Collections",
++      "description": "Pending charges across all clients. Record payments here as they arrive.",
++      "empty": "No pending charges.",
++      "register": "Record payment",
++      "registered": "Payment recorded.",
++      "remaining": "Remaining",
++      "overdue_days": "Overdue by {days} d"
 +    }
    }
  }
@@ -17165,10 +17707,10 @@ index db31c30..0b8533f 100644
    }
  }
 diff --git a/packages/i18n/src/locales/ja/common.json b/packages/i18n/src/locales/ja/common.json
-index 4899411..71bc74e 100644
+index 4899411..aefc8e3 100644
 --- a/packages/i18n/src/locales/ja/common.json
 +++ b/packages/i18n/src/locales/ja/common.json
-@@ -867,5 +867,336 @@
+@@ -867,5 +867,352 @@
        "description": "作業項目をJSONファイルにエクスポートします。",
        "short_description": "JSONとしてエクスポート"
      }
@@ -17502,6 +18044,22 @@ index 4899411..71bc74e 100644
 +      "csf_pdf_only": "The CSF must be a PDF file.",
 +      "csf_too_big": "The PDF must be 10 MB or less.",
 +      "invalid_rfc": "Invalid RFC (e.g. XAXX010101000)."
++    },
++    "members": {
++      "column": "Finance",
++      "role_none": "No access",
++      "role_finance": "Finance",
++      "role_collections": "Collections",
++      "admin_implicit": "Admin (always)"
++    },
++    "collections": {
++      "title": "Collections",
++      "description": "Pending charges across all clients. Record payments here as they arrive.",
++      "empty": "No pending charges.",
++      "register": "Record payment",
++      "registered": "Payment recorded.",
++      "remaining": "Remaining",
++      "overdue_days": "Overdue by {days} d"
 +    }
    }
  }
@@ -17519,10 +18077,10 @@ index 207ec74..5a69b51 100644
    }
  }
 diff --git a/packages/i18n/src/locales/ko/common.json b/packages/i18n/src/locales/ko/common.json
-index 73eea6b..3ea3c7b 100644
+index 73eea6b..1326a41 100644
 --- a/packages/i18n/src/locales/ko/common.json
 +++ b/packages/i18n/src/locales/ko/common.json
-@@ -867,5 +867,336 @@
+@@ -867,5 +867,352 @@
        "description": "작업 항목을 JSON 파일로 내보냅니다.",
        "short_description": "JSON으로 내보내기"
      }
@@ -17856,6 +18414,22 @@ index 73eea6b..3ea3c7b 100644
 +      "csf_pdf_only": "The CSF must be a PDF file.",
 +      "csf_too_big": "The PDF must be 10 MB or less.",
 +      "invalid_rfc": "Invalid RFC (e.g. XAXX010101000)."
++    },
++    "members": {
++      "column": "Finance",
++      "role_none": "No access",
++      "role_finance": "Finance",
++      "role_collections": "Collections",
++      "admin_implicit": "Admin (always)"
++    },
++    "collections": {
++      "title": "Collections",
++      "description": "Pending charges across all clients. Record payments here as they arrive.",
++      "empty": "No pending charges.",
++      "register": "Record payment",
++      "registered": "Payment recorded.",
++      "remaining": "Remaining",
++      "overdue_days": "Overdue by {days} d"
 +    }
    }
  }
@@ -17873,10 +18447,10 @@ index 86ba3b7..ed2b818 100644
    }
  }
 diff --git a/packages/i18n/src/locales/pl/common.json b/packages/i18n/src/locales/pl/common.json
-index 4c4850c..0c5cbd9 100644
+index 4c4850c..89989a9 100644
 --- a/packages/i18n/src/locales/pl/common.json
 +++ b/packages/i18n/src/locales/pl/common.json
-@@ -867,5 +867,336 @@
+@@ -867,5 +867,352 @@
        "description": "Eksportuj elementy do pliku JSON.",
        "short_description": "Eksportuj jako JSON"
      }
@@ -18210,6 +18784,22 @@ index 4c4850c..0c5cbd9 100644
 +      "csf_pdf_only": "The CSF must be a PDF file.",
 +      "csf_too_big": "The PDF must be 10 MB or less.",
 +      "invalid_rfc": "Invalid RFC (e.g. XAXX010101000)."
++    },
++    "members": {
++      "column": "Finance",
++      "role_none": "No access",
++      "role_finance": "Finance",
++      "role_collections": "Collections",
++      "admin_implicit": "Admin (always)"
++    },
++    "collections": {
++      "title": "Collections",
++      "description": "Pending charges across all clients. Record payments here as they arrive.",
++      "empty": "No pending charges.",
++      "register": "Record payment",
++      "registered": "Payment recorded.",
++      "remaining": "Remaining",
++      "overdue_days": "Overdue by {days} d"
 +    }
    }
  }
@@ -18227,10 +18817,10 @@ index 3089b6d..58f309c 100644
    }
  }
 diff --git a/packages/i18n/src/locales/pt-BR/common.json b/packages/i18n/src/locales/pt-BR/common.json
-index 565e85d..f5a29cb 100644
+index 565e85d..57e8710 100644
 --- a/packages/i18n/src/locales/pt-BR/common.json
 +++ b/packages/i18n/src/locales/pt-BR/common.json
-@@ -867,5 +867,336 @@
+@@ -867,5 +867,352 @@
        "description": "Exporte itens de trabalho para um arquivo JSON.",
        "short_description": "Exportar como JSON"
      }
@@ -18564,6 +19154,22 @@ index 565e85d..f5a29cb 100644
 +      "csf_pdf_only": "The CSF must be a PDF file.",
 +      "csf_too_big": "The PDF must be 10 MB or less.",
 +      "invalid_rfc": "Invalid RFC (e.g. XAXX010101000)."
++    },
++    "members": {
++      "column": "Finance",
++      "role_none": "No access",
++      "role_finance": "Finance",
++      "role_collections": "Collections",
++      "admin_implicit": "Admin (always)"
++    },
++    "collections": {
++      "title": "Collections",
++      "description": "Pending charges across all clients. Record payments here as they arrive.",
++      "empty": "No pending charges.",
++      "register": "Record payment",
++      "registered": "Payment recorded.",
++      "remaining": "Remaining",
++      "overdue_days": "Overdue by {days} d"
 +    }
    }
  }
@@ -18581,10 +19187,10 @@ index c2a2d62..ffc5645 100644
    }
  }
 diff --git a/packages/i18n/src/locales/ro/common.json b/packages/i18n/src/locales/ro/common.json
-index e2b44ce..aece30d 100644
+index e2b44ce..3eb1f46 100644
 --- a/packages/i18n/src/locales/ro/common.json
 +++ b/packages/i18n/src/locales/ro/common.json
-@@ -867,5 +867,336 @@
+@@ -867,5 +867,352 @@
        "description": "Exportă activitățile într-un fișier JSON.",
        "short_description": "Exportă ca JSON"
      }
@@ -18918,6 +19524,22 @@ index e2b44ce..aece30d 100644
 +      "csf_pdf_only": "The CSF must be a PDF file.",
 +      "csf_too_big": "The PDF must be 10 MB or less.",
 +      "invalid_rfc": "Invalid RFC (e.g. XAXX010101000)."
++    },
++    "members": {
++      "column": "Finance",
++      "role_none": "No access",
++      "role_finance": "Finance",
++      "role_collections": "Collections",
++      "admin_implicit": "Admin (always)"
++    },
++    "collections": {
++      "title": "Collections",
++      "description": "Pending charges across all clients. Record payments here as they arrive.",
++      "empty": "No pending charges.",
++      "register": "Record payment",
++      "registered": "Payment recorded.",
++      "remaining": "Remaining",
++      "overdue_days": "Overdue by {days} d"
 +    }
    }
  }
@@ -18935,10 +19557,10 @@ index e56d5aa..ff5227d 100644
    }
  }
 diff --git a/packages/i18n/src/locales/ru/common.json b/packages/i18n/src/locales/ru/common.json
-index c2881e5..3941983 100644
+index c2881e5..421fcd4 100644
 --- a/packages/i18n/src/locales/ru/common.json
 +++ b/packages/i18n/src/locales/ru/common.json
-@@ -867,5 +867,336 @@
+@@ -867,5 +867,352 @@
        "description": "Экспорт рабочих элементов в JSON-файл.",
        "short_description": "Экспорт в json"
      }
@@ -19272,6 +19894,22 @@ index c2881e5..3941983 100644
 +      "csf_pdf_only": "The CSF must be a PDF file.",
 +      "csf_too_big": "The PDF must be 10 MB or less.",
 +      "invalid_rfc": "Invalid RFC (e.g. XAXX010101000)."
++    },
++    "members": {
++      "column": "Finance",
++      "role_none": "No access",
++      "role_finance": "Finance",
++      "role_collections": "Collections",
++      "admin_implicit": "Admin (always)"
++    },
++    "collections": {
++      "title": "Collections",
++      "description": "Pending charges across all clients. Record payments here as they arrive.",
++      "empty": "No pending charges.",
++      "register": "Record payment",
++      "registered": "Payment recorded.",
++      "remaining": "Remaining",
++      "overdue_days": "Overdue by {days} d"
 +    }
    }
  }
@@ -19289,10 +19927,10 @@ index 80bbdd8..5647d12 100644
    }
  }
 diff --git a/packages/i18n/src/locales/sk/common.json b/packages/i18n/src/locales/sk/common.json
-index 4fc339c..a3cc221 100644
+index 4fc339c..c30d0da 100644
 --- a/packages/i18n/src/locales/sk/common.json
 +++ b/packages/i18n/src/locales/sk/common.json
-@@ -867,5 +867,336 @@
+@@ -867,5 +867,352 @@
        "description": "Exportujte položky do JSON.",
        "short_description": "Exportovať ako JSON"
      }
@@ -19626,6 +20264,22 @@ index 4fc339c..a3cc221 100644
 +      "csf_pdf_only": "The CSF must be a PDF file.",
 +      "csf_too_big": "The PDF must be 10 MB or less.",
 +      "invalid_rfc": "Invalid RFC (e.g. XAXX010101000)."
++    },
++    "members": {
++      "column": "Finance",
++      "role_none": "No access",
++      "role_finance": "Finance",
++      "role_collections": "Collections",
++      "admin_implicit": "Admin (always)"
++    },
++    "collections": {
++      "title": "Collections",
++      "description": "Pending charges across all clients. Record payments here as they arrive.",
++      "empty": "No pending charges.",
++      "register": "Record payment",
++      "registered": "Payment recorded.",
++      "remaining": "Remaining",
++      "overdue_days": "Overdue by {days} d"
 +    }
    }
  }
@@ -19643,10 +20297,10 @@ index 0d09286..1156fc4 100644
    }
  }
 diff --git a/packages/i18n/src/locales/tr-TR/common.json b/packages/i18n/src/locales/tr-TR/common.json
-index 74bd5cb..0777e0f 100644
+index 74bd5cb..3ed4897 100644
 --- a/packages/i18n/src/locales/tr-TR/common.json
 +++ b/packages/i18n/src/locales/tr-TR/common.json
-@@ -867,5 +867,336 @@
+@@ -867,5 +867,352 @@
        "description": "İş öğelerini JSON dosyasına aktarın.",
        "short_description": "JSON olarak aktar"
      }
@@ -19980,6 +20634,22 @@ index 74bd5cb..0777e0f 100644
 +      "csf_pdf_only": "The CSF must be a PDF file.",
 +      "csf_too_big": "The PDF must be 10 MB or less.",
 +      "invalid_rfc": "Invalid RFC (e.g. XAXX010101000)."
++    },
++    "members": {
++      "column": "Finance",
++      "role_none": "No access",
++      "role_finance": "Finance",
++      "role_collections": "Collections",
++      "admin_implicit": "Admin (always)"
++    },
++    "collections": {
++      "title": "Collections",
++      "description": "Pending charges across all clients. Record payments here as they arrive.",
++      "empty": "No pending charges.",
++      "register": "Record payment",
++      "registered": "Payment recorded.",
++      "remaining": "Remaining",
++      "overdue_days": "Overdue by {days} d"
 +    }
    }
  }
@@ -19997,10 +20667,10 @@ index f347e01..8640ecb 100644
    }
  }
 diff --git a/packages/i18n/src/locales/ua/common.json b/packages/i18n/src/locales/ua/common.json
-index 89bd906..ba48920 100644
+index 89bd906..a891193 100644
 --- a/packages/i18n/src/locales/ua/common.json
 +++ b/packages/i18n/src/locales/ua/common.json
-@@ -867,5 +867,336 @@
+@@ -867,5 +867,352 @@
        "description": "Експортуйте одиниці у формат JSON.",
        "short_description": "Експортувати як JSON"
      }
@@ -20334,6 +21004,22 @@ index 89bd906..ba48920 100644
 +      "csf_pdf_only": "The CSF must be a PDF file.",
 +      "csf_too_big": "The PDF must be 10 MB or less.",
 +      "invalid_rfc": "Invalid RFC (e.g. XAXX010101000)."
++    },
++    "members": {
++      "column": "Finance",
++      "role_none": "No access",
++      "role_finance": "Finance",
++      "role_collections": "Collections",
++      "admin_implicit": "Admin (always)"
++    },
++    "collections": {
++      "title": "Collections",
++      "description": "Pending charges across all clients. Record payments here as they arrive.",
++      "empty": "No pending charges.",
++      "register": "Record payment",
++      "registered": "Payment recorded.",
++      "remaining": "Remaining",
++      "overdue_days": "Overdue by {days} d"
 +    }
    }
  }
@@ -20351,10 +21037,10 @@ index 742ef12..0a00df0 100644
    }
  }
 diff --git a/packages/i18n/src/locales/vi-VN/common.json b/packages/i18n/src/locales/vi-VN/common.json
-index f9aae43..08ab48b 100644
+index f9aae43..bf8a768 100644
 --- a/packages/i18n/src/locales/vi-VN/common.json
 +++ b/packages/i18n/src/locales/vi-VN/common.json
-@@ -867,5 +867,336 @@
+@@ -867,5 +867,352 @@
        "description": "Xuất mục công việc thành tệp JSON.",
        "short_description": "Xuất sang JSON"
      }
@@ -20688,6 +21374,22 @@ index f9aae43..08ab48b 100644
 +      "csf_pdf_only": "The CSF must be a PDF file.",
 +      "csf_too_big": "The PDF must be 10 MB or less.",
 +      "invalid_rfc": "Invalid RFC (e.g. XAXX010101000)."
++    },
++    "members": {
++      "column": "Finance",
++      "role_none": "No access",
++      "role_finance": "Finance",
++      "role_collections": "Collections",
++      "admin_implicit": "Admin (always)"
++    },
++    "collections": {
++      "title": "Collections",
++      "description": "Pending charges across all clients. Record payments here as they arrive.",
++      "empty": "No pending charges.",
++      "register": "Record payment",
++      "registered": "Payment recorded.",
++      "remaining": "Remaining",
++      "overdue_days": "Overdue by {days} d"
 +    }
    }
  }
@@ -20705,10 +21407,10 @@ index 1e5d213..7e59d27 100644
    }
  }
 diff --git a/packages/i18n/src/locales/zh-CN/common.json b/packages/i18n/src/locales/zh-CN/common.json
-index dd67d92..fa33dd4 100644
+index dd67d92..78177ab 100644
 --- a/packages/i18n/src/locales/zh-CN/common.json
 +++ b/packages/i18n/src/locales/zh-CN/common.json
-@@ -867,5 +867,336 @@
+@@ -867,5 +867,352 @@
        "description": "将工作项导出为 JSON 文件。",
        "short_description": "导出为 JSON"
      }
@@ -21042,6 +21744,22 @@ index dd67d92..fa33dd4 100644
 +      "csf_pdf_only": "The CSF must be a PDF file.",
 +      "csf_too_big": "The PDF must be 10 MB or less.",
 +      "invalid_rfc": "Invalid RFC (e.g. XAXX010101000)."
++    },
++    "members": {
++      "column": "Finance",
++      "role_none": "No access",
++      "role_finance": "Finance",
++      "role_collections": "Collections",
++      "admin_implicit": "Admin (always)"
++    },
++    "collections": {
++      "title": "Collections",
++      "description": "Pending charges across all clients. Record payments here as they arrive.",
++      "empty": "No pending charges.",
++      "register": "Record payment",
++      "registered": "Payment recorded.",
++      "remaining": "Remaining",
++      "overdue_days": "Overdue by {days} d"
 +    }
    }
  }
@@ -21059,10 +21777,10 @@ index 0fe15a3..c1d6427 100644
    }
  }
 diff --git a/packages/i18n/src/locales/zh-TW/common.json b/packages/i18n/src/locales/zh-TW/common.json
-index 834a2d9..9488820 100644
+index 834a2d9..ca4f207 100644
 --- a/packages/i18n/src/locales/zh-TW/common.json
 +++ b/packages/i18n/src/locales/zh-TW/common.json
-@@ -867,5 +867,336 @@
+@@ -867,5 +867,352 @@
        "description": "將工作事項匯出為 JSON 檔案。",
        "short_description": "匯出為 JSON"
      }
@@ -21396,6 +22114,22 @@ index 834a2d9..9488820 100644
 +      "csf_pdf_only": "The CSF must be a PDF file.",
 +      "csf_too_big": "The PDF must be 10 MB or less.",
 +      "invalid_rfc": "Invalid RFC (e.g. XAXX010101000)."
++    },
++    "members": {
++      "column": "Finance",
++      "role_none": "No access",
++      "role_finance": "Finance",
++      "role_collections": "Collections",
++      "admin_implicit": "Admin (always)"
++    },
++    "collections": {
++      "title": "Collections",
++      "description": "Pending charges across all clients. Record payments here as they arrive.",
++      "empty": "No pending charges.",
++      "register": "Record payment",
++      "registered": "Payment recorded.",
++      "remaining": "Remaining",
++      "overdue_days": "Overdue by {days} d"
 +    }
    }
  }

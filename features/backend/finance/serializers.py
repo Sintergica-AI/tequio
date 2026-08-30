@@ -179,7 +179,7 @@ class FinanceAccessSerializer(serializers.ModelSerializer):
     class Meta:
         model = FinanceAccess
         fields = [
-            "id", "workspace", "member",
+            "id", "workspace", "member", "role",
             "member_display_name", "member_email", "member_avatar_url",
             "created_at",
         ]
