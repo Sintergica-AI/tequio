@@ -11335,13 +11335,14 @@ index 3d605d6..c085247 100644
    );
 diff --git a/apps/web/core/components/workspace/settings/finance-role-column.tsx b/apps/web/core/components/workspace/settings/finance-role-column.tsx
 new file mode 100644
-index 0000000..020a2ce
+index 0000000..cec1a67
 --- /dev/null
 +++ b/apps/web/core/components/workspace/settings/finance-role-column.tsx
-@@ -0,0 +1,73 @@
+@@ -0,0 +1,70 @@
 +/**
 + * Sintergica CE extension: per-member finance role selector shown in the
-+ * workspace members table (admins only). "Financiero" sees and manages all
++ * workspace members table (admins only). Admins have NO implicit access —
++ * they are assigned a role here like anyone else. "Financiero" sees all
 + * finance data; "Cobranza" only sees pending charges and records payments.
 + * Derived from Plane CE code (AGPL-3.0-only).
 + */
@@ -11364,13 +11365,11 @@ index 0000000..020a2ce
 +type TFinanceRoleColumnProps = {
 +  workspaceSlug: string;
 +  memberId: string;
-+  /** admins have implicit full access; the selector is meaningless for them */
-+  isMemberAdmin: boolean;
 +  isSuspended: boolean;
 +};
 +
 +export const FinanceRoleColumn = observer(function FinanceRoleColumn(props: TFinanceRoleColumnProps) {
-+  const { workspaceSlug, memberId, isMemberAdmin, isSuspended } = props;
++  const { workspaceSlug, memberId, isSuspended } = props;
 +  const { t } = useTranslation();
 +  // store hooks
 +  const finance = useFinance();
@@ -11381,8 +11380,6 @@ index 0000000..020a2ce
 +  const value: TFinanceRoleValue = row?.role ?? "none";
 +
 +  if (isSuspended) return null;
-+  if (isMemberAdmin)
-+    return <div className="w-28 text-13 text-tertiary">{t("finance.members.admin_implicit")}</div>;
 +
 +  const handleChange = async (next: TFinanceRoleValue) => {
 +    if (next === value) return;
@@ -11413,7 +11410,7 @@ index 0000000..020a2ce
 +  );
 +});
 diff --git a/apps/web/core/components/workspace/settings/useMemberColumns.tsx b/apps/web/core/components/workspace/settings/useMemberColumns.tsx
-index fc60ff5..921934e 100644
+index fc60ff5..00b3284 100644
 --- a/apps/web/core/components/workspace/settings/useMemberColumns.tsx
 +++ b/apps/web/core/components/workspace/settings/useMemberColumns.tsx
 @@ -12,6 +12,8 @@ import { renderFormattedDate } from "@plane/utils";
@@ -11425,7 +11422,7 @@ index fc60ff5..921934e 100644
  import { useMember } from "@/hooks/store/use-member";
  import { useUser, useUserPermissions } from "@/hooks/store/user";
  import type { IMemberFilters } from "@/store/member/utils";
-@@ -108,6 +110,24 @@ export const useMemberColumns = () => {
+@@ -108,6 +110,23 @@ export const useMemberColumns = () => {
        tdRender: (rowData: RowData) => <AccountTypeColumn rowData={rowData} workspaceSlug={workspaceSlug} />,
      },
  
@@ -11440,7 +11437,6 @@ index fc60ff5..921934e 100644
 +              <FinanceRoleColumn
 +                workspaceSlug={workspaceSlug?.toString() ?? ""}
 +                memberId={rowData.member.id}
-+                isMemberAdmin={rowData.role === EUserPermissions.ADMIN}
 +                isSuspended={rowData.is_active === false}
 +              />
 +            ),
@@ -12190,10 +12186,10 @@ index 0000000..e6e6213
 +}
 diff --git a/apps/web/core/services/finance.service.ts b/apps/web/core/services/finance.service.ts
 new file mode 100644
-index 0000000..a75b967
+index 0000000..0920340
 --- /dev/null
 +++ b/apps/web/core/services/finance.service.ts
-@@ -0,0 +1,701 @@
+@@ -0,0 +1,702 @@
 +/**
 + * Sintergica CE extension: finance module service.
 + * Derived from Plane CE code (AGPL-3.0-only).
@@ -12213,8 +12209,9 @@ index 0000000..a75b967
 +
 +export type TFinanceAccessInfo = {
 +  has_access: boolean;
++  /** workspace admin — manages the allowlist, but has NO implicit data access */
 +  is_admin: boolean;
-+  role: "admin" | TFinanceRole | null;
++  role: TFinanceRole | null;
 +  has_collections: boolean;
 +};
 +

@@ -103,6 +103,13 @@ incrusten otros, así que no bloquea estos iframes salientes.
   Financiero y admin son supraconjuntos: también ven la pestaña Cobranza.
 - Migración `finance.0004` (campo `role` en finance_access, aditiva).
   Verificación: `verify8.py`, 24 comprobaciones en producción.
+- **Los admins NO tienen acceso implícito** (desde `finance.0005`): un admin
+  puede existir sin acceso financiero. La migración 0005 siembra el rol
+  Financiero a los admins activos existentes para que nadie pierda acceso al
+  actualizar; después se les puede retirar desde Miembros como a cualquiera.
+  El admin sin rol sigue gestionando la columna "Finanzas" (y puede
+  asignárselo a sí mismo), pero recibe 403 en todos los datos.
+  Verificación: `verify9.py`, 16 comprobaciones en producción.
 
 **Asistente conversacional** (`plane.assistant`) — *fases 1 y 2 completas*
 - Chat con contexto real del workspace: responde consultando work items, proyectos,

@@ -245,8 +245,9 @@ class FinanceAnalysis(BaseModel):
 
 
 class FinanceAccess(BaseModel):
-    """Workspace-level allowlist: members with a finance role. Workspace admins
-    have implicit full access and are not required to be listed.
+    """Workspace-level allowlist: members with a finance role. There is NO
+    implicit access — workspace admins also need a row here to see the data
+    (they can always grant it, to themselves included, from the members page).
 
     Roles: "finance" sees and manages everything; "collections" (cobranza) only
     sees pending charges and records payments against them."""

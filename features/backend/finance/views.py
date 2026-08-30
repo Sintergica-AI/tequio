@@ -74,8 +74,8 @@ class FinanceMeEndpoint(BaseAPIView):
         role = finance_role(request.user, slug)
         return Response(
             {
-                "has_access": role in ("admin", "finance"),
-                "is_admin": role == "admin",
+                "has_access": role == "finance",
+                "is_admin": is_workspace_admin(request.user, slug),
                 "role": role,
                 "has_collections": role is not None,
             },

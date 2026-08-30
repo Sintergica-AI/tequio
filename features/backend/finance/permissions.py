@@ -1,7 +1,8 @@
 # Sintergica CE extension: finance access control.
-# Finance access = active workspace ADMIN (role 20) OR a row in FinanceAccess
-# (combined with an active workspace membership). Mirrors the decorator style
-# of plane/app/permissions/base.py::allow_permission (AGPL-3.0-only).
+# Finance access = an explicit FinanceAccess row (finance | collections) plus
+# an active workspace membership. Workspace admins do NOT get implicit access
+# to the data — they only manage the allowlist (from the members page).
+# Mirrors plane/app/permissions/base.py::allow_permission (AGPL-3.0-only).
 
 from functools import wraps
 
@@ -21,9 +22,9 @@ def is_workspace_admin(user, slug):
 
 
 def finance_role(user, slug):
-    """"admin", "finance", "collections" or None."""
-    if is_workspace_admin(user, slug):
-        return "admin"
+    """"finance", "collections" or None. Workspace admins get NO implicit
+    access: the role is always explicit (an admin can exist without it).
+    Existing admins were seeded with the finance role by migration 0005."""
     if not WorkspaceMember.objects.filter(member=user, workspace__slug=slug, is_active=True).exists():
         return None
     row = FinanceAccess.objects.filter(member=user, workspace__slug=slug).first()
@@ -31,8 +32,8 @@ def finance_role(user, slug):
 
 
 def has_finance_access(user, slug):
-    """Full access: admins and the "finance" role."""
-    return finance_role(user, slug) in ("admin", "finance")
+    """Full access: only the explicit "finance" role."""
+    return finance_role(user, slug) == "finance"
 
 
 def has_collections_access(user, slug):
