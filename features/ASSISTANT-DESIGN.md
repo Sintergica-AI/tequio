@@ -363,6 +363,31 @@ membresía, y que las acciones de escritura no se ejecuten sin confirmación.
 
 ---
 
+## 8b. Personaje de marca y vista completa (31 Ago 2026)
+
+- **El asistente ya no usa `PiChatLogo`** (el destello heredado del
+  rebranding): usa el personaje de la marca (mismo juego de iconos que la app
+  móvil, `apps/web/app/assets/agent/*.png`). Componente
+  `assistant/agent-avatar.tsx` con cinco expresiones: `plain` (crome: botón
+  del topbar, breadcrumb, cabecera del panel, sidebar), `idle` (estado
+  vacío), `looking` (consultando datos — tool trace activo), `thinking`
+  (razonando) y `writing` (respuesta en streaming). Animaciones por keyframes
+  inyectados una vez, envueltos en `prefers-reduced-motion: no-preference`.
+  OJO: los PNG son OPACOS — no se tiñen (un `currentColor`/filtro los vuelve
+  un bloque); se redondean con `rounded-[22%]` y se atenúan con opacidad.
+- **Vista completa**: la ruta `/:slug/assistant` existía pero NADA la
+  enlazaba. Ahora llega por dos caminos: botón "Vista completa" (Maximize2)
+  en la cabecera del panel acoplado, y entrada "Asistente" en el sidebar
+  (constants `WORKSPACE_SIDEBAR_STATIC_NAVIGATION_ITEMS.assistant` + icono en
+  helper.tsx + gate en SidebarItemBase con el MISMO criterio que el botón del
+  topbar: oculta si la config no está `enabled`, misma clave SWR = una sola
+  petición). i18n `sidebar.assistant` añadido a los 19 locales.
+- **Traspaso panel→página**: cerrar el panel desmonta `AssistantRoot`, cuyo
+  cleanup resetea la conversación activa — la página NO puede leerla del
+  store. La conversación viaja en la URL (`?conversation=<id>`) y la página
+  la reabre con `openConversation`. Sin ese detalle, "Vista completa" abría
+  siempre un chat vacío.
+
 ## 9. Riesgos y decisiones abiertas
 
 | Riesgo | Mitigación |

@@ -99,6 +99,32 @@ chat.0002 (ambas generadas dentro de la imagen, dependencia fijada a db.0122).
 - **Limpieza oportunista de adjuntos huérfanos**: al presignar, se barren los
   CHAT del propio usuario con is_uploaded=false y >24h — sin beat schedule.
 
+## Ronda 6 (31 Ago 2026) — previsualización de enlaces
+
+- **Backend** `chat/link_preview.py`: `GET /chat/link-preview/?url=` devuelve
+  la tarjeta og (title/description/image/site_name/domain) o 204 si no hay
+  nada que mostrar. El fetch es del lado del servidor (el navegador muere por
+  CORS) y se cachea en el cache de Django: 24 h el acierto, 1 h el fallo —
+  una URL se resuelve UNA vez por workspace.
+- **SSRF**: buscar URLs arbitrarias desde dentro de la red del compose es el
+  caso de libro. Guardas: solo http(s), sin credenciales en la URL, el host
+  debe resolver EXCLUSIVAMENTE a direcciones globales (`ip.is_global` sobre
+  todos los registros — un solo registro privado rechaza la URL, que es lo
+  que explota el DNS rebinding), redirecciones seguidas A MANO (máx 3, cada
+  salto revalidado), timeout 3+4 s, solo `text/html`, cuerpo cap a 512 KB
+  leído en streaming. La imagen de la tarjeta se limita a http(s) para que no
+  cuele `javascript:`/`data:` en un `<img>`.
+- **Parser**: `html.parser` de la stdlib (sin BeautifulSoup en la imagen);
+  og:* / twitter:* / `<title>`, primera aparición gana, se deja de alimentar
+  al llegar a `<body>`.
+- **Frontend** `chat/link-preview.tsx`: tarjeta bajo el mensaje con el PRIMER
+  enlace externo (mismo origen nunca — esos ya son chips o deep-links, y
+  varios enlaces apilando varias tarjetas entierran la conversación).
+  `useSWRImmutable` (el backend ya cachea; refetch al enfocar no aporta).
+  Verificado en prod: 6/6 (auth, esquema, loopback y red privada rechazados,
+  tarjeta real de github.com, caché de 4 ms).
+- Sigue fuera: GIFs (pide API externa con clave).
+
 ## Ronda 4 (31 Ago 2026) — UI inspirada en ClickUp + fix crítico
 
 - **FIX CRÍTICO (migración chat.0003)**: todos los DMs tienen `name=""` y

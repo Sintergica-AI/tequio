@@ -4,6 +4,7 @@
 from django.urls import path
 
 from plane.chat.assets import ChatAssetDetailEndpoint, ChatAssetsEndpoint
+from plane.chat.link_preview import ChatLinkPreviewEndpoint
 from plane.chat.views import (
     ChatChannelMembersEndpoint,
     ChatDMsEndpoint,
@@ -43,6 +44,11 @@ urlpatterns = [
         "workspaces/<str:slug>/chat/search/",
         ChatSearchEndpoint.as_view(),
         name="chat-search",
+    ),
+    path(
+        "workspaces/<str:slug>/chat/link-preview/",
+        ChatLinkPreviewEndpoint.as_view(),
+        name="chat-link-preview",
     ),
     path(
         "workspaces/<str:slug>/chat/channels/<uuid:channel_id>/members/",
