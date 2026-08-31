@@ -60,8 +60,51 @@ chat.0002 (ambas generadas dentro de la imagen, dependencia fijada a db.0122).
   salto.
 - **Gestión de canal en UI**: modal de ajustes (renombrar/descripción/
   archivar/eliminar con confirmación); #general protegido (server y UI).
-- Fuera de v2: hilos de búsqueda con salto al mensaje exacto, notificaciones
-  de escritorio, GIFs/link previews.
+
+## Ronda 3 (31 Ago 2026)
+
+- **Salto al mensaje desde búsqueda**: `?anchor=<message_id>` en el GET de
+  mensajes devuelve la ventana de 50 raíces que TERMINA en el ancla (un reply
+  ancla en su raíz y el cliente abre el hilo encima). El cliente entra en
+  "modo historial": banner fijo "Estás viendo mensajes antiguos → Volver a lo
+  último", sin anclaje al fondo, resaltado del mensaje 4 s. La paginación
+  sigue siendo solo hacia arriba a propósito — volver al presente recarga la
+  última página en vez de paginar hacia abajo (compromiso deliberado).
+- **Notificaciones de escritorio** (Notification API, campana en la lista
+  para pedir permiso): el canal ACTIVO notifica con cuerpo (su conexión trae
+  el mensaje completo); el resto vía el doc de workspace SIN cuerpo, con
+  estas reglas: DM → siempre; público → solo si `mention_ids` (que el backend
+  incluye SOLO en canales públicos — en privados/DMs filtraría a quién se
+  menciona a todo el workspace) te incluye; privado (miembro) → siempre;
+  silenciado → nunca. Clic → foco + navegar al canal.
+- **Pantalla de error/mantenimiento**: ilustración propia con logo Tequio
+  (`app/assets/instance/maintenance-mode.png`, transparente, única para ambos
+  temas) en `app/error/prod.tsx` y `instance/maintenance-view.tsx`; textos del
+  error de producción traducidos al español.
+- Fuera de esta ronda: GIFs/link previews, paginación bidireccional,
+  limpieza periódica de assets huérfanos (is_uploaded=false).
+
+## Ronda 4 (31 Ago 2026) — UI inspirada en ClickUp + fix crítico
+
+- **FIX CRÍTICO (migración chat.0003)**: todos los DMs tienen `name=""` y
+  project NULL, así que el SEGUNDO DM del workspace violaba
+  `chat_channel_workspace_name_uq` (Lower("")==""). Pegó en producción en
+  cuanto existió un DM real: el verify12 pasó limpio la primera vez (era el
+  primer DM) y falló después. La condición del constraint ahora excluye
+  `is_direct`. Lección: un constraint condicional que convive con filas
+  "vacías por diseño" necesita esa exclusión desde el día uno; y un
+  `replace()` de Python sin `assert` falla en silencio — dos imports se
+  perdieron así en esta misma ronda.
+- Sidebar estilo ClickUp: avatar real en las filas de DM, sufijo con el
+  nombre del proyecto en canales de proyecto (vista workspace), botón
+  "Mensajes no leídos" que salta al primer canal pendiente, filas de acción
+  "+ Mensaje nuevo" y "+ Agregar canal" al final de cada sección.
+- Header: stack de avatares del roster (privados/DMs, máx 3 + contador) que
+  abre el modal de miembros; el contador verde de conectados se mantiene.
+- Empty state del canal: "Chat en #<canal>" + descripción + botón "Agregar
+  personas" en privados.
+- Composer con placeholder personalizado: "Escribe en #<canal>" / "Escribe a
+  <personas>".
 
 ## Arquitectura
 

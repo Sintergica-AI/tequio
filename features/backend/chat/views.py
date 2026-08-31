@@ -420,6 +420,38 @@ class ChatMessagesEndpoint(BaseAPIView):
                 status=status.HTTP_200_OK,
             )
 
+        anchor_id = request.GET.get("anchor")
+        if anchor_id:
+            # Jump-to-message (search): the page of roots ENDING at the anchor
+            # (anchor + up-to-49 older). If the anchor is a reply, anchor at
+            # its root — the client opens the thread panel on top.
+            anchor = ChatMessage.objects.filter(channel=channel, pk=anchor_id).first()
+            if anchor is None:
+                return _not_found()
+            root_id = anchor.parent_id or anchor.id
+            root = anchor if anchor.parent_id is None else ChatMessage.objects.get(pk=root_id)
+            qs_roots = _annotate_thread_meta(qs.filter(parent__isnull=True)).filter(
+                Q(created_at__lt=root.created_at)
+                | Q(created_at=root.created_at, id__lte=root.id)
+            )
+            rows = list(qs_roots.order_by("-created_at", "-id")[: MESSAGES_PAGE_SIZE + 1])
+            has_more = len(rows) > MESSAGES_PAGE_SIZE
+            rows = rows[:MESSAGES_PAGE_SIZE]
+            rows.reverse()
+            next_cursor = (
+                f"{rows[0].created_at.isoformat()},{rows[0].id}" if rows and has_more else None
+            )
+            return Response(
+                {
+                    "results": MessageSerializer(rows, many=True).data,
+                    "has_more": has_more,
+                    "next_cursor": next_cursor,
+                    "anchor_root_id": str(root_id),
+                    "anchor_is_reply": anchor.parent_id is not None,
+                },
+                status=status.HTTP_200_OK,
+            )
+
         parent_id = request.GET.get("parent_id")
         if parent_id:
             rows = qs.filter(parent_id=parent_id).order_by("created_at", "id")

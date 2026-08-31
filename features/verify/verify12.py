@@ -133,6 +133,28 @@ try:
     r = c.get(f"{base}/channels/{priv['id']}/pins/")
     check("desfijar", ok_unpin and not any(m["id"] == mid for m in r.json()))
 
+    print("\nANCLA (salto desde búsqueda)")
+    # ancla sobre el mensaje fijable: la página debe terminar en él e incluirlo
+    r = c.get(f"{base}/channels/{priv['id']}/messages/?anchor={mid}")
+    ok_anchor = r.status_code == 200 and any(m["id"] == mid for m in r.json()["results"])
+    check("ventana anclada incluye el mensaje", ok_anchor, f"HTTP {r.status_code}")
+    check("ancla de raíz no es reply", r.status_code == 200 and r.json().get("anchor_is_reply") is False)
+    r = c.post(
+        f"{base}/channels/{priv['id']}/messages/",
+        data=json.dumps({"message_html": "<p>respuesta ancla</p>", "parent_id": mid}),
+        content_type=J,
+    )
+    reply_id = r.json()["id"]
+    r = c.get(f"{base}/channels/{priv['id']}/messages/?anchor={reply_id}")
+    check(
+        "ancla de reply apunta a su raíz",
+        r.status_code == 200
+        and r.json().get("anchor_is_reply") is True
+        and r.json().get("anchor_root_id") == mid,
+    )
+    r = c.get(f"{base}/channels/{priv['id']}/messages/?anchor=00000000-0000-0000-0000-000000000000")
+    check("ancla inexistente → 404", r.status_code == 404, f"HTTP {r.status_code}")
+
     print("\nBÚSQUEDA")
     r = c.get(f"{base}/search/?q=fijable único vf12")
     check("busca en visibles", r.status_code == 200 and any(x["id"] == mid for x in r.json()))

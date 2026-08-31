@@ -159,17 +159,24 @@ def chat_event_task(event):
         from plane.chat.models import Channel
         from plane.chat.realtime import broadcast_channel_event as _push
 
-        workspace_id = (
-            Channel.objects.filter(pk=channel_id).values_list("workspace_id", flat=True).first()
+        channel = (
+            Channel.objects.filter(pk=channel_id)
+            .values("workspace_id", "access", "is_direct")
+            .first()
         )
-        if workspace_id:
-            # broadcast_channel_event antepone "chat:" -> doc "chat:workspace:<id>"
-            _push(
-                f"workspace:{workspace_id}",
-                {
-                    "event": "channel.activity",
-                    "channel_id": str(channel_id),
-                    "actor_id": payload.get("actor_id"),
-                    "ts": payload["ts"],
-                },
-            )
+        if channel:
+            activity = {
+                "event": "channel.activity",
+                "channel_id": str(channel_id),
+                "actor_id": payload.get("actor_id"),
+                "ts": payload["ts"],
+            }
+            # Desktop notifications need to know "was I mentioned?" without
+            # the body. The workspace doc reaches EVERY member, so mention
+            # targets ride along only for PUBLIC channels — in private/DM
+            # they would leak who is being talked to; a DM notifies by
+            # is_direct alone (the client has the channel in its store).
+            if not channel["is_direct"] and channel["access"] == 0:
+                message = payload.get("message") or {}
+                activity["mention_ids"] = extract_mentions(message.get("message_html") or "")
+            _push(f"workspace:{channel['workspace_id']}", activity)

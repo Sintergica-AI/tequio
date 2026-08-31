@@ -65,7 +65,10 @@ class Channel(BaseModel):
             models.UniqueConstraint(
                 Lower("name"),
                 "workspace",
-                condition=Q(deleted_at__isnull=True, project__isnull=True),
+                # is_direct excluded: every DM has name "" and project NULL,
+                # so the SECOND DM in a workspace would violate this (bit us
+                # in production the moment a real DM already existed).
+                condition=Q(deleted_at__isnull=True, project__isnull=True, is_direct=False),
                 name="chat_channel_workspace_name_uq",
             ),
             models.UniqueConstraint(
