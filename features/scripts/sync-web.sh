@@ -61,7 +61,7 @@ done
 # Poda: los archivos que nunca llegaron a git (untracked y luego borrados) no
 # aparecen en `git status`, así que se comparan directamente los directorios que
 # esta función posee. Sin esto quedaría código muerto que el build sigue compilando.
-OWNED_DIRS="apps/web/public/media apps/web/core/components/drive apps/web/core/components/assistant apps/web/core/components/pages/workspace packages/editor/src/core/extensions/code"
+OWNED_DIRS="apps/web/public/media apps/web/core/components/drive apps/web/core/components/assistant apps/web/core/components/chat apps/web/core/components/pages/workspace packages/editor/src/core/extensions/code"
 for d in $OWNED_DIRS; do
   [ -d "$SRC/$d" ] || continue
   local_files=$(cd "$SRC/$d" && ls -1 2>/dev/null | sort)
@@ -83,7 +83,10 @@ BUILD_ARGS="--build-arg VITE_SOURCE_CODE_URL=${VITE_SOURCE_CODE_URL:-}"
 BUILD_ARGS="$BUILD_ARGS --build-arg VITE_SUPPORT_EMAIL=${VITE_SUPPORT_EMAIL:-}"
 BUILD_ARGS="$BUILD_ARGS --build-arg VITE_TERMS_URL=${VITE_TERMS_URL:-}"
 BUILD_ARGS="$BUILD_ARGS --build-arg VITE_PRIVACY_URL=${VITE_PRIVACY_URL:-}"
-run "cd $REMOTE_SRC && docker build $BUILD_ARGS -f apps/web/Dockerfile.web -t plane-web-custom:$TAG . 2>&1 | tail -8"
+# Sin pipe directo: "docker build | tail" devuelve el exit de tail y un build
+# roto pasaba en silencio (ocurrio el 30 Ago: lockfile nuevo + package.json
+# viejo -> frozen-lockfile fallo y el script recreo la imagen VIEJA como si nada).
+run "cd $REMOTE_SRC && docker build $BUILD_ARGS -f apps/web/Dockerfile.web -t plane-web-custom:$TAG . >/tmp/web-build.log 2>&1; EC=\$?; tail -12 /tmp/web-build.log; exit \$EC"
 
 echo "=== Recreando contenedor web ==="
 run "cd /opt/plane/plane-app && docker compose -f docker-compose.yaml --env-file=plane.env up -d --no-deps --force-recreate web"

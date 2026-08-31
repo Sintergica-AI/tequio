@@ -67,3 +67,72 @@ patch(
 )
 
 print("ALL LIVE PATCHES APPLIED")
+
+
+# ---------------------------------------------------------------------------
+# Chat channels (Tequio canales): documentType "channel".
+# The Y.Doc for a channel is intentionally empty — the socket only carries
+# stateless JSON events + awareness; Postgres (Django) is the source of truth.
+# These patches chain on the strings the workspace_page patches above already
+# produced, so order matters.
+# ---------------------------------------------------------------------------
+
+# 4. Accept the "channel" document type (chains on patch #1's output)
+patch(
+    "apps/live/src/types/index.ts",
+    'export type TDocumentTypes = "project_page" | "workspace_page";',
+    'export type TDocumentTypes = "project_page" | "workspace_page" | "channel";',
+)
+
+# 5. Database extension: a channel doc has no binary to fetch or store.
+#    fetch doubles as the authorization gate — pages get resource-level auth
+#    for free when Django rejects the binary fetch; channels need it explicit.
+patch(
+    "apps/live/src/extensions/database.ts",
+    'import { getPageService } from "@/services/page/handler";',
+    'import { getPageService } from "@/services/page/handler";\n'
+    'import { assertChannelAccess } from "@/services/chat-channel.service";',
+)
+patch(
+    "apps/live/src/extensions/database.ts",
+    "const fetchDocument = async ({ context, documentName: pageId, instance }: FetchPayloadWithContext) => {\n  try {",
+    "const fetchDocument = async ({ context, documentName: pageId, instance }: FetchPayloadWithContext) => {\n"
+    '  if (context.documentType === "channel") {\n'
+    "    await assertChannelAccess(context, pageId);\n"
+    "    // null = no update to apply. An empty Uint8Array is NOT a valid Yjs\n"
+    "    // update: Hocuspocus tries to apply it, lib0 throws 'Unexpected end of\n"
+    "    // array' and the client gets kicked with permission-denied.\n"
+    "    return null;\n"
+    "  }\n"
+    "  try {",
+)
+patch(
+    "apps/live/src/extensions/database.ts",
+    "}: StorePayloadWithContext) => {\n  try {",
+    "}: StorePayloadWithContext) => {\n"
+    '  if (context.documentType === "channel") return; // nothing to persist\n'
+    "  try {",
+)
+
+# 6. TitleSync loads page details on every document — skip channel docs.
+patch(
+    "apps/live/src/extensions/title-sync.ts",
+    "  async onLoadDocument({ context, document, documentName }: OnLoadDocumentPayloadWithContext) {",
+    "  async onLoadDocument({ context, document, documentName }: OnLoadDocumentPayloadWithContext) {\n"
+    '    if (context.documentType === "channel") return;',
+)
+
+# 7. Register the broadcast controller (file copied in by the deploy flow)
+patch(
+    "apps/live/src/controllers/index.ts",
+    'import { PdfExportController } from "./pdf-export.controller";',
+    'import { PdfExportController } from "./pdf-export.controller";\n'
+    'import { ChatBroadcastController } from "./chat.controller";',
+)
+patch(
+    "apps/live/src/controllers/index.ts",
+    "export const CONTROLLERS = [CollaborationController, DocumentController, HealthController, PdfExportController];",
+    "export const CONTROLLERS = [CollaborationController, DocumentController, HealthController, PdfExportController, ChatBroadcastController];",
+)
+
+print("ALL LIVE CHAT PATCHES APPLIED")

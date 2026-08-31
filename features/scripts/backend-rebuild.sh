@@ -21,7 +21,7 @@ docker image inspect "$BASE_IMAGE" >/dev/null 2>&1 || { echo "FATAL: falta la im
 
 mkdir -p "$BB"
 cp "$FEAT_DIR/backend/"*.py "$BB/"
-for app in finance assistant; do
+for app in finance assistant chat; do
   rm -rf "${BB:?}/$app"
   cp -r "$FEAT_DIR/backend/$app" "$BB/$app"
 done
@@ -34,6 +34,7 @@ COPY drive_views.py                /code/plane/app/views/drive_ext.py
 COPY drive_urls.py                 /code/plane/app/urls/drive_ext.py
 COPY finance/                      /code/plane/finance/
 COPY assistant/                    /code/plane/assistant/
+COPY chat/                         /code/plane/chat/
 COPY patch_ce_features.py          /tmp/patch_ce_features.py
 # pypdf: extracción de texto de estados de cuenta en PDF (finanzas)
 RUN pip install --no-cache-dir "pypdf>=5,<6"
@@ -55,6 +56,20 @@ if ! grep -q "plane-backend-custom:${TAG}" docker-compose.yaml; then
   echo "       Reconstruye con uno de esos, o actualiza el compose primero."
   exit 1
 fi
+
+
+# --- Validación de migraciones escritas a mano -------------------------------
+# Las migraciones de los módulos propios se escriben a mano; si no cuadran con
+# los modelos, makemigrations "detecta cambios" y sale con error. Mejor abortar
+# aquí que descubrirlo con el migrator ya corrido. Necesita el entorno y la red
+# del compose (plane/celery.py toca redis al importar); el entrypoint del api
+# se anula porque se queda esperando migraciones. Solo NUESTRAS apps:
+# el parche de Profile.language default "es" diverge de las migraciones de
+# upstream A PROPOSITO (el default vive en Python) y un --check global lo acusa.
+echo "=== Validando migraciones (makemigrations --check) ==="
+docker compose -f docker-compose.yaml --env-file=plane.env run --rm --no-deps --entrypoint "" api \
+  sh -c "cd /code && python manage.py makemigrations finance assistant chat --check --dry-run" \
+  || { echo "FATAL: los modelos no cuadran con las migraciones escritas a mano"; exit 1; }
 
 # --- Migraciones (módulo de finanzas) ---------------------------------------
 # Si la imagen trae migraciones pendientes (finance, assistant), api/worker/beat se quedan

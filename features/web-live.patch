@@ -33381,6 +33381,198 @@ index 6e5e438..9c86f6c 100644
 +    }
    ]
  }
+diff --git a/apps/live/src/controllers/chat.controller.ts b/apps/live/src/controllers/chat.controller.ts
+new file mode 100644
+index 0000000..f7dbe16
+--- /dev/null
++++ b/apps/live/src/controllers/chat.controller.ts
+@@ -0,0 +1,66 @@
++/**
++ * Sintergica CE extension: HTTP broadcast endpoint for chat events.
++ *
++ * Django (celery task) POSTs here after committing a message/reaction; the
++ * event fans out to every client connected to the channel's document via the
++ * Redis extension (multi-node) or directly (single node without Redis). If no
++ * client holds the document, the publish simply has no subscribers — offline
++ * clients catch up over REST when they reconnect.
++ *
++ * Protected by the shared live-server-secret-key header, same as the other
++ * internal endpoints.
++ *
++ * Derived from Plane CE code (AGPL-3.0-only).
++ */
++
++import type { Hocuspocus } from "@hocuspocus/server";
++import type { Request, Response } from "express";
++import { z } from "zod";
++// plane imports
++import { Controller, Middleware, Post } from "@plane/decorators";
++import { logger } from "@plane/logger";
++// extensions
++import { Redis } from "@/extensions/redis";
++// lib
++import { requireSecretKey } from "@/lib/auth-middleware";
++
++const broadcastSchema = z.object({
++  document_name: z.string().min(1),
++  payload: z.record(z.unknown()),
++});
++
++@Controller("/broadcast")
++export class ChatBroadcastController {
++  [key: string]: unknown;
++  private readonly hocusPocusServer: Hocuspocus;
++
++  constructor(hocusPocusServer: Hocuspocus) {
++    this.hocusPocusServer = hocusPocusServer;
++  }
++
++  @Post("/")
++  @Middleware(requireSecretKey)
++  async broadcast(req: Request, res: Response) {
++    try {
++      const { document_name, payload } = broadcastSchema.parse(req.body);
++      const stringPayload = JSON.stringify(payload);
++
++      const redisExtension = this.hocusPocusServer.configuration.extensions.find((ext) => ext instanceof Redis);
++      if (redisExtension) {
++        const receivers = await redisExtension.broadcastToDocument(document_name, stringPayload);
++        return res.status(200).json({ delivered: true, receivers });
++      }
++
++      // Single-node fallback: deliver to the locally loaded document, if any.
++      const document = this.hocusPocusServer.documents.get(document_name);
++      if (document) document.broadcastStateless(stringPayload);
++      return res.status(200).json({ delivered: !!document, receivers: document ? 1 : 0 });
++    } catch (error) {
++      if (error instanceof z.ZodError) {
++        return res.status(400).json({ message: "Validation error", context: error.errors });
++      }
++      logger.error("CHAT_BROADCAST_CONTROLLER: error broadcasting", error);
++      return res.status(500).json({ message: "Internal server error" });
++    }
++  }
++}
+diff --git a/apps/live/src/controllers/index.ts b/apps/live/src/controllers/index.ts
+index 2ae3bce..af7cb3d 100644
+--- a/apps/live/src/controllers/index.ts
++++ b/apps/live/src/controllers/index.ts
+@@ -8,5 +8,6 @@ import { CollaborationController } from "./collaboration.controller";
+ import { DocumentController } from "./document.controller";
+ import { HealthController } from "./health.controller";
+ import { PdfExportController } from "./pdf-export.controller";
++import { ChatBroadcastController } from "./chat.controller";
+ 
+-export const CONTROLLERS = [CollaborationController, DocumentController, HealthController, PdfExportController];
++export const CONTROLLERS = [CollaborationController, DocumentController, HealthController, PdfExportController, ChatBroadcastController];
+diff --git a/apps/live/src/extensions/database.ts b/apps/live/src/extensions/database.ts
+index becefc8..a961a51 100644
+--- a/apps/live/src/extensions/database.ts
++++ b/apps/live/src/extensions/database.ts
+@@ -16,6 +16,7 @@ import { logger } from "@plane/logger";
+ import { AppError } from "@/lib/errors";
+ // services
+ import { getPageService } from "@/services/page/handler";
++import { assertChannelAccess } from "@/services/chat-channel.service";
+ // type
+ import type { FetchPayloadWithContext, StorePayloadWithContext } from "@/types";
+ import { ForceCloseReason, CloseCode } from "@/types/admin-commands";
+@@ -24,6 +25,13 @@ import { broadcastError } from "@/utils/broadcast-error";
+ import { forceCloseDocumentAcrossServers } from "./force-close-handler";
+ 
+ const fetchDocument = async ({ context, documentName: pageId, instance }: FetchPayloadWithContext) => {
++  if (context.documentType === "channel") {
++    await assertChannelAccess(context, pageId);
++    // null = no update to apply. An empty Uint8Array is NOT a valid Yjs
++    // update: Hocuspocus tries to apply it, lib0 throws 'Unexpected end of
++    // array' and the client gets kicked with permission-denied.
++    return null;
++  }
+   try {
+     const service = getPageService(context.documentType, context);
+     // fetch details
+@@ -75,6 +83,7 @@ const storeDocument = async ({
+   documentName: pageId,
+   instance,
+ }: StorePayloadWithContext) => {
++  if (context.documentType === "channel") return; // nothing to persist
+   try {
+     const service = getPageService(context.documentType, context);
+     // convert binary data to all formats
+diff --git a/apps/live/src/extensions/title-sync.ts b/apps/live/src/extensions/title-sync.ts
+index c86b749..8807143 100644
+--- a/apps/live/src/extensions/title-sync.ts
++++ b/apps/live/src/extensions/title-sync.ts
+@@ -46,6 +46,7 @@ export class TitleSyncExtension implements Extension {
+    * Handle document loading - migrate old titles if needed
+    */
+   async onLoadDocument({ context, document, documentName }: OnLoadDocumentPayloadWithContext) {
++    if (context.documentType === "channel") return;
+     try {
+       // initially for on demand migration of old titles to a new title field
+       // in the yjs binary
+diff --git a/apps/live/src/services/chat-channel.service.ts b/apps/live/src/services/chat-channel.service.ts
+new file mode 100644
+index 0000000..d20fd5a
+--- /dev/null
++++ b/apps/live/src/services/chat-channel.service.ts
+@@ -0,0 +1,56 @@
++/**
++ * Sintergica CE extension: chat-channel authorization for the live server.
++ *
++ * A "channel" document holds no CRDT content — the Y.Doc stays empty and the
++ * socket only carries stateless JSON events + awareness. That means the
++ * Database extension never talks to Django for it, so the resource-level
++ * authorization pages get for free (Django rejecting the binary fetch) has to
++ * happen explicitly: before accepting the doc we call the chat membership
++ * endpoint with the requesting user's cookie. Non-2xx → throw → Hocuspocus
++ * drops the connection.
++ *
++ * Document naming: "chat:<channel uuid>".
++ *
++ * Derived from Plane CE code (AGPL-3.0-only).
++ */
++
++import { AppError } from "@/lib/errors";
++import { APIService } from "@/services/api.service";
++
++const DOCUMENT_PREFIX = "chat:";
++
++export const channelIdFromDocumentName = (documentName: string): string | null => {
++  if (!documentName.startsWith(DOCUMENT_PREFIX)) return null;
++  return documentName.slice(DOCUMENT_PREFIX.length);
++};
++
++class ChatChannelService extends APIService {
++  constructor(cookie: string) {
++    super();
++    this.setHeader("Cookie", cookie);
++  }
++
++  async assertMembership(workspaceSlug: string, channelId: string): Promise<void> {
++    await this.get(
++      `/api/workspaces/${workspaceSlug}/chat/channels/${channelId}/membership/`,
++      {},
++      { headers: this.getHeader() }
++    );
++  }
++}
++
++type TChannelContext = {
++  cookie?: string | null;
++  workspaceSlug?: string | null;
++  [key: string]: unknown;
++};
++
++export const assertChannelAccess = async (context: TChannelContext, documentName: string): Promise<void> => {
++  const channelId = channelIdFromDocumentName(documentName);
++  if (!channelId) throw new AppError(`Invalid channel document name: ${documentName}`);
++  if (!context.cookie) throw new AppError("Cookie is required.");
++  if (!context.workspaceSlug) throw new AppError("workspaceSlug is required.");
++  const service = new ChatChannelService(context.cookie);
++  // AppError from the interceptor bubbles up and closes the connection.
++  await service.assertMembership(context.workspaceSlug, channelId);
++};
 diff --git a/apps/live/src/services/page/handler.ts b/apps/live/src/services/page/handler.ts
 index 2bfd0b1..a2e0c91 100644
 --- a/apps/live/src/services/page/handler.ts
@@ -33456,7 +33648,7 @@ index e9c67fc..89cc56c 100644
  
      /**
 diff --git a/apps/live/src/types/index.ts b/apps/live/src/types/index.ts
-index 39c941d..2192d85 100644
+index 39c941d..d1388dc 100644
 --- a/apps/live/src/types/index.ts
 +++ b/apps/live/src/types/index.ts
 @@ -23,7 +23,7 @@ export interface StorePayloadWithContext extends storePayload {
@@ -33464,7 +33656,7 @@ index 39c941d..2192d85 100644
  }
  
 -export type TDocumentTypes = "project_page";
-+export type TDocumentTypes = "project_page" | "workspace_page";
++export type TDocumentTypes = "project_page" | "workspace_page" | "channel";
  
  // Additional Hocuspocus types that are not exported from the main package
  export type HocusPocusServerContext = {
@@ -64612,6 +64804,138 @@ index 0000000..9587cb8
 +}
 +
 +export default observer(WorkspaceAssistantPage);
+diff --git a/apps/web/app/(all)/[workspaceSlug]/(projects)/channels/[channelId]/page.tsx b/apps/web/app/(all)/[workspaceSlug]/(projects)/channels/[channelId]/page.tsx
+new file mode 100644
+index 0000000..9306cf3
+--- /dev/null
++++ b/apps/web/app/(all)/[workspaceSlug]/(projects)/channels/[channelId]/page.tsx
+@@ -0,0 +1,28 @@
++/**
++ * Sintergica CE extension: workspace channel detail page.
++ * Derived from Plane CE code (AGPL-3.0-only).
++ */
++
++import { observer } from "mobx-react";
++import { useParams } from "next/navigation";
++// plane imports
++import { useTranslation } from "@plane/i18n";
++// components
++import { PageHead } from "@/components/core/page-title";
++import { ChatView } from "@/components/chat";
++
++function WorkspaceChannelPage() {
++  const { workspaceSlug, channelId } = useParams();
++  const { t } = useTranslation();
++
++  if (!workspaceSlug || !channelId) return null;
++
++  return (
++    <>
++      <PageHead title={t("chat.title")} />
++      <ChatView workspaceSlug={workspaceSlug.toString()} channelId={channelId.toString()} />
++    </>
++  );
++}
++
++export default observer(WorkspaceChannelPage);
+diff --git a/apps/web/app/(all)/[workspaceSlug]/(projects)/channels/header.tsx b/apps/web/app/(all)/[workspaceSlug]/(projects)/channels/header.tsx
+new file mode 100644
+index 0000000..b8c84a1
+--- /dev/null
++++ b/apps/web/app/(all)/[workspaceSlug]/(projects)/channels/header.tsx
+@@ -0,0 +1,31 @@
++/**
++ * Sintergica CE extension: workspace channels header.
++ * Derived from Plane CE code (AGPL-3.0-only).
++ */
++
++import { MessagesSquare } from "lucide-react";
++import { observer } from "mobx-react";
++// plane imports
++import { useTranslation } from "@plane/i18n";
++import { Breadcrumbs, Header } from "@plane/ui";
++// components
++import { BreadcrumbLink } from "@/components/common/breadcrumb-link";
++
++export const WorkspaceChannelsHeader = observer(function WorkspaceChannelsHeader() {
++  const { t } = useTranslation();
++  return (
++    <Header>
++      <Header.LeftItem>
++        <div className="flex items-center gap-2.5">
++          <Breadcrumbs>
++            <Breadcrumbs.Item
++              component={
++                <BreadcrumbLink label={t("chat.title")} icon={<MessagesSquare className="size-4 text-tertiary" />} />
++              }
++            />
++          </Breadcrumbs>
++        </div>
++      </Header.LeftItem>
++    </Header>
++  );
++});
+diff --git a/apps/web/app/(all)/[workspaceSlug]/(projects)/channels/layout.tsx b/apps/web/app/(all)/[workspaceSlug]/(projects)/channels/layout.tsx
+new file mode 100644
+index 0000000..025cbcf
+--- /dev/null
++++ b/apps/web/app/(all)/[workspaceSlug]/(projects)/channels/layout.tsx
+@@ -0,0 +1,20 @@
++/**
++ * Sintergica CE extension: workspace channels layout.
++ * Derived from Plane CE code (AGPL-3.0-only).
++ */
++
++import { Outlet } from "react-router";
++import { AppHeader } from "@/components/core/app-header";
++import { ContentWrapper } from "@/components/core/content-wrapper";
++import { WorkspaceChannelsHeader } from "./header";
++
++export default function WorkspaceChannelsLayout() {
++  return (
++    <>
++      <AppHeader header={<WorkspaceChannelsHeader />} />
++      <ContentWrapper>
++        <Outlet />
++      </ContentWrapper>
++    </>
++  );
++}
+diff --git a/apps/web/app/(all)/[workspaceSlug]/(projects)/channels/page.tsx b/apps/web/app/(all)/[workspaceSlug]/(projects)/channels/page.tsx
+new file mode 100644
+index 0000000..e31c350
+--- /dev/null
++++ b/apps/web/app/(all)/[workspaceSlug]/(projects)/channels/page.tsx
+@@ -0,0 +1,29 @@
++/**
++ * Sintergica CE extension: workspace channels page (no channel selected —
++ * ChatView redirects to #general / the first channel).
++ * Derived from Plane CE code (AGPL-3.0-only).
++ */
++
++import { observer } from "mobx-react";
++import { useParams } from "next/navigation";
++// plane imports
++import { useTranslation } from "@plane/i18n";
++// components
++import { PageHead } from "@/components/core/page-title";
++import { ChatView } from "@/components/chat";
++
++function WorkspaceChannelsPage() {
++  const { workspaceSlug } = useParams();
++  const { t } = useTranslation();
++
++  if (!workspaceSlug) return null;
++
++  return (
++    <>
++      <PageHead title={t("chat.title")} />
++      <ChatView workspaceSlug={workspaceSlug.toString()} />
++    </>
++  );
++}
++
++export default observer(WorkspaceChannelsPage);
 diff --git a/apps/web/app/(all)/[workspaceSlug]/(projects)/drive/header.tsx b/apps/web/app/(all)/[workspaceSlug]/(projects)/drive/header.tsx
 new file mode 100644
 index 0000000..7bd5f4b
@@ -64814,6 +65138,164 @@ index 0000000..b3370d2
 +}
 +
 +export default observer(WorkspaceFinancePage);
+diff --git a/apps/web/app/(all)/[workspaceSlug]/(projects)/projects/(detail)/[projectId]/channels/[channelId]/page.tsx b/apps/web/app/(all)/[workspaceSlug]/(projects)/projects/(detail)/[projectId]/channels/[channelId]/page.tsx
+new file mode 100644
+index 0000000..97c078b
+--- /dev/null
++++ b/apps/web/app/(all)/[workspaceSlug]/(projects)/projects/(detail)/[projectId]/channels/[channelId]/page.tsx
+@@ -0,0 +1,35 @@
++/**
++ * Sintergica CE extension: project channel detail page.
++ * Derived from Plane CE code (AGPL-3.0-only).
++ */
++
++import { observer } from "mobx-react";
++import { useParams } from "next/navigation";
++// plane imports
++import { useTranslation } from "@plane/i18n";
++// components
++import { PageHead } from "@/components/core/page-title";
++import { ChatView } from "@/components/chat";
++// hooks
++import { useProject } from "@/hooks/store/use-project";
++
++function ProjectChannelPage() {
++  const { workspaceSlug, projectId, channelId } = useParams();
++  const { currentProjectDetails: project } = useProject();
++  const { t } = useTranslation();
++
++  if (!workspaceSlug || !projectId || !channelId) return null;
++
++  return (
++    <>
++      <PageHead title={project?.name ? `${project?.name} - ${t("chat.title")}` : undefined} />
++      <ChatView
++        workspaceSlug={workspaceSlug.toString()}
++        projectId={projectId.toString()}
++        channelId={channelId.toString()}
++      />
++    </>
++  );
++}
++
++export default observer(ProjectChannelPage);
+diff --git a/apps/web/app/(all)/[workspaceSlug]/(projects)/projects/(detail)/[projectId]/channels/header.tsx b/apps/web/app/(all)/[workspaceSlug]/(projects)/projects/(detail)/[projectId]/channels/header.tsx
+new file mode 100644
+index 0000000..cb45869
+--- /dev/null
++++ b/apps/web/app/(all)/[workspaceSlug]/(projects)/projects/(detail)/[projectId]/channels/header.tsx
+@@ -0,0 +1,46 @@
++/**
++ * Sintergica CE extension: project channels header.
++ * Derived from Plane CE code (AGPL-3.0-only).
++ */
++
++import { MessagesSquare } from "lucide-react";
++import { observer } from "mobx-react";
++import { useParams } from "next/navigation";
++// plane imports
++import { useTranslation } from "@plane/i18n";
++import { Breadcrumbs, Header } from "@plane/ui";
++// components
++import { CommonProjectBreadcrumbs } from "@/components/breadcrumbs/common";
++import { BreadcrumbLink } from "@/components/common/breadcrumb-link";
++// hooks
++import { useProject } from "@/hooks/store/use-project";
++
++export const ProjectChannelsHeader = observer(function ProjectChannelsHeader() {
++  // router
++  const { workspaceSlug, projectId } = useParams();
++  // store hooks
++  const { currentProjectDetails, loader } = useProject();
++  // plane hooks
++  const { t } = useTranslation();
++
++  return (
++    <Header>
++      <Header.LeftItem>
++        <Breadcrumbs isLoading={loader === "init-loader"}>
++          <CommonProjectBreadcrumbs workspaceSlug={workspaceSlug?.toString()} projectId={projectId?.toString()} />
++          <Breadcrumbs.Item
++            component={
++              <BreadcrumbLink
++                label={t("chat.title")}
++                href={`/${workspaceSlug}/projects/${currentProjectDetails?.id}/channels/`}
++                icon={<MessagesSquare className="h-4 w-4 text-tertiary" />}
++                isLast
++              />
++            }
++            isLast
++          />
++        </Breadcrumbs>
++      </Header.LeftItem>
++    </Header>
++  );
++});
+diff --git a/apps/web/app/(all)/[workspaceSlug]/(projects)/projects/(detail)/[projectId]/channels/layout.tsx b/apps/web/app/(all)/[workspaceSlug]/(projects)/projects/(detail)/[projectId]/channels/layout.tsx
+new file mode 100644
+index 0000000..db3a64f
+--- /dev/null
++++ b/apps/web/app/(all)/[workspaceSlug]/(projects)/projects/(detail)/[projectId]/channels/layout.tsx
+@@ -0,0 +1,22 @@
++/**
++ * Sintergica CE extension: project channels layout.
++ * Derived from Plane CE code (AGPL-3.0-only).
++ */
++
++// components
++import { Outlet } from "react-router";
++import { AppHeader } from "@/components/core/app-header";
++import { ContentWrapper } from "@/components/core/content-wrapper";
++// local components
++import { ProjectChannelsHeader } from "./header";
++
++export default function ProjectChannelsLayout() {
++  return (
++    <>
++      <AppHeader header={<ProjectChannelsHeader />} />
++      <ContentWrapper>
++        <Outlet />
++      </ContentWrapper>
++    </>
++  );
++}
+diff --git a/apps/web/app/(all)/[workspaceSlug]/(projects)/projects/(detail)/[projectId]/channels/page.tsx b/apps/web/app/(all)/[workspaceSlug]/(projects)/projects/(detail)/[projectId]/channels/page.tsx
+new file mode 100644
+index 0000000..9640bad
+--- /dev/null
++++ b/apps/web/app/(all)/[workspaceSlug]/(projects)/projects/(detail)/[projectId]/channels/page.tsx
+@@ -0,0 +1,31 @@
++/**
++ * Sintergica CE extension: project channels page (redirects to #general).
++ * Derived from Plane CE code (AGPL-3.0-only).
++ */
++
++import { observer } from "mobx-react";
++import { useParams } from "next/navigation";
++// plane imports
++import { useTranslation } from "@plane/i18n";
++// components
++import { PageHead } from "@/components/core/page-title";
++import { ChatView } from "@/components/chat";
++// hooks
++import { useProject } from "@/hooks/store/use-project";
++
++function ProjectChannelsPage() {
++  const { workspaceSlug, projectId } = useParams();
++  const { currentProjectDetails: project } = useProject();
++  const { t } = useTranslation();
++
++  if (!workspaceSlug || !projectId) return null;
++
++  return (
++    <>
++      <PageHead title={project?.name ? `${project?.name} - ${t("chat.title")}` : undefined} />
++      <ChatView workspaceSlug={workspaceSlug.toString()} projectId={projectId.toString()} />
++    </>
++  );
++}
++
++export default observer(ProjectChannelsPage);
 diff --git a/apps/web/app/(all)/[workspaceSlug]/(projects)/projects/(detail)/[projectId]/drive/header.tsx b/apps/web/app/(all)/[workspaceSlug]/(projects)/projects/(detail)/[projectId]/drive/header.tsx
 new file mode 100644
 index 0000000..4bacd0d
@@ -98527,10 +99009,10 @@ index 08a38e6..c602e51 100644
  
  export default function Root() {
 diff --git a/apps/web/app/routes/extended.ts b/apps/web/app/routes/extended.ts
-index 452d214..433b38e 100644
+index 452d214..9d47454 100644
 --- a/apps/web/app/routes/extended.ts
 +++ b/apps/web/app/routes/extended.ts
-@@ -4,6 +4,52 @@
+@@ -4,6 +4,70 @@
   * See the LICENSE file for details.
   */
  
@@ -98565,6 +99047,14 @@ index 452d214..433b38e 100644
 +        layout("./(all)/[workspaceSlug]/(projects)/finance/layout.tsx", [
 +          route(":workspaceSlug/finance", "./(all)/[workspaceSlug]/(projects)/finance/page.tsx"),
 +        ]),
++        // Workspace chat channels (Tequio canales)
++        layout("./(all)/[workspaceSlug]/(projects)/channels/layout.tsx", [
++          route(":workspaceSlug/channels", "./(all)/[workspaceSlug]/(projects)/channels/page.tsx"),
++          route(
++            ":workspaceSlug/channels/:channelId",
++            "./(all)/[workspaceSlug]/(projects)/channels/[channelId]/page.tsx"
++          ),
++        ]),
 +        // Project drive (file manager) + project finance
 +        layout("./(all)/[workspaceSlug]/(projects)/projects/(detail)/[projectId]/layout.tsx", [
 +          layout("./(all)/[workspaceSlug]/(projects)/projects/(detail)/[projectId]/drive/layout.tsx", [
@@ -98577,6 +99067,16 @@ index 452d214..433b38e 100644
 +            route(
 +              ":workspaceSlug/projects/:projectId/finance",
 +              "./(all)/[workspaceSlug]/(projects)/projects/(detail)/[projectId]/finance/page.tsx"
++            ),
++          ]),
++          layout("./(all)/[workspaceSlug]/(projects)/projects/(detail)/[projectId]/channels/layout.tsx", [
++            route(
++              ":workspaceSlug/projects/:projectId/channels",
++              "./(all)/[workspaceSlug]/(projects)/projects/(detail)/[projectId]/channels/page.tsx"
++            ),
++            route(
++              ":workspaceSlug/projects/:projectId/channels/:channelId",
++              "./(all)/[workspaceSlug]/(projects)/projects/(detail)/[projectId]/channels/[channelId]/page.tsx"
 +            ),
 +          ]),
 +        ]),
@@ -100358,6 +100858,1096 @@ index b386030..df8c387 100644
                </span>
              </Link>
            </div>
+diff --git a/apps/web/core/components/chat/channel-list.tsx b/apps/web/core/components/chat/channel-list.tsx
+new file mode 100644
+index 0000000..74fbb4f
+--- /dev/null
++++ b/apps/web/core/components/chat/channel-list.tsx
+@@ -0,0 +1,157 @@
++/**
++ * Sintergica CE extension: channel sidebar (workspace + project sections)
++ * with unread badges and the create-channel modal.
++ * Derived from Plane CE code (AGPL-3.0-only).
++ */
++
++import { useState } from "react";
++import { Hash, Plus } from "lucide-react";
++import { observer } from "mobx-react";
++// plane imports
++import { useTranslation } from "@plane/i18n";
++import { Button } from "@plane/propel/button";
++import { TOAST_TYPE, setToast } from "@plane/propel/toast";
++import { EModalPosition, EModalWidth, Input, ModalCore } from "@plane/ui";
++import { cn } from "@plane/utils";
++// hooks
++import { useChat } from "@/hooks/store/use-chat";
++// services
++import type { TChatChannel } from "@/services/chat.service";
++
++type TProps = {
++  workspaceSlug: string;
++  projectId?: string;
++  activeChannelId: string | null;
++  onSelect: (channel: TChatChannel) => void;
++};
++
++export const ChatChannelList = observer(function ChatChannelList(props: TProps) {
++  const { workspaceSlug, projectId, activeChannelId, onSelect } = props;
++  // states
++  const [isCreateOpen, setIsCreateOpen] = useState(false);
++  const [name, setName] = useState("");
++  const [isSubmitting, setIsSubmitting] = useState(false);
++  // store hooks
++  const chat = useChat();
++  const { t } = useTranslation();
++  // derived values: in project view only that project's channels; in the
++  // workspace view, workspace channels first, then per-project ones we know.
++  const workspaceChannels = projectId ? [] : chat.channelsForWorkspace(workspaceSlug);
++  const projectChannels = projectId
++    ? chat.channelsForProject(projectId)
++    : Object.values(chat.channels)
++        .filter((c) => c.project !== null && !c.archived_at)
++        .sort((a, b) => a.name.localeCompare(b.name));
++
++  const createChannel = async () => {
++    const trimmed = name.trim();
++    if (!trimmed || isSubmitting) return;
++    setIsSubmitting(true);
++    try {
++      const channel = await chat.createChannel(workspaceSlug, {
++        name: trimmed,
++        project_id: projectId,
++      });
++      setIsCreateOpen(false);
++      setName("");
++      onSelect(channel);
++    } catch (error: unknown) {
++      setToast({
++        type: TOAST_TYPE.ERROR,
++        title: t("chat.create_channel_failed"),
++        message: (error as { error?: string })?.error ?? undefined,
++      });
++    } finally {
++      setIsSubmitting(false);
++    }
++  };
++
++  const renderChannel = (channel: TChatChannel) => {
++    const unread = chat.unreads[channel.id] ?? 0;
++    const isActive = channel.id === activeChannelId;
++    return (
++      <button
++        key={channel.id}
++        type="button"
++        onClick={() => onSelect(channel)}
++        className={cn(
++          "flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm",
++          isActive ? "bg-layer-1 font-medium" : "text-secondary hover:bg-surface-2",
++          unread > 0 && !isActive && "font-semibold text-primary"
++        )}
++      >
++        <Hash className="size-3.5 shrink-0 text-tertiary" />
++        <span className="min-w-0 flex-1 truncate text-left">{channel.name}</span>
++        {unread > 0 && !isActive && (
++          <span className="grid min-w-5 place-items-center rounded-full bg-accent-primary px-1 text-[10px] font-semibold text-white">
++            {unread > 99 ? "99+" : unread}
++          </span>
++        )}
++      </button>
++    );
++  };
++
++  return (
++    <div className="flex h-full w-60 shrink-0 flex-col border-r border-subtle bg-surface-1">
++      <div className="flex items-center justify-between px-3 py-2.5">
++        <h2 className="text-sm font-semibold">{t("chat.channels")}</h2>
++        <button
++          type="button"
++          className="rounded p-1 text-tertiary hover:bg-layer-1 hover:text-primary"
++          onClick={() => setIsCreateOpen(true)}
++        >
++          <Plus className="size-4" />
++        </button>
++      </div>
++      <div className="flex-1 space-y-4 overflow-y-auto px-2 pb-4">
++        {!projectId && workspaceChannels.length > 0 && (
++          <div>
++            <p className="px-2 pb-1 text-[11px] font-medium uppercase text-tertiary">{t("chat.workspace_section")}</p>
++            {workspaceChannels.map(renderChannel)}
++          </div>
++        )}
++        {projectChannels.length > 0 && (
++          <div>
++            <p className="px-2 pb-1 text-[11px] font-medium uppercase text-tertiary">{t("chat.projects_section")}</p>
++            {projectChannels.map(renderChannel)}
++          </div>
++        )}
++        {workspaceChannels.length === 0 && projectChannels.length === 0 && (
++          <p className="px-2 text-xs text-tertiary">{t("chat.no_channels")}</p>
++        )}
++      </div>
++
++      <ModalCore
++        isOpen={isCreateOpen}
++        handleClose={() => setIsCreateOpen(false)}
++        position={EModalPosition.CENTER}
++        width={EModalWidth.LG}
++      >
++        <form
++          className="space-y-4 p-5"
++          onSubmit={(e) => {
++            e.preventDefault();
++            void createChannel();
++          }}
++        >
++          <h3 className="text-lg font-medium">{t("chat.new_channel")}</h3>
++          <Input
++            value={name}
++            onChange={(e) => setName(e.target.value)}
++            placeholder={t("chat.channel_name_placeholder")}
++            className="w-full"
++            autoFocus
++          />
++          <div className="flex justify-end gap-2">
++            <Button variant="secondary" size="sm" type="button" onClick={() => setIsCreateOpen(false)}>
++              {t("cancel")}
++            </Button>
++            <Button variant="primary" size="sm" type="submit" loading={isSubmitting} disabled={!name.trim()}>
++              {t("chat.create_channel")}
++            </Button>
++          </div>
++        </form>
++      </ModalCore>
++    </div>
++  );
++});
+diff --git a/apps/web/core/components/chat/chat-view.tsx b/apps/web/core/components/chat/chat-view.tsx
+new file mode 100644
+index 0000000..8374f37
+--- /dev/null
++++ b/apps/web/core/components/chat/chat-view.tsx
+@@ -0,0 +1,216 @@
++/**
++ * Sintergica CE extension: chat root view (channel sidebar + room + thread).
++ *
++ * Realtime is provisional in phase 2: the active channel catches up with
++ * created_at__gt every 10s and unread badges refresh every 60s — the exact
++ * same calls a websocket reconnect will use in phase 3, so the store does not
++ * change when the transport does.
++ *
++ * Derived from Plane CE code (AGPL-3.0-only).
++ */
++
++import { useCallback, useEffect, useState } from "react";
++import { Hash } from "lucide-react";
++import { observer } from "mobx-react";
++// plane imports
++import { useTranslation } from "@plane/i18n";
++import type { ISearchIssueResponse, TIssue } from "@plane/types";
++// components
++import { ExistingIssuesListModal } from "@/components/core/modals/existing-issues-list-modal";
++import { CreateUpdateIssueModal } from "@/components/issues/issue-modal/modal";
++// hooks
++import { useChat } from "@/hooks/store/use-chat";
++import { useAppRouter } from "@/hooks/use-app-router";
++import { useChannelConnection } from "@/hooks/use-channel-connection";
++// services
++import type { TChatMessage } from "@/services/chat.service";
++// local imports
++import { ChatChannelList } from "./channel-list";
++import { ChatComposer } from "./composer";
++import { ChatMessageList } from "./message-list";
++import { ChatThreadPanel } from "./thread-panel";
++
++const ACTIVE_POLL_MS = 10_000;
++const UNREADS_POLL_MS = 60_000;
++
++type TProps = {
++  workspaceSlug: string;
++  projectId?: string;
++  channelId?: string;
++};
++
++export const ChatView = observer(function ChatView(props: TProps) {
++  const { workspaceSlug, projectId, channelId } = props;
++  // states
++  const [linkTargetId, setLinkTargetId] = useState<string | null>(null);
++  const [createSource, setCreateSource] = useState<TChatMessage | null>(null);
++  // store hooks
++  const chat = useChat();
++  const router = useAppRouter();
++  const { t } = useTranslation();
++  // realtime: websocket over the live server; polling stays as fallback
++  const { isLive, typingUsers, setTyping } = useChannelConnection({ workspaceSlug, channelId });
++  // derived values
++  const channel = channelId ? chat.channels[channelId] : undefined;
++  const basePath = projectId
++    ? `/${workspaceSlug}/projects/${projectId}/channels`
++    : `/${workspaceSlug}/channels`;
++
++  const goToChannel = useCallback(
++    (id: string) => {
++      const target = chat.channels[id];
++      // A project channel opened from the workspace view keeps its own URL.
++      if (!projectId && target?.project) {
++        router.push(`/${workspaceSlug}/projects/${target.project}/channels/${id}`);
++      } else {
++        router.push(`${basePath}/${id}`);
++      }
++    },
++    // eslint-disable-next-line react-hooks/exhaustive-deps
++    [basePath, projectId, workspaceSlug]
++  );
++
++  // Channels + unread bootstrap.
++  useEffect(() => {
++    void chat.fetchChannels(workspaceSlug, projectId).then(() => chat.fetchUnreads(workspaceSlug));
++    // eslint-disable-next-line react-hooks/exhaustive-deps
++  }, [workspaceSlug, projectId]);
++
++  // No channel in the URL: land on #general (project) or the first channel.
++  useEffect(() => {
++    if (channelId) return;
++    const candidates = projectId ? chat.channelsForProject(projectId) : chat.channelsForWorkspace(workspaceSlug);
++    const fallback = candidates.find((c) => c.is_general) ?? candidates[0];
++    if (fallback) router.push(`${basePath}/${fallback.id}`);
++    // eslint-disable-next-line react-hooks/exhaustive-deps
++  }, [channelId, chat.channelsFetchedFor[projectId ?? "workspace"]]);
++
++  // Active channel: initial load + mark read.
++  useEffect(() => {
++    if (!channelId) return;
++    chat.setActiveChannel(channelId);
++    void chat.fetchInitialMessages(workspaceSlug, channelId).then(() => chat.markRead(workspaceSlug, channelId));
++    return () => {
++      chat.resetActive();
++    };
++    // eslint-disable-next-line react-hooks/exhaustive-deps
++  }, [workspaceSlug, channelId]);
++
++  // Polling fallback: only while the websocket is down (isLive false).
++  useEffect(() => {
++    if (!channelId || isLive) return;
++    const poll = setInterval(() => {
++      if (document.visibilityState !== "visible") return;
++      void chat.catchUp(workspaceSlug, channelId).then(() => {
++        if (document.hasFocus()) void chat.markRead(workspaceSlug, channelId);
++      });
++    }, ACTIVE_POLL_MS);
++    return () => clearInterval(poll);
++    // eslint-disable-next-line react-hooks/exhaustive-deps
++  }, [workspaceSlug, channelId, isLive]);
++
++  useEffect(() => {
++    const poll = setInterval(() => {
++      if (document.visibilityState !== "visible") return;
++      void chat.fetchUnreads(workspaceSlug);
++    }, UNREADS_POLL_MS);
++    return () => clearInterval(poll);
++    // eslint-disable-next-line react-hooks/exhaustive-deps
++  }, [workspaceSlug]);
++
++  const linkTarget = linkTargetId ? chat.messageMap[linkTargetId] : null;
++  const modalProjectId = channel?.project ?? projectId;
++
++  return (
++    <div className="flex h-full overflow-hidden">
++      <ChatChannelList
++        workspaceSlug={workspaceSlug}
++        projectId={projectId}
++        activeChannelId={channelId ?? null}
++        onSelect={(c) => goToChannel(c.id)}
++      />
++      {channelId && channel ? (
++        <div className="flex min-w-0 flex-1 flex-col">
++          <div className="flex items-center gap-2 border-b border-subtle px-4 py-2.5">
++            <Hash className="size-4 text-tertiary" />
++            <h2 className="text-sm font-semibold">{channel.name}</h2>
++            {channel.description && <span className="truncate text-xs text-tertiary">{channel.description}</span>}
++          </div>
++          <ChatMessageList
++            workspaceSlug={workspaceSlug}
++            channelId={channelId}
++            onOpenThread={(rootId) => chat.setActiveThread(rootId)}
++            onLinkWorkItem={(messageId) => setLinkTargetId(messageId)}
++            onCreateWorkItem={(message) => setCreateSource(message)}
++          />
++          {typingUsers.length > 0 && (
++            <p className="px-4 pb-1 text-xs italic text-tertiary">
++              {t("chat.typing", { names: typingUsers.join(", ") })}
++            </p>
++          )}
++          <ChatComposer
++            workspaceSlug={workspaceSlug}
++            projectId={channel.project ?? undefined}
++            channelId={channelId}
++            onTyping={setTyping}
++            onSend={async (data) => {
++              await chat.sendMessage(workspaceSlug, channelId, data);
++              void chat.markRead(workspaceSlug, channelId);
++            }}
++          />
++        </div>
++      ) : (
++        <div className="grid flex-1 place-items-center">
++          <p className="text-sm text-tertiary">{t("chat.select_channel")}</p>
++        </div>
++      )}
++      {channelId && chat.activeThreadRootId && (
++        <ChatThreadPanel
++          workspaceSlug={workspaceSlug}
++          channelId={channelId}
++          rootId={chat.activeThreadRootId}
++          onClose={() => chat.setActiveThread(null)}
++          onLinkWorkItem={(messageId) => setLinkTargetId(messageId)}
++          onCreateWorkItem={(message) => setCreateSource(message)}
++        />
++      )}
++
++      {/* link an existing work item to a message */}
++      <ExistingIssuesListModal
++        workspaceSlug={workspaceSlug}
++        projectId={modalProjectId ?? undefined}
++        isOpen={!!linkTarget}
++        handleClose={() => setLinkTargetId(null)}
++        searchParams={{}}
++        workspaceLevelToggle={!modalProjectId}
++        selectedWorkItemIds={linkTarget?.work_item_links.map((l) => l.issue_id) ?? []}
++        handleOnSubmit={async (issues: ISearchIssueResponse[]) => {
++          if (!linkTarget || !channelId) return;
++          for (const issue of issues) {
++            await chat.linkWorkItem(workspaceSlug, channelId, linkTarget.id, issue.id);
++          }
++          setLinkTargetId(null);
++        }}
++      />
++
++      {/* create a work item from a message */}
++      <CreateUpdateIssueModal
++        isOpen={!!createSource}
++        onClose={() => setCreateSource(null)}
++        data={
++          createSource
++            ? {
++                name: (createSource.message_stripped ?? "").slice(0, 60) || undefined,
++                description_html: createSource.message_html,
++                project_id: modalProjectId ?? undefined,
++              }
++            : undefined
++        }
++        onSubmit={async (issue: TIssue) => {
++          if (!createSource || !channelId || !issue?.id) return;
++          await chat.linkWorkItem(workspaceSlug, channelId, createSource.id, issue.id);
++        }}
++      />
++    </div>
++  );
++});
+diff --git a/apps/web/core/components/chat/composer.tsx b/apps/web/core/components/chat/composer.tsx
+new file mode 100644
+index 0000000..64873cc
+--- /dev/null
++++ b/apps/web/core/components/chat/composer.tsx
+@@ -0,0 +1,97 @@
++/**
++ * Sintergica CE extension: chat message composer.
++ *
++ * LiteTextEditor in its lite variant: @mentions, emoji, Enter sends,
++ * Shift+Enter breaks the line. Attachments stay out of v1, so the image
++ * extension is disabled and the upload handler rejects.
++ *
++ * Derived from Plane CE code (AGPL-3.0-only).
++ */
++
++import { useRef, useState } from "react";
++import { observer } from "mobx-react";
++// plane imports
++import type { EditorRefApi } from "@plane/editor";
++import { useTranslation } from "@plane/i18n";
++import { isCommentEmpty } from "@plane/utils";
++// components
++import { LiteTextEditor } from "@/components/editor/lite-text";
++// hooks
++import { useWorkspace } from "@/hooks/store/use-workspace";
++
++type TProps = {
++  workspaceSlug: string;
++  projectId?: string;
++  channelId: string;
++  placeholder?: string;
++  onSend: (data: { message_html: string; message_json: object | null }) => Promise<void>;
++  onTyping?: (isTyping: boolean) => void;
++};
++
++export const ChatComposer = observer(function ChatComposer(props: TProps) {
++  const { workspaceSlug, projectId, channelId, placeholder, onSend, onTyping } = props;
++  // states
++  const [html, setHtml] = useState("<p></p>");
++  const [json, setJson] = useState<object | null>(null);
++  const [isSubmitting, setIsSubmitting] = useState(false);
++  // refs
++  const editorRef = useRef<EditorRefApi>(null);
++  // store hooks
++  const workspaceStore = useWorkspace();
++  const { t } = useTranslation();
++  // derived values
++  const workspaceId = workspaceStore.getWorkspaceBySlug(workspaceSlug)?.id as string;
++  const isEmpty = isCommentEmpty(html);
++
++  const submit = async () => {
++    if (isEmpty || isSubmitting) return;
++    setIsSubmitting(true);
++    // Capture then clear immediately: the message shows up optimistically in
++    // the list, so the composer should feel instant.
++    const payload = { message_html: html, message_json: json };
++    onTyping?.(false);
++    setHtml("<p></p>");
++    setJson(null);
++    editorRef.current?.clearEditor();
++    try {
++      await onSend(payload);
++    } catch (error) {
++      console.error(error);
++    } finally {
++      setIsSubmitting(false);
++    }
++  };
++
++  return (
++    <div className="border-t border-subtle bg-surface-1 px-4 py-3">
++      <LiteTextEditor
++        editable
++        ref={editorRef}
++        id={`chat-composer-${channelId}`}
++        initialValue="<p></p>"
++        value="<p></p>"
++        workspaceId={workspaceId}
++        workspaceSlug={workspaceSlug}
++        projectId={projectId}
++        variant="lite"
++        placeholder={placeholder ?? t("chat.composer_placeholder")}
++        onChange={(message_json, message_html) => {
++          setJson(message_json as object);
++          setHtml(message_html);
++          onTyping?.(true);
++        }}
++        onEnterKeyPress={() => void submit()}
++        isSubmitting={isSubmitting}
++        showToolbarInitially={false}
++        containerClassName="min-h-min"
++        disabledExtensions={["image"]}
++        uploadFile={async () => {
++          throw new Error("Attachments are not available in chat yet.");
++        }}
++        duplicateFile={async () => {
++          throw new Error("Attachments are not available in chat yet.");
++        }}
++      />
++    </div>
++  );
++});
+diff --git a/apps/web/core/components/chat/index.ts b/apps/web/core/components/chat/index.ts
+new file mode 100644
+index 0000000..2c67f33
+--- /dev/null
++++ b/apps/web/core/components/chat/index.ts
+@@ -0,0 +1,14 @@
++/**
++ * Sintergica CE extension: chat channels (Tequio canales) barrel.
++ * Not to be confused with the standalone Mattermost-based chat product —
++ * this is the native per-project/workspace channel system inside Tequio.
++ * Derived from Plane CE code (AGPL-3.0-only).
++ */
++
++export * from "./chat-view";
++export * from "./channel-list";
++export * from "./composer";
++export * from "./message-list";
++export * from "./message-card";
++export * from "./thread-panel";
++export * from "./work-item-chip";
+diff --git a/apps/web/core/components/chat/message-card.tsx b/apps/web/core/components/chat/message-card.tsx
+new file mode 100644
+index 0000000..c0f4e22
+--- /dev/null
++++ b/apps/web/core/components/chat/message-card.tsx
+@@ -0,0 +1,271 @@
++/**
++ * Sintergica CE extension: one chat message bubble.
++ *
++ * Slack-ish layout: avatar + name + time on the first message of a group,
++ * hanging content for the rest. Reactions and work-item chips render under
++ * the content; a root with replies shows the thread teaser.
++ *
++ * Derived from Plane CE code (AGPL-3.0-only).
++ */
++
++import { useState } from "react";
++import { MessageSquareText, Pencil, Trash2, Link2, SquarePlus, SmilePlus } from "lucide-react";
++import { observer } from "mobx-react";
++// plane imports
++import type { EditorRefApi } from "@plane/editor";
++import { useTranslation } from "@plane/i18n";
++import { stringToEmoji } from "@plane/propel/emoji-icon-picker";
++import { EmojiReactionGroup, EmojiReactionPicker, type EmojiReactionType } from "@plane/propel/emoji-reaction";
++import { Avatar, CustomMenu, Tooltip } from "@plane/ui";
++import { calculateTimeAgo, cn, getFileURL, isCommentEmpty, renderFormattedTime } from "@plane/utils";
++// components
++import { LiteTextEditor } from "@/components/editor/lite-text";
++// hooks
++import { useChat } from "@/hooks/store/use-chat";
++import { useUser } from "@/hooks/store/user";
++import { useWorkspace } from "@/hooks/store/use-workspace";
++// services
++import type { TChatMessage } from "@/services/chat.service";
++// local imports
++import { WorkItemChip } from "./work-item-chip";
++
++type TProps = {
++  workspaceSlug: string;
++  message: TChatMessage;
++  grouped?: boolean;
++  inThread?: boolean;
++  onOpenThread?: (rootId: string) => void;
++  onLinkWorkItem?: (messageId: string) => void;
++  onCreateWorkItem?: (message: TChatMessage) => void;
++};
++
++export const ChatMessageCard = observer(function ChatMessageCard(props: TProps) {
++  const { workspaceSlug, message, grouped = false, inThread = false, onOpenThread, onLinkWorkItem, onCreateWorkItem } = props;
++  // states
++  const [isEditing, setIsEditing] = useState(false);
++  const [editHtml, setEditHtml] = useState(message.message_html);
++  const [isPickerOpen, setIsPickerOpen] = useState(false);
++  // store hooks
++  const chat = useChat();
++  const { data: currentUser } = useUser();
++  const workspaceStore = useWorkspace();
++  const { t } = useTranslation();
++  // refs are per-card and cheap
++  const editorRef: React.RefObject<EditorRefApi> = { current: null };
++  // derived values
++  const workspaceId = workspaceStore.getWorkspaceBySlug(workspaceSlug)?.id as string;
++  const isMine = currentUser?.id === message.actor;
++  const isTemp = message.id.startsWith("temp-");
++  const channel = chat.channels[message.channel];
++  const projectId = channel?.project ?? undefined;
++
++  const reactionGroups: EmojiReactionType[] = [];
++  for (const r of message.reactions) {
++    const found = reactionGroups.find((g) => g.emoji === stringToEmoji(r.reaction));
++    if (found) {
++      found.count += 1;
++      if (r.actor === currentUser?.id) found.reacted = true;
++    } else {
++      reactionGroups.push({
++        emoji: stringToEmoji(r.reaction),
++        count: 1,
++        reacted: r.actor === currentUser?.id,
++      });
++    }
++  }
++
++  const react = (reactionString: string) => {
++    void chat.toggleReaction(workspaceSlug, message.channel, message.id, reactionString);
++  };
++
++  const handleReactionClick = (emoji: string) => {
++    const codePoints = Array.from(emoji)
++      .map((char) => char.codePointAt(0))
++      .join("-");
++    react(codePoints);
++  };
++
++  const saveEdit = async () => {
++    if (isCommentEmpty(editHtml)) return;
++    await chat.editMessage(workspaceSlug, message.channel, message.id, { message_html: editHtml });
++    setIsEditing(false);
++  };
++
++  if (message.is_removed) {
++    return (
++      <div className={cn("flex gap-3 px-4 py-1", grouped ? "pl-[3.25rem]" : "")}>
++        <p className="text-sm italic text-tertiary">{t("chat.message_removed")}</p>
++      </div>
++    );
++  }
++
++  return (
++    <div className={cn("group relative flex gap-3 px-4 py-0.5 hover:bg-surface-2/60", !grouped && "mt-2 pt-1", isTemp && "opacity-60")}>
++      {!grouped ? (
++        <div className="mt-0.5 shrink-0">
++          <Avatar
++            size="lg"
++            name={message.actor_detail?.display_name}
++            src={getFileURL(message.actor_detail?.avatar_url ?? "")}
++          />
++        </div>
++      ) : (
++        <div className="w-8 shrink-0 pt-1 text-right">
++          <span className="hidden text-[10px] text-tertiary group-hover:inline">
++            {renderFormattedTime(message.created_at)}
++          </span>
++        </div>
++      )}
++      <div className="min-w-0 flex-1">
++        {!grouped && (
++          <div className="flex items-baseline gap-2">
++            <span className="text-sm font-semibold">{message.actor_detail?.display_name}</span>
++            <Tooltip tooltipContent={new Date(message.created_at).toLocaleString()}>
++              <span className="text-xs text-tertiary">{renderFormattedTime(message.created_at)}</span>
++            </Tooltip>
++            {message.edited_at && <span className="text-[10px] text-tertiary">({t("chat.edited")})</span>}
++          </div>
++        )}
++        {isEditing ? (
++          <div className="mt-1">
++            <LiteTextEditor
++              editable
++              ref={editorRef}
++              id={`chat-edit-${message.id}`}
++              initialValue={message.message_html}
++              value={message.message_html}
++              workspaceId={workspaceId}
++              workspaceSlug={workspaceSlug}
++              projectId={projectId}
++              variant="lite"
++              onChange={(_json, html) => setEditHtml(html)}
++              onEnterKeyPress={() => void saveEdit()}
++              showToolbarInitially={false}
++              containerClassName="min-h-min"
++              disabledExtensions={["image"]}
++              uploadFile={async () => {
++                throw new Error("unsupported");
++              }}
++              duplicateFile={async () => {
++                throw new Error("unsupported");
++              }}
++            />
++            <div className="mt-1 flex gap-2 text-xs">
++              <button type="button" className="text-tertiary hover:text-primary" onClick={() => setIsEditing(false)}>
++                {t("cancel")}
++              </button>
++              <button type="button" className="font-medium text-accent-primary" onClick={() => void saveEdit()}>
++                {t("save")}
++              </button>
++            </div>
++          </div>
++        ) : (
++          <LiteTextEditor
++            editable={false}
++            id={`chat-msg-${message.id}`}
++            initialValue={message.message_html}
++            workspaceId={workspaceId}
++            workspaceSlug={workspaceSlug}
++            projectId={projectId}
++            displayConfig={{ fontSize: "small-font" }}
++            containerClassName="!p-0 border-none"
++            parentClassName="border-none"
++          />
++        )}
++        {message.work_item_links.length > 0 && (
++          <div className="mt-1 flex flex-wrap gap-1.5">
++            {message.work_item_links.map((link) => (
++              <WorkItemChip
++                key={link.issue_id}
++                workspaceSlug={workspaceSlug}
++                link={link}
++                onUnlink={
++                  isMine
++                    ? () => void chat.unlinkWorkItem(workspaceSlug, message.channel, message.id, link.issue_id)
++                    : undefined
++                }
++              />
++            ))}
++          </div>
++        )}
++        {reactionGroups.length > 0 && (
++          <div className="mt-1">
++            <EmojiReactionGroup reactions={reactionGroups} onReactionClick={handleReactionClick} showAddButton={false} />
++          </div>
++        )}
++        {!inThread && message.reply_count > 0 && (
++          <button
++            type="button"
++            className="mt-1 flex items-center gap-1.5 text-xs font-medium text-accent-primary hover:underline"
++            onClick={() => onOpenThread?.(message.id)}
++          >
++            <MessageSquareText className="size-3.5" />
++            {t("chat.reply_count", { count: message.reply_count })}
++            {message.last_reply_at && (
++              <span className="font-normal text-tertiary">{calculateTimeAgo(message.last_reply_at)}</span>
++            )}
++          </button>
++        )}
++      </div>
++      {/* hover actions */}
++      {!isTemp && !isEditing && (
++        <div className="absolute -top-3 right-4 hidden items-center gap-0.5 rounded border border-subtle bg-surface-1 p-0.5 shadow-sm group-hover:flex">
++          <EmojiReactionPicker
++            isOpen={isPickerOpen}
++            handleToggle={setIsPickerOpen}
++            onChange={(emoji) => react(emoji)}
++            label={
++              <span className="grid size-6 place-items-center rounded hover:bg-layer-1">
++                <SmilePlus className="size-3.5 text-tertiary" />
++              </span>
++            }
++          />
++          {!inThread && (
++            <Tooltip tooltipContent={t("chat.reply_in_thread")}>
++              <button
++                type="button"
++                className="grid size-6 place-items-center rounded hover:bg-layer-1"
++                onClick={() => onOpenThread?.(message.id)}
++              >
++                <MessageSquareText className="size-3.5 text-tertiary" />
++              </button>
++            </Tooltip>
++          )}
++          <CustomMenu ellipsis placement="bottom-end" closeOnSelect>
++            <CustomMenu.MenuItem onClick={() => onLinkWorkItem?.(message.id)}>
++              <span className="flex items-center gap-2">
++                <Link2 className="size-3.5" /> {t("chat.link_work_item")}
++              </span>
++            </CustomMenu.MenuItem>
++            <CustomMenu.MenuItem onClick={() => onCreateWorkItem?.(message)}>
++              <span className="flex items-center gap-2">
++                <SquarePlus className="size-3.5" /> {t("chat.create_work_item")}
++              </span>
++            </CustomMenu.MenuItem>
++            {isMine && (
++              <CustomMenu.MenuItem
++                onClick={() => {
++                  setEditHtml(message.message_html);
++                  setIsEditing(true);
++                }}
++              >
++                <span className="flex items-center gap-2">
++                  <Pencil className="size-3.5" /> {t("edit")}
++                </span>
++              </CustomMenu.MenuItem>
++            )}
++            {isMine && (
++              <CustomMenu.MenuItem
++                onClick={() => void chat.removeMessage(workspaceSlug, message.channel, message.id)}
++              >
++                <span className="flex items-center gap-2 text-red-500">
++                  <Trash2 className="size-3.5" /> {t("delete")}
++                </span>
++              </CustomMenu.MenuItem>
++            )}
++          </CustomMenu>
++        </div>
++      )}
++    </div>
++  );
++});
+diff --git a/apps/web/core/components/chat/message-list.tsx b/apps/web/core/components/chat/message-list.tsx
+new file mode 100644
+index 0000000..510cc65
+--- /dev/null
++++ b/apps/web/core/components/chat/message-list.tsx
+@@ -0,0 +1,135 @@
++/**
++ * Sintergica CE extension: chat message list.
++ *
++ * Renders oldest → newest with the scroll pinned to the bottom; scrolling to
++ * the top pulls the previous page (keyset cursor). Consecutive messages from
++ * the same author within 5 minutes collapse into a group.
++ *
++ * Derived from Plane CE code (AGPL-3.0-only).
++ */
++
++import { useEffect, useLayoutEffect, useRef } from "react";
++import { observer } from "mobx-react";
++// plane imports
++import { useTranslation } from "@plane/i18n";
++import { Loader } from "@plane/ui";
++import { renderFormattedDate } from "@plane/utils";
++// hooks
++import { useChat } from "@/hooks/store/use-chat";
++// services
++import type { TChatMessage } from "@/services/chat.service";
++// local imports
++import { ChatMessageCard } from "./message-card";
++
++type TProps = {
++  workspaceSlug: string;
++  channelId: string;
++  onOpenThread: (rootId: string) => void;
++  onLinkWorkItem: (messageId: string) => void;
++  onCreateWorkItem: (message: TChatMessage) => void;
++};
++
++const GROUP_WINDOW_MS = 5 * 60 * 1000;
++
++export const ChatMessageList = observer(function ChatMessageList(props: TProps) {
++  const { workspaceSlug, channelId, onOpenThread, onLinkWorkItem, onCreateWorkItem } = props;
++  // store hooks
++  const chat = useChat();
++  const { t } = useTranslation();
++  // refs
++  const scrollRef = useRef<HTMLDivElement>(null);
++  const stickToBottomRef = useRef(true);
++  const loadingOlderRef = useRef(false);
++  // derived values
++  const messages = chat.channelMessages(channelId);
++  const hasMore = chat.hasMoreByChannel[channelId] ?? false;
++  const lastId = messages.length ? messages[messages.length - 1].id : null;
++
++  // Pin to bottom on new messages unless the user scrolled up to read.
++  useLayoutEffect(() => {
++    const el = scrollRef.current;
++    if (el && stickToBottomRef.current) el.scrollTop = el.scrollHeight;
++  }, [lastId, channelId]);
++
++  useEffect(() => {
++    stickToBottomRef.current = true;
++  }, [channelId]);
++
++  const handleScroll = async () => {
++    const el = scrollRef.current;
++    if (!el) return;
++    stickToBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
++    if (el.scrollTop < 80 && hasMore && !loadingOlderRef.current) {
++      loadingOlderRef.current = true;
++      const previousHeight = el.scrollHeight;
++      try {
++        await chat.fetchOlderMessages(workspaceSlug, channelId);
++        // Keep the viewport anchored on the message the user was reading.
++        requestAnimationFrame(() => {
++          if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight - previousHeight;
++        });
++      } finally {
++        loadingOlderRef.current = false;
++      }
++    }
++  };
++
++  if (!messages.length && hasMore === false && !chat.messageIdsByChannel[channelId]) {
++    return (
++      <div className="flex-1 space-y-3 p-4">
++        <Loader>
++          <Loader.Item height="40px" width="60%" />
++          <Loader.Item height="40px" width="80%" />
++          <Loader.Item height="40px" width="50%" />
++        </Loader>
++      </div>
++    );
++  }
++
++  return (
++    <div ref={scrollRef} onScroll={() => void handleScroll()} className="flex-1 overflow-y-auto pb-3">
++      {!hasMore && messages.length > 0 && (
++        <p className="px-4 pt-4 text-xs text-tertiary">{t("chat.beginning_of_channel")}</p>
++      )}
++      {messages.length === 0 && (
++        <div className="grid h-full place-items-center">
++          <div className="text-center">
++            <p className="text-sm font-medium">{t("chat.empty_title")}</p>
++            <p className="mt-1 text-xs text-tertiary">{t("chat.empty_description")}</p>
++          </div>
++        </div>
++      )}
++      {messages.map((message, index) => {
++        const previous = index > 0 ? messages[index - 1] : null;
++        const newDay =
++          !previous ||
++          new Date(previous.created_at).toDateString() !== new Date(message.created_at).toDateString();
++        const grouped =
++          !newDay &&
++          !!previous &&
++          previous.actor === message.actor &&
++          !previous.is_removed &&
++          new Date(message.created_at).getTime() - new Date(previous.created_at).getTime() < GROUP_WINDOW_MS;
++        return (
++          <div key={message.id}>
++            {newDay && (
++              <div className="my-3 flex items-center gap-3 px-4">
++                <div className="h-px flex-1 bg-layer-1" />
++                <span className="text-xs font-medium text-tertiary">{renderFormattedDate(message.created_at)}</span>
++                <div className="h-px flex-1 bg-layer-1" />
++              </div>
++            )}
++            <ChatMessageCard
++              workspaceSlug={workspaceSlug}
++              message={message}
++              grouped={grouped}
++              onOpenThread={onOpenThread}
++              onLinkWorkItem={onLinkWorkItem}
++              onCreateWorkItem={onCreateWorkItem}
++            />
++          </div>
++        );
++      })}
++    </div>
++  );
++});
+diff --git a/apps/web/core/components/chat/thread-panel.tsx b/apps/web/core/components/chat/thread-panel.tsx
+new file mode 100644
+index 0000000..683fddd
+--- /dev/null
++++ b/apps/web/core/components/chat/thread-panel.tsx
+@@ -0,0 +1,95 @@
++/**
++ * Sintergica CE extension: chat thread side panel (root + replies + composer).
++ * Derived from Plane CE code (AGPL-3.0-only).
++ */
++
++import { useEffect } from "react";
++import { X } from "lucide-react";
++import { observer } from "mobx-react";
++// plane imports
++import { useTranslation } from "@plane/i18n";
++// hooks
++import { useChat } from "@/hooks/store/use-chat";
++// services
++import type { TChatMessage } from "@/services/chat.service";
++// local imports
++import { ChatComposer } from "./composer";
++import { ChatMessageCard } from "./message-card";
++
++type TProps = {
++  workspaceSlug: string;
++  channelId: string;
++  rootId: string;
++  onClose: () => void;
++  onLinkWorkItem: (messageId: string) => void;
++  onCreateWorkItem: (message: TChatMessage) => void;
++};
++
++export const ChatThreadPanel = observer(function ChatThreadPanel(props: TProps) {
++  const { workspaceSlug, channelId, rootId, onClose, onLinkWorkItem, onCreateWorkItem } = props;
++  // store hooks
++  const chat = useChat();
++  const { t } = useTranslation();
++  // derived values
++  const root = chat.messageMap[rootId];
++  const replies = chat.threadReplies(rootId);
++  const channel = chat.channels[channelId];
++
++  useEffect(() => {
++    void chat.fetchThread(workspaceSlug, channelId, rootId);
++    // eslint-disable-next-line react-hooks/exhaustive-deps
++  }, [workspaceSlug, channelId, rootId]);
++
++  if (!root) return null;
++
++  return (
++    <div className="flex w-96 shrink-0 flex-col border-l border-subtle bg-surface-1">
++      <div className="flex items-center justify-between border-b border-subtle px-4 py-2.5">
++        <h3 className="text-sm font-semibold">{t("chat.thread")}</h3>
++        <button type="button" className="rounded p-1 text-tertiary hover:bg-layer-1" onClick={onClose}>
++          <X className="size-4" />
++        </button>
++      </div>
++      <div className="flex-1 overflow-y-auto py-2">
++        <ChatMessageCard
++          workspaceSlug={workspaceSlug}
++          message={root}
++          inThread
++          onLinkWorkItem={onLinkWorkItem}
++          onCreateWorkItem={onCreateWorkItem}
++        />
++        {replies.length > 0 && (
++          <div className="my-2 flex items-center gap-2 px-4">
++            <span className="text-xs text-tertiary">{t("chat.reply_count", { count: replies.length })}</span>
++            <div className="h-px flex-1 bg-layer-1" />
++          </div>
++        )}
++        {replies.map((reply, index) => {
++          const previous = index > 0 ? replies[index - 1] : null;
++          const grouped =
++            !!previous && previous.actor === reply.actor && !previous.is_removed;
++          return (
++            <ChatMessageCard
++              key={reply.id}
++              workspaceSlug={workspaceSlug}
++              message={reply}
++              grouped={grouped}
++              inThread
++              onLinkWorkItem={onLinkWorkItem}
++              onCreateWorkItem={onCreateWorkItem}
++            />
++          );
++        })}
++      </div>
++      <ChatComposer
++        workspaceSlug={workspaceSlug}
++        projectId={channel?.project ?? undefined}
++        channelId={`${channelId}-thread-${rootId}`}
++        placeholder={t("chat.reply_placeholder")}
++        onSend={async (data) => {
++          await chat.sendMessage(workspaceSlug, channelId, { ...data, parent_id: rootId });
++        }}
++      />
++    </div>
++  );
++});
+diff --git a/apps/web/core/components/chat/work-item-chip.tsx b/apps/web/core/components/chat/work-item-chip.tsx
+new file mode 100644
+index 0000000..63ed936
+--- /dev/null
++++ b/apps/web/core/components/chat/work-item-chip.tsx
+@@ -0,0 +1,57 @@
++/**
++ * Sintergica CE extension: work item chip under a chat message.
++ * Derived from Plane CE code (AGPL-3.0-only).
++ */
++
++import { X } from "lucide-react";
++import { observer } from "mobx-react";
++import { Link } from "react-router";
++// plane imports
++import { LayersIcon } from "@plane/propel/icons";
++import { Tooltip } from "@plane/ui";
++import { cn } from "@plane/utils";
++// services
++import type { TChatWorkItemLink } from "@/services/chat.service";
++
++type TProps = {
++  workspaceSlug: string;
++  link: TChatWorkItemLink;
++  onUnlink?: () => void;
++};
++
++const STATE_GROUP_COLORS: Record<string, string> = {
++  backlog: "text-tertiary",
++  unstarted: "text-tertiary",
++  started: "text-amber-500",
++  completed: "text-green-500",
++  cancelled: "text-red-500",
++};
++
++export const WorkItemChip = observer(function WorkItemChip(props: TProps) {
++  const { workspaceSlug, link, onUnlink } = props;
++  return (
++    <div className="group/chip inline-flex max-w-72 items-center gap-1.5 rounded border border-subtle bg-surface-2 px-2 py-1 text-xs">
++      <LayersIcon className={cn("size-3 shrink-0", STATE_GROUP_COLORS[link.state_group ?? ""] ?? "text-tertiary")} />
++      <Link
++        to={`/${workspaceSlug}/projects/${link.project_id}/issues/${link.issue_id}`}
++        className="flex min-w-0 items-center gap-1.5 hover:underline"
++      >
++        <span className="shrink-0 font-medium text-tertiary">
++          {link.identifier}-{link.sequence_id}
++        </span>
++        <Tooltip tooltipContent={link.name}>
++          <span className="truncate">{link.name}</span>
++        </Tooltip>
++      </Link>
++      {onUnlink && (
++        <button
++          type="button"
++          onClick={onUnlink}
++          className="hidden shrink-0 rounded p-0.5 text-tertiary hover:bg-layer-1 hover:text-primary group-hover/chip:block"
++        >
++          <X className="size-3" />
++        </button>
++      )}
++    </div>
++  );
++});
 diff --git a/apps/web/core/components/common/activity/helper.tsx b/apps/web/core/components/common/activity/helper.tsx
 index b118186..1495284 100644
 --- a/apps/web/core/components/common/activity/helper.tsx
@@ -107648,14 +109238,14 @@ index d19b860..48abc34 100644
        </CustomMenu>
      </>
 diff --git a/apps/web/core/components/workspace/sidebar/helper.tsx b/apps/web/core/components/workspace/sidebar/helper.tsx
-index 9bf4a01..44dfad5 100644
+index 9bf4a01..4c9ea72 100644
 --- a/apps/web/core/components/workspace/sidebar/helper.tsx
 +++ b/apps/web/core/components/workspace/sidebar/helper.tsx
 @@ -4,6 +4,7 @@
   * See the LICENSE file for details.
   */
  
-+import { Banknote, FolderOpen } from "lucide-react";
++import { Banknote, FolderOpen, MessagesSquare } from "lucide-react";
  import {
    AnalyticsIcon,
    ArchiveIcon,
@@ -107667,7 +109257,7 @@ index 9bf4a01..44dfad5 100644
    YourWorkIcon,
  } from "@plane/propel/icons";
  import { cn } from "@plane/utils";
-@@ -40,5 +42,11 @@ export const getSidebarNavigationItemIcon = (key: string, className: string = ""
+@@ -40,5 +42,13 @@ export const getSidebarNavigationItemIcon = (key: string, className: string = ""
        return <ArchiveIcon className={cn("size-4 flex-shrink-0", className)} />;
      case "stickies":
        return <MultipleStickyIcon className={cn("size-4 flex-shrink-0", className)} />;
@@ -107677,17 +109267,19 @@ index 9bf4a01..44dfad5 100644
 +      return <FolderOpen className={cn("size-4 flex-shrink-0", className)} />;
 +    case "finance":
 +      return <Banknote className={cn("size-4 flex-shrink-0", className)} />;
++    case "channels":
++      return <MessagesSquare className={cn("size-4 flex-shrink-0", className)} />;
    }
  };
 diff --git a/apps/web/core/components/workspace/sidebar/project-navigation.tsx b/apps/web/core/components/workspace/sidebar/project-navigation.tsx
-index 3582215..fff4ada 100644
+index 3582215..389e6fa 100644
 --- a/apps/web/core/components/workspace/sidebar/project-navigation.tsx
 +++ b/apps/web/core/components/workspace/sidebar/project-navigation.tsx
 @@ -10,6 +10,7 @@ import Link from "next/link";
  import { useParams, usePathname } from "next/navigation";
  import { EUserPermissionsLevel, EUserPermissions } from "@plane/constants";
  import { useTranslation } from "@plane/i18n";
-+import { Banknote, FolderOpen } from "lucide-react";
++import { Banknote, FolderOpen, MessagesSquare } from "lucide-react";
  import { CycleIcon, IntakeIcon, ModuleIcon, PageIcon, ViewsIcon, WorkItemsIcon } from "@plane/propel/icons";
  import type { EUserProjectRoles } from "@plane/types";
  // plane ui
@@ -107707,7 +109299,7 @@ index 3582215..fff4ada 100644
    const { allowPermissions } = useUserPermissions();
    const {
      issue: { getIssueIdByIdentifier, getIssueById },
-@@ -130,8 +133,28 @@ export const ProjectNavigation = observer(function ProjectNavigation(props: TPro
+@@ -130,8 +133,38 @@ export const ProjectNavigation = observer(function ProjectNavigation(props: TPro
          shouldRender: project?.inbox_view ?? false,
          sortOrder: 6,
        },
@@ -107720,6 +109312,16 @@ index 3582215..fff4ada 100644
 +        access: [EUserPermissions.ADMIN, EUserPermissions.MEMBER, EUserPermissions.GUEST],
 +        shouldRender: true,
 +        sortOrder: 7,
++      },
++      {
++        i18n_key: "sidebar.channels",
++        key: "channels",
++        name: "Channels",
++        href: `/${workspaceSlug}/projects/${projectId}/channels`,
++        icon: MessagesSquare,
++        access: [EUserPermissions.ADMIN, EUserPermissions.MEMBER, EUserPermissions.GUEST],
++        shouldRender: true,
++        sortOrder: 7.5,
 +      },
 +      {
 +        i18n_key: "sidebar.finance",
@@ -107738,7 +109340,7 @@ index 3582215..fff4ada 100644
  
    // memoized navigation items and adding additional navigation items
 diff --git a/apps/web/core/components/workspace/sidebar/sidebar-item.tsx b/apps/web/core/components/workspace/sidebar/sidebar-item.tsx
-index 03d3015..35cc02a 100644
+index 03d3015..dbc7403 100644
 --- a/apps/web/core/components/workspace/sidebar/sidebar-item.tsx
 +++ b/apps/web/core/components/workspace/sidebar/sidebar-item.tsx
 @@ -17,6 +17,7 @@ import { joinUrlPath } from "@plane/utils";
@@ -107749,17 +109351,18 @@ index 03d3015..35cc02a 100644
  import { useUser, useUserPermissions } from "@/hooks/store/user";
  import { useWorkspaceNavigationPreferences } from "@/hooks/use-navigation-preferences";
  // plane web imports
-@@ -51,6 +52,9 @@ export const SidebarItemBase = observer(function SidebarItemBase({
+@@ -51,6 +52,10 @@ export const SidebarItemBase = observer(function SidebarItemBase({
      "home",
      "pi_chat",
      "projects",
 +    "wiki",
 +    "drive",
++    "channels",
 +    "finance",
      "your_work",
      "stickies",
      "drafts",
-@@ -58,6 +62,11 @@ export const SidebarItemBase = observer(function SidebarItemBase({
+@@ -58,6 +63,11 @@ export const SidebarItemBase = observer(function SidebarItemBase({
    ];
    const slug = workspaceSlug?.toString() || "";
  
@@ -107792,6 +109395,28 @@ index 0000000..da3f822
 +  const context = useContext(StoreContext);
 +  if (context === undefined) throw new Error("useAssistant must be used within StoreProvider");
 +  return context.assistant;
++};
+diff --git a/apps/web/core/hooks/store/use-chat.ts b/apps/web/core/hooks/store/use-chat.ts
+new file mode 100644
+index 0000000..716d8a4
+--- /dev/null
++++ b/apps/web/core/hooks/store/use-chat.ts
+@@ -0,0 +1,16 @@
++/**
++ * Sintergica CE extension: chat channels store hook.
++ * Derived from Plane CE code (AGPL-3.0-only).
++ */
++
++import { useContext } from "react";
++// context
++import { StoreContext } from "@/lib/store-context";
++// mobx store
++import type { IChatStore } from "@/store/chat.store";
++
++export const useChat = (): IChatStore => {
++  const context = useContext(StoreContext);
++  if (context === undefined) throw new Error("useChat must be used within StoreProvider");
++  return context.chat;
 +};
 diff --git a/apps/web/core/hooks/store/use-drive.ts b/apps/web/core/hooks/store/use-drive.ts
 new file mode 100644
@@ -107943,6 +109568,139 @@ index 0000000..393a6e7
 +    if (label) context.view = label;
 +    return context;
 +  }, [pathname, projectIdString, project?.name, project?.identifier, currentIssue?.sequence_id]);
++};
+diff --git a/apps/web/core/hooks/use-channel-connection.ts b/apps/web/core/hooks/use-channel-connection.ts
+new file mode 100644
+index 0000000..f8277cd
+--- /dev/null
++++ b/apps/web/core/hooks/use-channel-connection.ts
+@@ -0,0 +1,127 @@
++/**
++ * Sintergica CE extension: websocket connection for a chat channel.
++ *
++ * Rides the live (Hocuspocus) server with documentType "channel": the Y.Doc
++ * stays empty — the socket carries stateless JSON events (messages,
++ * reactions) plus awareness (presence / typing). Postgres via REST remains
++ * the source of truth: on every (re)connect we run a created_at__gt catch-up,
++ * so a dropped socket can never lose messages. While the socket is down the
++ * caller keeps its polling fallback (isLive === false).
++ *
++ * Derived from Plane CE code (AGPL-3.0-only).
++ */
++
++import { useCallback, useEffect, useRef, useState } from "react";
++import { HocuspocusProvider } from "@hocuspocus/provider";
++// plane imports
++import { LIVE_BASE_PATH, LIVE_BASE_URL } from "@plane/constants";
++// hooks
++import { useChat } from "@/hooks/store/use-chat";
++import { useUser } from "@/hooks/store/user";
++
++type TArgs = {
++  workspaceSlug: string;
++  channelId: string | undefined;
++  enabled?: boolean;
++};
++
++export type TChannelConnection = {
++  isLive: boolean;
++  typingUsers: string[]; // display names, excluding self
++  setTyping: (isTyping: boolean) => void;
++};
++
++const TYPING_TTL_MS = 5000;
++
++export const useChannelConnection = ({ workspaceSlug, channelId, enabled = true }: TArgs): TChannelConnection => {
++  // states
++  const [isLive, setIsLive] = useState(false);
++  const [typingUsers, setTypingUsers] = useState<string[]>([]);
++  // store hooks
++  const chat = useChat();
++  const { data: currentUser } = useUser();
++  // refs
++  const providerRef = useRef<HocuspocusProvider | null>(null);
++  const typingResetRef = useRef<ReturnType<typeof setTimeout> | null>(null);
++
++  useEffect(() => {
++    if (!enabled || !channelId || !currentUser?.id || typeof window === "undefined") return;
++
++    let provider: HocuspocusProvider | null = null;
++    try {
++      const base = LIVE_BASE_URL?.trim() || window.location.origin;
++      const url = new URL(base);
++      url.protocol = window.location.protocol === "https:" ? "wss" : "ws";
++      url.pathname = `${LIVE_BASE_PATH}/collaboration`;
++      url.searchParams.set("documentType", "channel");
++      url.searchParams.set("workspaceSlug", workspaceSlug);
++
++      provider = new HocuspocusProvider({
++        name: `chat:${channelId}`,
++        url: url.toString(),
++        // The cookie travels in the WS request headers (same origin); the
++        // token only carries the user id the server matches it against.
++        token: JSON.stringify({ id: currentUser.id }),
++        onConnect: () => {
++          setIsLive(true);
++          // Anything sent while the socket was down is fetched, not lost.
++          void chat.catchUp(workspaceSlug, channelId);
++        },
++        onAuthenticationFailed: () => setIsLive(false),
++        onClose: () => setIsLive(false),
++        onDisconnect: () => setIsLive(false),
++        onStateless: ({ payload }) => {
++          try {
++            const event = JSON.parse(payload);
++            if (!event?.event) return;
++            chat.applyIncomingEvent(event);
++            // Reading the open channel keeps the marker fresh for the badge.
++            if (event.event === "message.new" && chat.activeChannelId === channelId && document.hasFocus()) {
++              void chat.markRead(workspaceSlug, channelId);
++            }
++          } catch {
++            // Not a chat event (e.g. a page-collab constant) — ignore.
++          }
++        },
++        onAwarenessUpdate: ({ states }) => {
++          const names: string[] = [];
++          for (const state of states) {
++            const user = state as { user?: { id?: string; name?: string }; typing?: boolean };
++            if (user.typing && user.user?.id && user.user.id !== currentUser.id && user.user.name) {
++              names.push(user.user.name);
++            }
++          }
++          setTypingUsers((prev) => (prev.join("|") === names.join("|") ? prev : names));
++        },
++      });
++      provider.setAwarenessField("user", { id: currentUser.id, name: currentUser.display_name });
++      providerRef.current = provider;
++    } catch (error) {
++      console.error("chat: error creating channel connection", error);
++    }
++
++    return () => {
++      providerRef.current = null;
++      setIsLive(false);
++      setTypingUsers([]);
++      if (typingResetRef.current) clearTimeout(typingResetRef.current);
++      provider?.destroy();
++    };
++    // eslint-disable-next-line react-hooks/exhaustive-deps
++  }, [workspaceSlug, channelId, enabled, currentUser?.id]);
++
++  const setTyping = useCallback((isTyping: boolean) => {
++    const provider = providerRef.current;
++    if (!provider) return;
++    provider.setAwarenessField("typing", isTyping);
++    if (typingResetRef.current) clearTimeout(typingResetRef.current);
++    if (isTyping) {
++      // Self-expire: a closed tab or an abandoned draft stops "typing" alone.
++      typingResetRef.current = setTimeout(() => {
++        providerRef.current?.setAwarenessField("typing", false);
++      }, TYPING_TTL_MS);
++    }
++  }, []);
++
++  return { isLive, typingUsers, setTyping };
 +};
 diff --git a/apps/web/core/layouts/auth-layout/workspace-wrapper.tsx b/apps/web/core/layouts/auth-layout/workspace-wrapper.tsx
 index e74dfd5..d582cb9 100644
@@ -108220,6 +109978,283 @@ index 0000000..3c9e1d1
 +    return { event, data: JSON.parse(dataLines.join("\n")) } as TStreamEvent;
 +  } catch {
 +    return null;
++  }
++}
+diff --git a/apps/web/core/services/chat.service.ts b/apps/web/core/services/chat.service.ts
+new file mode 100644
+index 0000000..c1a517d
+--- /dev/null
++++ b/apps/web/core/services/chat.service.ts
+@@ -0,0 +1,271 @@
++/**
++ * Sintergica CE extension: chat channels (ClickUp-style) service.
++ *
++ * Plain CRUD over the session-authenticated app API. Realtime arrives on top
++ * of this (phase 3); until then the store polls the active channel with
++ * created_at__gt catch-ups, which is the same call a reconnect uses.
++ *
++ * Derived from Plane CE code (AGPL-3.0-only).
++ */
++
++import { API_BASE_URL } from "@plane/constants";
++import type { IUserLite } from "@plane/types";
++import { APIService } from "@/services/api.service";
++
++export type TChatChannel = {
++  id: string;
++  workspace: string;
++  project: string | null;
++  name: string;
++  description: string;
++  is_general: boolean;
++  access: number;
++  archived_at: string | null;
++  unread_count?: number | null;
++  last_message_at?: string | null;
++  is_muted?: boolean | null;
++  created_by: string | null;
++  created_at: string;
++  updated_at: string;
++};
++
++export type TChatReaction = {
++  reaction: string;
++  actor: string;
++};
++
++export type TChatWorkItemLink = {
++  issue_id: string;
++  project_id: string;
++  identifier: string;
++  sequence_id: number;
++  name: string;
++  state_group: string | null;
++};
++
++export type TChatMessage = {
++  id: string;
++  channel: string;
++  parent: string | null;
++  actor: string;
++  actor_detail: IUserLite;
++  message_html: string;
++  message_json: object | null;
++  message_stripped: string | null;
++  edited_at: string | null;
++  is_removed: boolean;
++  reactions: TChatReaction[];
++  work_item_links: TChatWorkItemLink[];
++  reply_count: number;
++  last_reply_at: string | null;
++  created_at: string;
++  updated_at: string;
++};
++
++export type TChatMessagesPage = {
++  results: TChatMessage[];
++  has_more: boolean;
++  next_cursor?: string | null;
++};
++
++export type TChatUnread = {
++  channel_id: string;
++  unread_count: number;
++  last_message_at: string | null;
++};
++
++export class ChatService extends APIService {
++  constructor() {
++    super(API_BASE_URL);
++  }
++
++  private base(workspaceSlug: string) {
++    return `/api/workspaces/${workspaceSlug}/chat`;
++  }
++
++  async fetchChannels(workspaceSlug: string, projectId?: string): Promise<TChatChannel[]> {
++    const query = projectId ? `?project_id=${projectId}` : "";
++    return this.get(`${this.base(workspaceSlug)}/channels/${query}`)
++      .then((res) => res?.data)
++      .catch((error) => {
++        throw error?.response?.data;
++      });
++  }
++
++  async createChannel(
++    workspaceSlug: string,
++    data: { name: string; description?: string; project_id?: string }
++  ): Promise<TChatChannel> {
++    return this.post(`${this.base(workspaceSlug)}/channels/`, data)
++      .then((res) => res?.data)
++      .catch((error) => {
++        throw error?.response?.data;
++      });
++  }
++
++  async updateChannel(
++    workspaceSlug: string,
++    channelId: string,
++    data: Partial<Pick<TChatChannel, "name" | "description" | "archived_at">>
++  ): Promise<TChatChannel> {
++    return this.patch(`${this.base(workspaceSlug)}/channels/${channelId}/`, data)
++      .then((res) => res?.data)
++      .catch((error) => {
++        throw error?.response?.data;
++      });
++  }
++
++  async deleteChannel(workspaceSlug: string, channelId: string): Promise<void> {
++    return this.delete(`${this.base(workspaceSlug)}/channels/${channelId}/`)
++      .then((res) => res?.data)
++      .catch((error) => {
++        throw error?.response?.data;
++      });
++  }
++
++  async fetchMessages(
++    workspaceSlug: string,
++    channelId: string,
++    params?: { cursor?: string; limit?: number; created_at__gt?: string; parent_id?: string }
++  ): Promise<TChatMessagesPage> {
++    const search = new URLSearchParams();
++    if (params?.cursor) search.set("cursor", params.cursor);
++    if (params?.limit) search.set("limit", String(params.limit));
++    if (params?.created_at__gt) search.set("created_at__gt", params.created_at__gt);
++    if (params?.parent_id) search.set("parent_id", params.parent_id);
++    const query = search.toString() ? `?${search.toString()}` : "";
++    return this.get(`${this.base(workspaceSlug)}/channels/${channelId}/messages/${query}`)
++      .then((res) => res?.data)
++      .catch((error) => {
++        throw error?.response?.data;
++      });
++  }
++
++  async createMessage(
++    workspaceSlug: string,
++    channelId: string,
++    data: {
++      message_html: string;
++      message_json?: object | null;
++      parent_id?: string;
++      linked_work_item_ids?: string[];
++    }
++  ): Promise<TChatMessage> {
++    return this.post(`${this.base(workspaceSlug)}/channels/${channelId}/messages/`, data)
++      .then((res) => res?.data)
++      .catch((error) => {
++        throw error?.response?.data;
++      });
++  }
++
++  async updateMessage(
++    workspaceSlug: string,
++    channelId: string,
++    messageId: string,
++    data: { message_html: string; message_json?: object | null }
++  ): Promise<TChatMessage> {
++    return this.patch(`${this.base(workspaceSlug)}/channels/${channelId}/messages/${messageId}/`, data)
++      .then((res) => res?.data)
++      .catch((error) => {
++        throw error?.response?.data;
++      });
++  }
++
++  async deleteMessage(workspaceSlug: string, channelId: string, messageId: string): Promise<void> {
++    return this.delete(`${this.base(workspaceSlug)}/channels/${channelId}/messages/${messageId}/`)
++      .then((res) => res?.data)
++      .catch((error) => {
++        throw error?.response?.data;
++      });
++  }
++
++  async fetchThread(
++    workspaceSlug: string,
++    channelId: string,
++    messageId: string
++  ): Promise<{ root: TChatMessage; replies: TChatMessage[] }> {
++    return this.get(`${this.base(workspaceSlug)}/channels/${channelId}/messages/${messageId}/thread/`)
++      .then((res) => res?.data)
++      .catch((error) => {
++        throw error?.response?.data;
++      });
++  }
++
++  async addReaction(
++    workspaceSlug: string,
++    channelId: string,
++    messageId: string,
++    reaction: string
++  ): Promise<void> {
++    return this.post(`${this.base(workspaceSlug)}/channels/${channelId}/messages/${messageId}/reactions/`, {
++      reaction,
++    })
++      .then((res) => res?.data)
++      .catch((error) => {
++        throw error?.response?.data;
++      });
++  }
++
++  async removeReaction(
++    workspaceSlug: string,
++    channelId: string,
++    messageId: string,
++    reaction: string
++  ): Promise<void> {
++    return this.delete(
++      `${this.base(workspaceSlug)}/channels/${channelId}/messages/${messageId}/reactions/${reaction}/`
++    )
++      .then((res) => res?.data)
++      .catch((error) => {
++        throw error?.response?.data;
++      });
++  }
++
++  async markRead(workspaceSlug: string, channelId: string, lastReadAt?: string): Promise<{ last_read_at: string }> {
++    return this.post(`${this.base(workspaceSlug)}/channels/${channelId}/read/`, {
++      last_read_at: lastReadAt,
++    })
++      .then((res) => res?.data)
++      .catch((error) => {
++        throw error?.response?.data;
++      });
++  }
++
++  async fetchUnreads(workspaceSlug: string): Promise<TChatUnread[]> {
++    return this.get(`${this.base(workspaceSlug)}/unreads/`)
++      .then((res) => res?.data)
++      .catch((error) => {
++        throw error?.response?.data;
++      });
++  }
++
++  async linkWorkItem(
++    workspaceSlug: string,
++    channelId: string,
++    messageId: string,
++    issueId: string
++  ): Promise<TChatMessage> {
++    return this.post(`${this.base(workspaceSlug)}/channels/${channelId}/messages/${messageId}/work-items/`, {
++      issue_id: issueId,
++    })
++      .then((res) => res?.data)
++      .catch((error) => {
++        throw error?.response?.data;
++      });
++  }
++
++  async unlinkWorkItem(
++    workspaceSlug: string,
++    channelId: string,
++    messageId: string,
++    issueId: string
++  ): Promise<void> {
++    return this.delete(
++      `${this.base(workspaceSlug)}/channels/${channelId}/messages/${messageId}/work-items/${issueId}/`
++    )
++      .then((res) => res?.data)
++      .catch((error) => {
++        throw error?.response?.data;
++      });
 +  }
 +}
 diff --git a/apps/web/core/services/drive.service.ts b/apps/web/core/services/drive.service.ts
@@ -109724,6 +111759,573 @@ index 0000000..1bc5194
 +    });
 +  };
 +}
+diff --git a/apps/web/core/store/chat.store.ts b/apps/web/core/store/chat.store.ts
+new file mode 100644
+index 0000000..74242fa
+--- /dev/null
++++ b/apps/web/core/store/chat.store.ts
+@@ -0,0 +1,561 @@
++/**
++ * Sintergica CE extension: chat channels store.
++ *
++ * Postgres (via REST) is the source of truth. Roots live in
++ * messageIdsByChannel; replies live only in threadIds[rootId]. Sends are
++ * optimistic: a temp row appears immediately and is swapped for the server
++ * row on ack — applyIncomingEvent dedupes by id, so the same message arriving
++ * later over the wire (polling catch-up today, websocket in phase 3) is a
++ * no-op.
++ *
++ * Derived from Plane CE code (AGPL-3.0-only).
++ */
++
++import { action, makeObservable, observable, runInAction } from "mobx";
++import {
++  ChatService,
++  type TChatChannel,
++  type TChatMessage,
++  type TChatUnread,
++} from "@/services/chat.service";
++import type { CoreRootStore } from "./root.store";
++
++export type TChatEvent =
++  | { event: "message.new" | "message.updated"; channel_id: string; message: TChatMessage }
++  | { event: "message.deleted"; channel_id: string; message_id: string; parent_id: string | null }
++  | {
++      event: "reaction.added" | "reaction.removed";
++      channel_id: string;
++      message_id: string;
++      actor_id: string;
++      reaction: string;
++    };
++
++export interface IChatStore {
++  // observables
++  channels: Record<string, TChatChannel>;
++  channelsFetchedFor: Record<string, boolean>;
++  messageMap: Record<string, TChatMessage>;
++  messageIdsByChannel: Record<string, string[]>;
++  threadIds: Record<string, string[]>;
++  unreads: Record<string, number>;
++  activeChannelId: string | null;
++  activeThreadRootId: string | null;
++  hasMoreByChannel: Record<string, boolean>;
++  cursorByChannel: Record<string, string | null>;
++  isSending: boolean;
++  // helpers
++  channelsForWorkspace: (workspaceSlug: string) => TChatChannel[];
++  channelsForProject: (projectId: string) => TChatChannel[];
++  channelMessages: (channelId: string) => TChatMessage[];
++  threadReplies: (rootId: string) => TChatMessage[];
++  latestMessageAt: (channelId: string) => string | undefined;
++  // actions
++  fetchChannels: (workspaceSlug: string, projectId?: string) => Promise<void>;
++  createChannel: (
++    workspaceSlug: string,
++    data: { name: string; description?: string; project_id?: string }
++  ) => Promise<TChatChannel>;
++  updateChannel: (
++    workspaceSlug: string,
++    channelId: string,
++    data: Partial<Pick<TChatChannel, "name" | "description" | "archived_at">>
++  ) => Promise<void>;
++  deleteChannel: (workspaceSlug: string, channelId: string) => Promise<void>;
++  setActiveChannel: (channelId: string | null) => void;
++  setActiveThread: (rootId: string | null) => void;
++  fetchInitialMessages: (workspaceSlug: string, channelId: string) => Promise<void>;
++  fetchOlderMessages: (workspaceSlug: string, channelId: string) => Promise<void>;
++  catchUp: (workspaceSlug: string, channelId: string) => Promise<void>;
++  fetchThread: (workspaceSlug: string, channelId: string, rootId: string) => Promise<void>;
++  sendMessage: (
++    workspaceSlug: string,
++    channelId: string,
++    data: {
++      message_html: string;
++      message_json?: object | null;
++      parent_id?: string;
++      linked_work_item_ids?: string[];
++    }
++  ) => Promise<TChatMessage | undefined>;
++  editMessage: (
++    workspaceSlug: string,
++    channelId: string,
++    messageId: string,
++    data: { message_html: string; message_json?: object | null }
++  ) => Promise<void>;
++  removeMessage: (workspaceSlug: string, channelId: string, messageId: string) => Promise<void>;
++  toggleReaction: (workspaceSlug: string, channelId: string, messageId: string, reaction: string) => Promise<void>;
++  linkWorkItem: (workspaceSlug: string, channelId: string, messageId: string, issueId: string) => Promise<void>;
++  unlinkWorkItem: (workspaceSlug: string, channelId: string, messageId: string, issueId: string) => Promise<void>;
++  markRead: (workspaceSlug: string, channelId: string) => Promise<void>;
++  fetchUnreads: (workspaceSlug: string) => Promise<void>;
++  applyIncomingEvent: (event: TChatEvent) => void;
++  resetActive: () => void;
++}
++
++export class ChatStore implements IChatStore {
++  channels: Record<string, TChatChannel> = {};
++  channelsFetchedFor: Record<string, boolean> = {};
++  messageMap: Record<string, TChatMessage> = {};
++  messageIdsByChannel: Record<string, string[]> = {};
++  threadIds: Record<string, string[]> = {};
++  unreads: Record<string, number> = {};
++  activeChannelId: string | null = null;
++  activeThreadRootId: string | null = null;
++  hasMoreByChannel: Record<string, boolean> = {};
++  cursorByChannel: Record<string, string | null> = {};
++  isSending = false;
++
++  // Machinery, not rendered state.
++  private service: ChatService;
++
++  constructor(private store: CoreRootStore) {
++    makeObservable(this, {
++      channels: observable,
++      channelsFetchedFor: observable,
++      messageMap: observable,
++      messageIdsByChannel: observable,
++      threadIds: observable,
++      unreads: observable,
++      activeChannelId: observable,
++      activeThreadRootId: observable,
++      hasMoreByChannel: observable,
++      cursorByChannel: observable,
++      isSending: observable,
++      fetchChannels: action,
++      createChannel: action,
++      updateChannel: action,
++      deleteChannel: action,
++      setActiveChannel: action,
++      setActiveThread: action,
++      fetchInitialMessages: action,
++      fetchOlderMessages: action,
++      catchUp: action,
++      fetchThread: action,
++      sendMessage: action,
++      editMessage: action,
++      removeMessage: action,
++      toggleReaction: action,
++      linkWorkItem: action,
++      unlinkWorkItem: action,
++      markRead: action,
++      fetchUnreads: action,
++      applyIncomingEvent: action,
++      resetActive: action,
++    });
++    this.service = new ChatService();
++  }
++
++  // ------------------------------------------------------------------ helpers
++
++  private get currentUserId(): string | undefined {
++    return this.store.user?.data?.id ?? undefined;
++  }
++
++  channelsForWorkspace = (workspaceSlug: string): TChatChannel[] => {
++    void workspaceSlug; // channels are already scoped by the fetch
++    return Object.values(this.channels)
++      .filter((c) => c.project === null && !c.archived_at)
++      .sort((a, b) => a.name.localeCompare(b.name));
++  };
++
++  channelsForProject = (projectId: string): TChatChannel[] =>
++    Object.values(this.channels)
++      .filter((c) => c.project === projectId && !c.archived_at)
++      .sort((a, b) => Number(b.is_general) - Number(a.is_general) || a.name.localeCompare(b.name));
++
++  channelMessages = (channelId: string): TChatMessage[] =>
++    (this.messageIdsByChannel[channelId] ?? []).map((id) => this.messageMap[id]).filter(Boolean);
++
++  threadReplies = (rootId: string): TChatMessage[] =>
++    (this.threadIds[rootId] ?? []).map((id) => this.messageMap[id]).filter(Boolean);
++
++  latestMessageAt = (channelId: string): string | undefined => {
++    const ids = this.messageIdsByChannel[channelId] ?? [];
++    let latest: string | undefined;
++    for (const id of ids) {
++      const m = this.messageMap[id];
++      if (m && !m.id.startsWith("temp-") && (!latest || m.created_at > latest)) latest = m.created_at;
++    }
++    // A reply can be newer than every root; count threads we hold too.
++    for (const root of Object.keys(this.threadIds)) {
++      if (this.messageMap[root]?.channel !== channelId) continue;
++      for (const rid of this.threadIds[root]) {
++        const m = this.messageMap[rid];
++        if (m && !m.id.startsWith("temp-") && (!latest || m.created_at > latest)) latest = m.created_at;
++      }
++    }
++    return latest;
++  };
++
++  private sortRootIds = (channelId: string) => {
++    const ids = this.messageIdsByChannel[channelId];
++    if (!ids) return;
++    ids.sort((a, b) => {
++      const ma = this.messageMap[a];
++      const mb = this.messageMap[b];
++      if (!ma || !mb) return 0;
++      return ma.created_at === mb.created_at ? (ma.id < mb.id ? -1 : 1) : ma.created_at < mb.created_at ? -1 : 1;
++    });
++  };
++
++  private absorbMessage = (message: TChatMessage) => {
++    const existed = !!this.messageMap[message.id];
++    this.messageMap[message.id] = message;
++    if (message.parent) {
++      const list = this.threadIds[message.parent] ?? [];
++      if (!list.includes(message.id)) {
++        this.threadIds[message.parent] = [...list, message.id];
++      }
++      // Keep the root's thread meta in sync when we hold the root.
++      const root = this.messageMap[message.parent];
++      if (root && !existed) {
++        this.messageMap[message.parent] = {
++          ...root,
++          reply_count: (root.reply_count ?? 0) + 1,
++          last_reply_at: message.created_at,
++        };
++      }
++    } else {
++      const list = this.messageIdsByChannel[message.channel] ?? [];
++      if (!list.includes(message.id)) {
++        this.messageIdsByChannel[message.channel] = [...list, message.id];
++        this.sortRootIds(message.channel);
++      }
++    }
++  };
++
++  private dropMessage = (messageId: string, channelId: string, parentId: string | null) => {
++    delete this.messageMap[messageId];
++    if (parentId) {
++      this.threadIds[parentId] = (this.threadIds[parentId] ?? []).filter((id) => id !== messageId);
++      const root = this.messageMap[parentId];
++      if (root) {
++        this.messageMap[parentId] = { ...root, reply_count: Math.max(0, (root.reply_count ?? 1) - 1) };
++      }
++    } else {
++      this.messageIdsByChannel[channelId] = (this.messageIdsByChannel[channelId] ?? []).filter(
++        (id) => id !== messageId
++      );
++      delete this.threadIds[messageId];
++    }
++  };
++
++  // ------------------------------------------------------------------ channels
++
++  fetchChannels = async (workspaceSlug: string, projectId?: string) => {
++    const rows = await this.service.fetchChannels(workspaceSlug, projectId);
++    runInAction(() => {
++      for (const row of rows) {
++        this.channels[row.id] = row;
++        if (typeof row.unread_count === "number") this.unreads[row.id] = row.unread_count;
++      }
++      this.channelsFetchedFor[projectId ?? "workspace"] = true;
++    });
++  };
++
++  createChannel = async (
++    workspaceSlug: string,
++    data: { name: string; description?: string; project_id?: string }
++  ) => {
++    const row = await this.service.createChannel(workspaceSlug, data);
++    runInAction(() => {
++      this.channels[row.id] = row;
++    });
++    return row;
++  };
++
++  updateChannel = async (
++    workspaceSlug: string,
++    channelId: string,
++    data: Partial<Pick<TChatChannel, "name" | "description" | "archived_at">>
++  ) => {
++    const row = await this.service.updateChannel(workspaceSlug, channelId, data);
++    runInAction(() => {
++      this.channels[row.id] = { ...this.channels[row.id], ...row };
++    });
++  };
++
++  deleteChannel = async (workspaceSlug: string, channelId: string) => {
++    await this.service.deleteChannel(workspaceSlug, channelId);
++    runInAction(() => {
++      delete this.channels[channelId];
++      delete this.messageIdsByChannel[channelId];
++      delete this.unreads[channelId];
++      if (this.activeChannelId === channelId) this.activeChannelId = null;
++    });
++  };
++
++  setActiveChannel = (channelId: string | null) => {
++    this.activeChannelId = channelId;
++    this.activeThreadRootId = null;
++    if (channelId) this.unreads[channelId] = 0;
++  };
++
++  setActiveThread = (rootId: string | null) => {
++    this.activeThreadRootId = rootId;
++  };
++
++  // ------------------------------------------------------------------ messages
++
++  fetchInitialMessages = async (workspaceSlug: string, channelId: string) => {
++    const page = await this.service.fetchMessages(workspaceSlug, channelId, { limit: 50 });
++    runInAction(() => {
++      this.messageIdsByChannel[channelId] = [];
++      for (const m of page.results) this.absorbMessage(m);
++      this.hasMoreByChannel[channelId] = page.has_more;
++      this.cursorByChannel[channelId] = page.next_cursor ?? null;
++    });
++  };
++
++  fetchOlderMessages = async (workspaceSlug: string, channelId: string) => {
++    const cursor = this.cursorByChannel[channelId];
++    if (!cursor || !this.hasMoreByChannel[channelId]) return;
++    const page = await this.service.fetchMessages(workspaceSlug, channelId, { limit: 50, cursor });
++    runInAction(() => {
++      for (const m of page.results) this.absorbMessage(m);
++      this.hasMoreByChannel[channelId] = page.has_more;
++      this.cursorByChannel[channelId] = page.next_cursor ?? null;
++    });
++  };
++
++  catchUp = async (workspaceSlug: string, channelId: string) => {
++    const since = this.latestMessageAt(channelId);
++    if (!since) {
++      await this.fetchInitialMessages(workspaceSlug, channelId);
++      return;
++    }
++    const page = await this.service.fetchMessages(workspaceSlug, channelId, { created_at__gt: since });
++    runInAction(() => {
++      for (const m of page.results) this.absorbMessage(m);
++    });
++  };
++
++  fetchThread = async (workspaceSlug: string, channelId: string, rootId: string) => {
++    const data = await this.service.fetchThread(workspaceSlug, channelId, rootId);
++    runInAction(() => {
++      this.messageMap[data.root.id] = data.root;
++      this.threadIds[rootId] = [];
++      for (const reply of data.replies) {
++        this.messageMap[reply.id] = reply;
++        this.threadIds[rootId].push(reply.id);
++      }
++    });
++  };
++
++  sendMessage = async (
++    workspaceSlug: string,
++    channelId: string,
++    data: {
++      message_html: string;
++      message_json?: object | null;
++      parent_id?: string;
++      linked_work_item_ids?: string[];
++    }
++  ) => {
++    const me = this.store.user?.data;
++    const tempId = `temp-${Date.now()}`;
++    const optimistic: TChatMessage = {
++      id: tempId,
++      channel: channelId,
++      parent: data.parent_id ?? null,
++      actor: me?.id ?? "",
++      actor_detail: {
++        id: me?.id ?? "",
++        first_name: me?.first_name ?? "",
++        last_name: me?.last_name ?? "",
++        avatar: "",
++        avatar_url: me?.avatar_url ?? "",
++        is_bot: false,
++        display_name: me?.display_name ?? "",
++      } as TChatMessage["actor_detail"],
++      message_html: data.message_html,
++      message_json: data.message_json ?? null,
++      message_stripped: null,
++      edited_at: null,
++      is_removed: false,
++      reactions: [],
++      work_item_links: [],
++      reply_count: 0,
++      last_reply_at: null,
++      created_at: new Date().toISOString(),
++      updated_at: new Date().toISOString(),
++    };
++    runInAction(() => {
++      this.isSending = true;
++      this.absorbMessage(optimistic);
++    });
++    try {
++      const row = await this.service.createMessage(workspaceSlug, channelId, data);
++      runInAction(() => {
++        this.dropMessage(tempId, channelId, optimistic.parent);
++        this.absorbMessage(row);
++      });
++      return row;
++    } catch (error) {
++      runInAction(() => {
++        this.dropMessage(tempId, channelId, optimistic.parent);
++      });
++      throw error;
++    } finally {
++      runInAction(() => {
++        this.isSending = false;
++      });
++    }
++  };
++
++  editMessage = async (
++    workspaceSlug: string,
++    channelId: string,
++    messageId: string,
++    data: { message_html: string; message_json?: object | null }
++  ) => {
++    const row = await this.service.updateMessage(workspaceSlug, channelId, messageId, data);
++    runInAction(() => {
++      this.messageMap[messageId] = { ...this.messageMap[messageId], ...row };
++    });
++  };
++
++  removeMessage = async (workspaceSlug: string, channelId: string, messageId: string) => {
++    const message = this.messageMap[messageId];
++    await this.service.deleteMessage(workspaceSlug, channelId, messageId);
++    runInAction(() => {
++      const hasReplies = !message?.parent && (this.threadIds[messageId]?.length ?? 0) > 0;
++      if (hasReplies) {
++        // Mirror the backend tombstone.
++        this.messageMap[messageId] = {
++          ...message,
++          message_html: "",
++          message_json: null,
++          message_stripped: "",
++          is_removed: true,
++        };
++      } else {
++        this.dropMessage(messageId, channelId, message?.parent ?? null);
++      }
++    });
++  };
++
++  toggleReaction = async (workspaceSlug: string, channelId: string, messageId: string, reaction: string) => {
++    const userId = this.currentUserId;
++    const message = this.messageMap[messageId];
++    if (!message || !userId) return;
++    const mine = message.reactions.some((r) => r.actor === userId && r.reaction === reaction);
++    // Optimistic flip; the server call confirms it.
++    runInAction(() => {
++      this.messageMap[messageId] = {
++        ...message,
++        reactions: mine
++          ? message.reactions.filter((r) => !(r.actor === userId && r.reaction === reaction))
++          : [...message.reactions, { reaction, actor: userId }],
++      };
++    });
++    try {
++      if (mine) await this.service.removeReaction(workspaceSlug, channelId, messageId, reaction);
++      else await this.service.addReaction(workspaceSlug, channelId, messageId, reaction);
++    } catch (error) {
++      runInAction(() => {
++        this.messageMap[messageId] = message;
++      });
++      throw error;
++    }
++  };
++
++  linkWorkItem = async (workspaceSlug: string, channelId: string, messageId: string, issueId: string) => {
++    const row = await this.service.linkWorkItem(workspaceSlug, channelId, messageId, issueId);
++    runInAction(() => {
++      this.messageMap[messageId] = { ...this.messageMap[messageId], ...row };
++    });
++  };
++
++  unlinkWorkItem = async (workspaceSlug: string, channelId: string, messageId: string, issueId: string) => {
++    await this.service.unlinkWorkItem(workspaceSlug, channelId, messageId, issueId);
++    runInAction(() => {
++      const message = this.messageMap[messageId];
++      if (message) {
++        this.messageMap[messageId] = {
++          ...message,
++          work_item_links: message.work_item_links.filter((l) => l.issue_id !== issueId),
++        };
++      }
++    });
++  };
++
++  markRead = async (workspaceSlug: string, channelId: string) => {
++    runInAction(() => {
++      this.unreads[channelId] = 0;
++    });
++    await this.service.markRead(workspaceSlug, channelId, this.latestMessageAt(channelId));
++  };
++
++  fetchUnreads = async (workspaceSlug: string) => {
++    const rows: TChatUnread[] = await this.service.fetchUnreads(workspaceSlug);
++    runInAction(() => {
++      for (const row of rows) {
++        // The open channel is being read right now; keep it at zero.
++        this.unreads[row.channel_id] = row.channel_id === this.activeChannelId ? 0 : row.unread_count;
++        const channel = this.channels[row.channel_id];
++        if (channel) this.channels[row.channel_id] = { ...channel, last_message_at: row.last_message_at };
++      }
++    });
++  };
++
++  applyIncomingEvent = (event: TChatEvent) => {
++    switch (event.event) {
++      case "message.new":
++      case "message.updated": {
++        const message = event.message;
++        if (event.event === "message.new" && this.messageMap[message.id]) return; // own echo
++        this.absorbMessage(message);
++        if (
++          event.event === "message.new" &&
++          event.channel_id !== this.activeChannelId &&
++          message.actor !== this.currentUserId &&
++          !message.parent
++        ) {
++          this.unreads[event.channel_id] = (this.unreads[event.channel_id] ?? 0) + 1;
++        }
++        break;
++      }
++      case "message.deleted": {
++        const existing = this.messageMap[event.message_id];
++        if (!existing) return;
++        const hasReplies = !existing.parent && (this.threadIds[event.message_id]?.length ?? 0) > 0;
++        if (hasReplies) {
++          this.messageMap[event.message_id] = {
++            ...existing,
++            message_html: "",
++            message_json: null,
++            message_stripped: "",
++            is_removed: true,
++          };
++        } else {
++          this.dropMessage(event.message_id, event.channel_id, event.parent_id);
++        }
++        break;
++      }
++      case "reaction.added":
++      case "reaction.removed": {
++        const message = this.messageMap[event.message_id];
++        if (!message) return;
++        const without = message.reactions.filter(
++          (r) => !(r.actor === event.actor_id && r.reaction === event.reaction)
++        );
++        this.messageMap[event.message_id] = {
++          ...message,
++          reactions:
++            event.event === "reaction.added"
++              ? [...without, { reaction: event.reaction, actor: event.actor_id }]
++              : without,
++        };
++        break;
++      }
++    }
++  };
++
++  resetActive = () => {
++    this.activeChannelId = null;
++    this.activeThreadRootId = null;
++  };
++}
 diff --git a/apps/web/core/store/drive.store.ts b/apps/web/core/store/drive.store.ts
 new file mode 100644
 index 0000000..dfbf334
@@ -111063,10 +113665,10 @@ index 0000000..ee1e6e5
 +  });
 +}
 diff --git a/apps/web/core/store/root.store.ts b/apps/web/core/store/root.store.ts
-index ebca38e..a77dc85 100644
+index ebca38e..98fe8ea 100644
 --- a/apps/web/core/store/root.store.ts
 +++ b/apps/web/core/store/root.store.ts
-@@ -56,6 +56,14 @@ import type { IWorkspaceNotificationStore } from "./notifications/workspace-noti
+@@ -56,6 +56,16 @@ import type { IWorkspaceNotificationStore } from "./notifications/workspace-noti
  import { WorkspaceNotificationStore } from "./notifications/workspace-notifications.store";
  import type { IProjectPageStore } from "./pages/project-page.store";
  import { ProjectPageStore } from "./pages/project-page.store";
@@ -111078,10 +113680,12 @@ index ebca38e..a77dc85 100644
 +import { FinanceStore } from "./finance.store";
 +import type { IAssistantStore } from "./assistant.store";
 +import { AssistantStore } from "./assistant.store";
++import type { IChatStore } from "./chat.store";
++import { ChatStore } from "./chat.store";
  import type { IProjectRootStore } from "./project";
  import { ProjectRootStore } from "./project";
  import type { IProjectViewStore } from "./project-view.store";
-@@ -88,6 +96,10 @@ export class CoreRootStore {
+@@ -88,6 +98,11 @@ export class CoreRootStore {
    dashboard: IDashboardStore;
    analytics: IAnalyticsStore;
    projectPages: IProjectPageStore;
@@ -111089,10 +113693,11 @@ index ebca38e..a77dc85 100644
 +  drive: IDriveStore;
 +  finance: IFinanceStore;
 +  assistant: IAssistantStore;
++  chat: IChatStore;
    router: IRouterStore;
    commandPalette: ICommandPaletteStore;
    theme: IThemeStore;
-@@ -126,6 +138,10 @@ export class CoreRootStore {
+@@ -126,6 +141,11 @@ export class CoreRootStore {
      this.multipleSelect = new MultipleSelectStore();
      this.projectInbox = new ProjectInboxStore(this);
      this.projectPages = new ProjectPageStore(this);
@@ -111100,10 +113705,11 @@ index ebca38e..a77dc85 100644
 +    this.drive = new DriveStore(this);
 +    this.finance = new FinanceStore(this);
 +    this.assistant = new AssistantStore(this);
++    this.chat = new ChatStore(this);
      this.projectEstimate = new ProjectEstimateStore(this);
      this.workspaceNotification = new WorkspaceNotificationStore(this);
      this.favorite = new FavoriteStore(this);
-@@ -160,6 +176,10 @@ export class CoreRootStore {
+@@ -160,6 +180,11 @@ export class CoreRootStore {
      this.dashboard = new DashboardStore(this);
      this.projectInbox = new ProjectInboxStore(this);
      this.projectPages = new ProjectPageStore(this);
@@ -111111,9 +113717,22 @@ index ebca38e..a77dc85 100644
 +    this.drive = new DriveStore(this);
 +    this.finance = new FinanceStore(this);
 +    this.assistant = new AssistantStore(this);
++    this.chat = new ChatStore(this);
      this.multipleSelect = new MultipleSelectStore();
      this.projectEstimate = new ProjectEstimateStore(this);
      this.workspaceNotification = new WorkspaceNotificationStore(this);
+diff --git a/apps/web/package.json b/apps/web/package.json
+index 273a7a8..7c04445 100644
+--- a/apps/web/package.json
++++ b/apps/web/package.json
+@@ -25,6 +25,7 @@
+     "@fontsource/ibm-plex-mono": "catalog:",
+     "@fontsource/material-symbols-rounded": "catalog:",
+     "@headlessui/react": "catalog:",
++    "@hocuspocus/provider": "catalog:",
+     "@plane/constants": "workspace:*",
+     "@plane/editor": "workspace:*",
+     "@plane/hooks": "workspace:*",
 diff --git a/apps/web/public/favicon/android-chrome-192x192.png b/apps/web/public/favicon/android-chrome-192x192.png
 index 4a005e54230cfd475e713ca7518ec6ec31c7a352..9850d6c4a156c3ec8b6c58af1c7b427bad78fd8d 100644
 GIT binary patch
@@ -177578,10 +180197,10 @@ index c44e441..8028c64 100644
 + */
 +export const SOURCE_CODE_URL = process.env.VITE_SOURCE_CODE_URL || "";
 diff --git a/packages/constants/src/workspace.ts b/packages/constants/src/workspace.ts
-index 6083c77..5b3b792 100644
+index 6083c77..7a0286a 100644
 --- a/packages/constants/src/workspace.ts
 +++ b/packages/constants/src/workspace.ts
-@@ -271,6 +271,28 @@ export const WORKSPACE_SIDEBAR_STATIC_NAVIGATION_ITEMS: Record<string, IWorkspac
+@@ -271,6 +271,35 @@ export const WORKSPACE_SIDEBAR_STATIC_NAVIGATION_ITEMS: Record<string, IWorkspac
      access: [EUserWorkspaceRoles.ADMIN, EUserWorkspaceRoles.MEMBER, EUserWorkspaceRoles.GUEST],
      highlight: (pathname: string, url: string) => pathname === url,
    },
@@ -177607,15 +180226,23 @@ index 6083c77..5b3b792 100644
 +    access: [EUserWorkspaceRoles.ADMIN, EUserWorkspaceRoles.MEMBER],
 +    highlight: (pathname: string, url: string) => pathname.includes(url),
 +  },
++  channels: {
++    key: "channels",
++    labelTranslationKey: "sidebar.channels",
++    href: `/channels/`,
++    access: [EUserWorkspaceRoles.ADMIN, EUserWorkspaceRoles.MEMBER, EUserWorkspaceRoles.GUEST],
++    highlight: (pathname: string, url: string) => pathname.includes(url),
++  },
  };
  
  export const WORKSPACE_SIDEBAR_STATIC_NAVIGATION_ITEMS_LINKS: IWorkspaceSidebarNavigationItem[] = [
-@@ -279,6 +301,9 @@ export const WORKSPACE_SIDEBAR_STATIC_NAVIGATION_ITEMS_LINKS: IWorkspaceSidebarN
+@@ -279,6 +308,10 @@ export const WORKSPACE_SIDEBAR_STATIC_NAVIGATION_ITEMS_LINKS: IWorkspaceSidebarN
  
  export const WORKSPACE_SIDEBAR_STATIC_PINNED_NAVIGATION_ITEMS_LINKS: IWorkspaceSidebarNavigationItem[] = [
    WORKSPACE_SIDEBAR_STATIC_NAVIGATION_ITEMS["projects"],
 +  WORKSPACE_SIDEBAR_STATIC_NAVIGATION_ITEMS["wiki"],
 +  WORKSPACE_SIDEBAR_STATIC_NAVIGATION_ITEMS["drive"],
++  WORKSPACE_SIDEBAR_STATIC_NAVIGATION_ITEMS["channels"],
 +  WORKSPACE_SIDEBAR_STATIC_NAVIGATION_ITEMS["finance"],
  ];
  
@@ -177996,7 +180623,7 @@ index 5aa7d2f..32afb6d 100644
        "fixed_schedule": "Pevný rozvrh",
        "schedule": {
 diff --git a/packages/i18n/src/locales/cs/common.json b/packages/i18n/src/locales/cs/common.json
-index c1e9372..e3a8248 100644
+index c1e9372..bcf4775 100644
 --- a/packages/i18n/src/locales/cs/common.json
 +++ b/packages/i18n/src/locales/cs/common.json
 @@ -244,7 +244,7 @@
@@ -178026,11 +180653,10 @@ index c1e9372..e3a8248 100644
    "in_app": "V aplikaci",
    "forms": "Formuláře",
    "milestones": "Milníky",
-@@ -867,5 +867,354 @@
+@@ -867,5 +867,379 @@
        "description": "Exportujte položky do JSON.",
        "short_description": "Exportovat jako JSON"
      }
--  }
 +  },
 +  "drive": {
 +    "title": "Files",
@@ -178380,7 +181006,32 @@ index c1e9372..e3a8248 100644
 +    }
 +  },
 +  "source_code": "Source code",
-+  "agpl_notice": "Modified version of Plane, licensed under AGPL v3."
++  "agpl_notice": "Modified version of Plane, licensed under AGPL v3.",
++  "chat": {
++    "title": "Kanály",
++    "channels": "Kanály",
++    "workspace_section": "Pracovní prostor",
++    "projects_section": "Projekty",
++    "new_channel": "Nový kanál",
++    "create_channel": "Vytvořit kanál",
++    "create_channel_failed": "Kanál se nepodařilo vytvořit",
++    "channel_name_placeholder": "např. oznámení",
++    "no_channels": "Zatím žádné kanály.",
++    "composer_placeholder": "Napište zprávu… @ pro zmínku",
++    "reply_placeholder": "Odpovědět ve vlákně…",
++    "message_removed": "Tato zpráva byla smazána",
++    "edited": "upraveno",
++    "reply_count": "{count, plural, one {# odpověď} few {# odpovědi} other {# odpovědí}}",
++    "reply_in_thread": "Odpovědět ve vlákně",
++    "thread": "Vlákno",
++    "link_work_item": "Propojit pracovní položku",
++    "create_work_item": "Vytvořit pracovní položku",
++    "empty_title": "Zatím žádné zprávy",
++    "empty_description": "Napište do tohoto kanálu jako první.",
++    "beginning_of_channel": "Toto je začátek kanálu.",
++    "select_channel": "Vyberte kanál.",
++    "typing": "{names} píše…"
+   }
  }
 diff --git a/packages/i18n/src/locales/cs/empty-state.json b/packages/i18n/src/locales/cs/empty-state.json
 index a812af9..e0d1792 100644
@@ -178631,10 +181282,10 @@ index fedd09f..e96717c 100644
      "invalid_base_url_error": "Neplatná základní URL",
      "client_id_title": "ID klienta",
 diff --git a/packages/i18n/src/locales/cs/navigation.json b/packages/i18n/src/locales/cs/navigation.json
-index d340abf..8b0e7f7 100644
+index d340abf..7fb1f3c 100644
 --- a/packages/i18n/src/locales/cs/navigation.json
 +++ b/packages/i18n/src/locales/cs/navigation.json
-@@ -25,10 +25,11 @@
+@@ -25,10 +25,12 @@
      "favorites": "Oblíbené",
      "pro": "Pro",
      "upgrade": "Upgrade",
@@ -178646,7 +181297,8 @@ index d340abf..8b0e7f7 100644
 -    "business": "Byznys"
 +    "plane_pro": "Tequio Pro",
 +    "business": "Byznys",
-+    "finance": "Finance"
++    "finance": "Finance",
++    "channels": "Kanály"
    }
  }
 diff --git a/packages/i18n/src/locales/cs/power-k.json b/packages/i18n/src/locales/cs/power-k.json
@@ -179086,7 +181738,7 @@ index 66379d4..2c778e6 100644
        "fixed_schedule": "Fester Zeitplan",
        "schedule": {
 diff --git a/packages/i18n/src/locales/de/common.json b/packages/i18n/src/locales/de/common.json
-index 1e18d4e..3e404c6 100644
+index 1e18d4e..3ab2414 100644
 --- a/packages/i18n/src/locales/de/common.json
 +++ b/packages/i18n/src/locales/de/common.json
 @@ -244,7 +244,7 @@
@@ -179107,11 +181759,10 @@ index 1e18d4e..3e404c6 100644
      "choose_view_logs_from_setup_sh_and_docker_logs_to_be_sure": "Wählen Sie View Logs aus setup.sh und Docker-Logs, um sicherzugehen."
    },
    "customize_navigation": "Navigation anpassen",
-@@ -867,5 +867,354 @@
+@@ -867,5 +867,379 @@
        "description": "Arbeitselemente in JSON exportieren.",
        "short_description": "Als JSON exportieren"
      }
--  }
 +  },
 +  "drive": {
 +    "title": "Files",
@@ -179461,7 +182112,32 @@ index 1e18d4e..3e404c6 100644
 +    }
 +  },
 +  "source_code": "Quellcode",
-+  "agpl_notice": "Modifizierte Version von Plane, lizenziert unter AGPL v3."
++  "agpl_notice": "Modifizierte Version von Plane, lizenziert unter AGPL v3.",
++  "chat": {
++    "title": "Kanäle",
++    "channels": "Kanäle",
++    "workspace_section": "Workspace",
++    "projects_section": "Projekte",
++    "new_channel": "Neuer Kanal",
++    "create_channel": "Kanal erstellen",
++    "create_channel_failed": "Kanal konnte nicht erstellt werden",
++    "channel_name_placeholder": "z. B. ankündigungen",
++    "no_channels": "Noch keine Kanäle.",
++    "composer_placeholder": "Nachricht schreiben… @ zum Erwähnen",
++    "reply_placeholder": "Im Thread antworten…",
++    "message_removed": "Diese Nachricht wurde gelöscht",
++    "edited": "bearbeitet",
++    "reply_count": "{count, plural, one {# Antwort} other {# Antworten}}",
++    "reply_in_thread": "Im Thread antworten",
++    "thread": "Thread",
++    "link_work_item": "Arbeitselement verknüpfen",
++    "create_work_item": "Arbeitselement erstellen",
++    "empty_title": "Noch keine Nachrichten",
++    "empty_description": "Schreibe als Erste:r in diesem Kanal.",
++    "beginning_of_channel": "Das ist der Anfang des Kanals.",
++    "select_channel": "Wähle einen Kanal aus.",
++    "typing": "{names} schreibt…"
+   }
  }
 diff --git a/packages/i18n/src/locales/de/empty-state.json b/packages/i18n/src/locales/de/empty-state.json
 index 74bc261..cfd2058 100644
@@ -179712,10 +182388,10 @@ index a9b4d58..c22ef84 100644
      "invalid_base_url_error": "Ungültige Basis-URL",
      "client_id_title": "Client-ID",
 diff --git a/packages/i18n/src/locales/de/navigation.json b/packages/i18n/src/locales/de/navigation.json
-index bf22b25..5ca2fe8 100644
+index bf22b25..bf1cb8f 100644
 --- a/packages/i18n/src/locales/de/navigation.json
 +++ b/packages/i18n/src/locales/de/navigation.json
-@@ -25,10 +25,11 @@
+@@ -25,10 +25,12 @@
      "favorites": "Favoriten",
      "pro": "Pro",
      "upgrade": "Upgrade",
@@ -179727,7 +182403,8 @@ index bf22b25..5ca2fe8 100644
 -    "business": "Business"
 +    "plane_pro": "Tequio Pro",
 +    "business": "Business",
-+    "finance": "Finance"
++    "finance": "Finance",
++    "channels": "Kanäle"
    }
  }
 diff --git a/packages/i18n/src/locales/de/power-k.json b/packages/i18n/src/locales/de/power-k.json
@@ -180152,7 +182829,7 @@ index 64779c7..c549990 100644
        "fixed_schedule": "Fixed schedule",
        "schedule": {
 diff --git a/packages/i18n/src/locales/en/common.json b/packages/i18n/src/locales/en/common.json
-index a138304..a382491 100644
+index a138304..fe8fdf1 100644
 --- a/packages/i18n/src/locales/en/common.json
 +++ b/packages/i18n/src/locales/en/common.json
 @@ -244,7 +244,7 @@
@@ -180182,11 +182859,10 @@ index a138304..a382491 100644
    "in_app": "In-app",
    "forms": "Forms",
    "milestones": "Milestones",
-@@ -867,5 +867,354 @@
+@@ -867,5 +867,379 @@
        "description": "Export work items to a JSON file.",
        "short_description": "Export as json"
      }
--  }
 +  },
 +  "drive": {
 +    "title": "Files",
@@ -180536,7 +183212,32 @@ index a138304..a382491 100644
 +    }
 +  },
 +  "source_code": "Source code",
-+  "agpl_notice": "Modified version of Plane, licensed under AGPL v3."
++  "agpl_notice": "Modified version of Plane, licensed under AGPL v3.",
++  "chat": {
++    "title": "Channels",
++    "channels": "Channels",
++    "workspace_section": "Workspace",
++    "projects_section": "Projects",
++    "new_channel": "New channel",
++    "create_channel": "Create channel",
++    "create_channel_failed": "Could not create the channel",
++    "channel_name_placeholder": "e.g. announcements",
++    "no_channels": "No channels yet.",
++    "composer_placeholder": "Write a message… use @ to mention",
++    "reply_placeholder": "Reply in thread…",
++    "message_removed": "This message was deleted",
++    "edited": "edited",
++    "reply_count": "{count, plural, one {# reply} other {# replies}}",
++    "reply_in_thread": "Reply in thread",
++    "thread": "Thread",
++    "link_work_item": "Link work item",
++    "create_work_item": "Create work item",
++    "empty_title": "No messages yet",
++    "empty_description": "Be the first to write in this channel.",
++    "beginning_of_channel": "This is the beginning of the channel.",
++    "select_channel": "Select a channel to start.",
++    "typing": "{names} is typing…"
+   }
  }
 diff --git a/packages/i18n/src/locales/en/empty-state.json b/packages/i18n/src/locales/en/empty-state.json
 index 33b556e..093781b 100644
@@ -180796,10 +183497,10 @@ index 7a36176..bf60349 100644
      "invalid_base_url_error": "Invalid base URL",
      "client_id_title": "Client ID",
 diff --git a/packages/i18n/src/locales/en/navigation.json b/packages/i18n/src/locales/en/navigation.json
-index 883e981..2829de3 100644
+index 883e981..99e5d51 100644
 --- a/packages/i18n/src/locales/en/navigation.json
 +++ b/packages/i18n/src/locales/en/navigation.json
-@@ -25,10 +25,13 @@
+@@ -25,10 +25,14 @@
      "favorites": "Favorites",
      "pro": "Pro",
      "upgrade": "Upgrade",
@@ -180813,7 +183514,8 @@ index 883e981..2829de3 100644
 +    "business": "Business",
 +    "wiki": "Wiki",
 +    "drive": "Files",
-+    "finance": "Finance"
++    "finance": "Finance",
++    "channels": "Channels"
    }
  }
 diff --git a/packages/i18n/src/locales/en/power-k.json b/packages/i18n/src/locales/en/power-k.json
@@ -181301,9 +184003,18 @@ index f49d529..b042251 100644
        "fixed_schedule": "Horario fijo",
        "schedule": {
 diff --git a/packages/i18n/src/locales/es/common.json b/packages/i18n/src/locales/es/common.json
-index 64440c9..6b58a36 100644
+index 64440c9..6316696 100644
 --- a/packages/i18n/src/locales/es/common.json
 +++ b/packages/i18n/src/locales/es/common.json
+@@ -145,7 +145,7 @@
+   "drafts": "Borradores",
+   "projects": "Proyectos",
+   "views": "Vistas",
+-  "archives": "Archivos",
++  "archives": "Archivados",
+   "settings": "Configuración",
+   "failed_to_move_favorite": "Error al mover favorito",
+   "favorites": "Favoritos",
 @@ -244,7 +244,7 @@
    "full_changelog": "Registro de cambios completo",
    "support": "Soporte",
@@ -181331,14 +184042,13 @@ index 64440c9..6b58a36 100644
    "in_app": "En la aplicación",
    "forms": "Formularios",
    "milestones": "Hitos",
-@@ -867,5 +867,354 @@
+@@ -867,5 +867,379 @@
        "description": "Exporta elementos de trabajo a un archivo JSON.",
        "short_description": "Exportar como json"
      }
--  }
 +  },
 +  "drive": {
-+    "title": "Archivos",
++    "title": "Documentos",
 +    "search_placeholder": "Buscar archivos",
 +    "upload": "Subir",
 +    "drop_to_upload": "Suelta los archivos aquí para subirlos",
@@ -181685,7 +184395,32 @@ index 64440c9..6b58a36 100644
 +    }
 +  },
 +  "source_code": "Código fuente",
-+  "agpl_notice": "Versión modificada de Plane, bajo licencia AGPL v3."
++  "agpl_notice": "Versión modificada de Plane, bajo licencia AGPL v3.",
++  "chat": {
++    "title": "Canales",
++    "channels": "Canales",
++    "workspace_section": "Espacio de trabajo",
++    "projects_section": "Proyectos",
++    "new_channel": "Nuevo canal",
++    "create_channel": "Crear canal",
++    "create_channel_failed": "No se pudo crear el canal",
++    "channel_name_placeholder": "p. ej. anuncios",
++    "no_channels": "Aún no hay canales.",
++    "composer_placeholder": "Escribe un mensaje… usa @ para mencionar",
++    "reply_placeholder": "Responder en el hilo…",
++    "message_removed": "Este mensaje fue eliminado",
++    "edited": "editado",
++    "reply_count": "{count, plural, one {# respuesta} other {# respuestas}}",
++    "reply_in_thread": "Responder en hilo",
++    "thread": "Hilo",
++    "link_work_item": "Vincular elemento de trabajo",
++    "create_work_item": "Crear elemento de trabajo",
++    "empty_title": "Aún no hay mensajes",
++    "empty_description": "Sé la primera persona en escribir en este canal.",
++    "beginning_of_channel": "Este es el comienzo del canal.",
++    "select_channel": "Selecciona un canal para empezar.",
++    "typing": "{names} está escribiendo…"
+   }
  }
 diff --git a/packages/i18n/src/locales/es/empty-state.json b/packages/i18n/src/locales/es/empty-state.json
 index 08feb2c..4a12149 100644
@@ -181936,10 +184671,10 @@ index 8c7b31b..78178d4 100644
      "invalid_base_url_error": "URL base inválida",
      "client_id_title": "ID del cliente",
 diff --git a/packages/i18n/src/locales/es/navigation.json b/packages/i18n/src/locales/es/navigation.json
-index 3c04912..8e980a8 100644
+index 3c04912..2274531 100644
 --- a/packages/i18n/src/locales/es/navigation.json
 +++ b/packages/i18n/src/locales/es/navigation.json
-@@ -25,10 +25,13 @@
+@@ -25,10 +25,14 @@
      "favorites": "Favoritos",
      "pro": "Pro",
      "upgrade": "Mejorar",
@@ -181952,8 +184687,9 @@ index 3c04912..8e980a8 100644
 +    "plane_pro": "Tequio Pro",
 +    "business": "Business",
 +    "wiki": "Wiki",
-+    "drive": "Archivos",
-+    "finance": "Finanzas"
++    "drive": "Documentos",
++    "finance": "Finanzas",
++    "channels": "Canales"
    }
  }
 diff --git a/packages/i18n/src/locales/es/power-k.json b/packages/i18n/src/locales/es/power-k.json
@@ -182441,7 +185177,7 @@ index 5343f12..1a31636 100644
        "fixed_schedule": "Horaire fixe",
        "schedule": {
 diff --git a/packages/i18n/src/locales/fr/common.json b/packages/i18n/src/locales/fr/common.json
-index a94ab8a..448bf9b 100644
+index a94ab8a..7693eb0 100644
 --- a/packages/i18n/src/locales/fr/common.json
 +++ b/packages/i18n/src/locales/fr/common.json
 @@ -244,7 +244,7 @@
@@ -182471,11 +185207,10 @@ index a94ab8a..448bf9b 100644
    "in_app": "Dans l'application",
    "forms": "Formulaires",
    "milestones": "Jalons",
-@@ -867,5 +867,354 @@
+@@ -867,5 +867,379 @@
        "description": "Exportez les éléments de travail vers un fichier JSON.",
        "short_description": "Exporter en json"
      }
--  }
 +  },
 +  "drive": {
 +    "title": "Files",
@@ -182825,7 +185560,32 @@ index a94ab8a..448bf9b 100644
 +    }
 +  },
 +  "source_code": "Code source",
-+  "agpl_notice": "Version modifiée de Plane, sous licence AGPL v3."
++  "agpl_notice": "Version modifiée de Plane, sous licence AGPL v3.",
++  "chat": {
++    "title": "Canaux",
++    "channels": "Canaux",
++    "workspace_section": "Espace de travail",
++    "projects_section": "Projets",
++    "new_channel": "Nouveau canal",
++    "create_channel": "Créer le canal",
++    "create_channel_failed": "Impossible de créer le canal",
++    "channel_name_placeholder": "p. ex. annonces",
++    "no_channels": "Pas encore de canaux.",
++    "composer_placeholder": "Écrivez un message… @ pour mentionner",
++    "reply_placeholder": "Répondre dans le fil…",
++    "message_removed": "Ce message a été supprimé",
++    "edited": "modifié",
++    "reply_count": "{count, plural, one {# réponse} other {# réponses}}",
++    "reply_in_thread": "Répondre dans le fil",
++    "thread": "Fil",
++    "link_work_item": "Lier un élément de travail",
++    "create_work_item": "Créer un élément de travail",
++    "empty_title": "Pas encore de messages",
++    "empty_description": "Soyez le premier à écrire dans ce canal.",
++    "beginning_of_channel": "C'est le début du canal.",
++    "select_channel": "Sélectionnez un canal pour commencer.",
++    "typing": "{names} est en train d'écrire…"
+   }
  }
 diff --git a/packages/i18n/src/locales/fr/empty-state.json b/packages/i18n/src/locales/fr/empty-state.json
 index 18e996a..9083003 100644
@@ -183076,10 +185836,10 @@ index e7f9702..647c77f 100644
      "invalid_base_url_error": "URL de base invalide",
      "client_id_title": "ID client",
 diff --git a/packages/i18n/src/locales/fr/navigation.json b/packages/i18n/src/locales/fr/navigation.json
-index 2c77344..709e275 100644
+index 2c77344..71bad0b 100644
 --- a/packages/i18n/src/locales/fr/navigation.json
 +++ b/packages/i18n/src/locales/fr/navigation.json
-@@ -25,10 +25,11 @@
+@@ -25,10 +25,12 @@
      "favorites": "Favoris",
      "pro": "Pro",
      "upgrade": "Mettre à niveau",
@@ -183091,7 +185851,8 @@ index 2c77344..709e275 100644
 -    "business": "Business"
 +    "plane_pro": "Tequio Pro",
 +    "business": "Business",
-+    "finance": "Finance"
++    "finance": "Finance",
++    "channels": "Canaux"
    }
  }
 diff --git a/packages/i18n/src/locales/fr/power-k.json b/packages/i18n/src/locales/fr/power-k.json
@@ -183579,7 +186340,7 @@ index 2fd8636..c6ce762 100644
        "fixed_schedule": "Jadwal tetap",
        "schedule": {
 diff --git a/packages/i18n/src/locales/id/common.json b/packages/i18n/src/locales/id/common.json
-index 7d26685..c673de9 100644
+index 7d26685..a4c2673 100644
 --- a/packages/i18n/src/locales/id/common.json
 +++ b/packages/i18n/src/locales/id/common.json
 @@ -244,7 +244,7 @@
@@ -183600,11 +186361,10 @@ index 7d26685..c673de9 100644
      "choose_view_logs_from_setup_sh_and_docker_logs_to_be_sure": "Pilih View Logs dari setup.sh dan log Docker untuk memastikan."
    },
    "customize_navigation": "Sesuaikan navigasi",
-@@ -867,5 +867,354 @@
+@@ -867,5 +867,379 @@
        "description": "Ekspor item kerja ke file JSON.",
        "short_description": "Ekspor sebagai json"
      }
--  }
 +  },
 +  "drive": {
 +    "title": "Files",
@@ -183954,7 +186714,32 @@ index 7d26685..c673de9 100644
 +    }
 +  },
 +  "source_code": "Source code",
-+  "agpl_notice": "Modified version of Plane, licensed under AGPL v3."
++  "agpl_notice": "Modified version of Plane, licensed under AGPL v3.",
++  "chat": {
++    "title": "Saluran",
++    "channels": "Saluran",
++    "workspace_section": "Ruang kerja",
++    "projects_section": "Proyek",
++    "new_channel": "Saluran baru",
++    "create_channel": "Buat saluran",
++    "create_channel_failed": "Tidak dapat membuat saluran",
++    "channel_name_placeholder": "mis. pengumuman",
++    "no_channels": "Belum ada saluran.",
++    "composer_placeholder": "Tulis pesan… gunakan @ untuk menyebut",
++    "reply_placeholder": "Balas di utas…",
++    "message_removed": "Pesan ini telah dihapus",
++    "edited": "diedit",
++    "reply_count": "{count, plural, other {# balasan}}",
++    "reply_in_thread": "Balas di utas",
++    "thread": "Utas",
++    "link_work_item": "Tautkan item kerja",
++    "create_work_item": "Buat item kerja",
++    "empty_title": "Belum ada pesan",
++    "empty_description": "Jadilah yang pertama menulis di saluran ini.",
++    "beginning_of_channel": "Ini adalah awal saluran.",
++    "select_channel": "Pilih saluran untuk memulai.",
++    "typing": "{names} sedang mengetik…"
+   }
  }
 diff --git a/packages/i18n/src/locales/id/empty-state.json b/packages/i18n/src/locales/id/empty-state.json
 index 5c339ce..147e18f 100644
@@ -184206,10 +186991,10 @@ index 62cd968..222eb88 100644
      "invalid_base_url_error": "URL dasar tidak valid",
      "client_id_title": "ID Klien",
 diff --git a/packages/i18n/src/locales/id/navigation.json b/packages/i18n/src/locales/id/navigation.json
-index 4a77755..07d55c9 100644
+index 4a77755..cd9f0e0 100644
 --- a/packages/i18n/src/locales/id/navigation.json
 +++ b/packages/i18n/src/locales/id/navigation.json
-@@ -25,10 +25,11 @@
+@@ -25,10 +25,12 @@
      "favorites": "Favorit",
      "pro": "Pro",
      "upgrade": "Upgrade",
@@ -184221,7 +187006,8 @@ index 4a77755..07d55c9 100644
 -    "business": "Bisnis"
 +    "plane_pro": "Tequio Pro",
 +    "business": "Bisnis",
-+    "finance": "Finance"
++    "finance": "Finance",
++    "channels": "Saluran"
    }
  }
 diff --git a/packages/i18n/src/locales/id/power-k.json b/packages/i18n/src/locales/id/power-k.json
@@ -184709,7 +187495,7 @@ index f279366..b302f18 100644
        "fixed_schedule": "Pianificazione fissa",
        "schedule": {
 diff --git a/packages/i18n/src/locales/it/common.json b/packages/i18n/src/locales/it/common.json
-index 6fda1b0..0c0e125 100644
+index 6fda1b0..e8d26cc 100644
 --- a/packages/i18n/src/locales/it/common.json
 +++ b/packages/i18n/src/locales/it/common.json
 @@ -244,7 +244,7 @@
@@ -184739,11 +187525,10 @@ index 6fda1b0..0c0e125 100644
    "in_app": "In-app",
    "forms": "Moduli",
    "milestones": "Milestone",
-@@ -867,5 +867,354 @@
+@@ -867,5 +867,379 @@
        "description": "Esporta elementi di lavoro in un file JSON.",
        "short_description": "Esporta come JSON"
      }
--  }
 +  },
 +  "drive": {
 +    "title": "Files",
@@ -185093,7 +187878,32 @@ index 6fda1b0..0c0e125 100644
 +    }
 +  },
 +  "source_code": "Source code",
-+  "agpl_notice": "Modified version of Plane, licensed under AGPL v3."
++  "agpl_notice": "Modified version of Plane, licensed under AGPL v3.",
++  "chat": {
++    "title": "Canali",
++    "channels": "Canali",
++    "workspace_section": "Area di lavoro",
++    "projects_section": "Progetti",
++    "new_channel": "Nuovo canale",
++    "create_channel": "Crea canale",
++    "create_channel_failed": "Impossibile creare il canale",
++    "channel_name_placeholder": "es. annunci",
++    "no_channels": "Ancora nessun canale.",
++    "composer_placeholder": "Scrivi un messaggio… usa @ per menzionare",
++    "reply_placeholder": "Rispondi nel thread…",
++    "message_removed": "Questo messaggio è stato eliminato",
++    "edited": "modificato",
++    "reply_count": "{count, plural, one {# risposta} other {# risposte}}",
++    "reply_in_thread": "Rispondi nel thread",
++    "thread": "Thread",
++    "link_work_item": "Collega elemento di lavoro",
++    "create_work_item": "Crea elemento di lavoro",
++    "empty_title": "Ancora nessun messaggio",
++    "empty_description": "Scrivi per primo in questo canale.",
++    "beginning_of_channel": "Questo è l'inizio del canale.",
++    "select_channel": "Seleziona un canale per iniziare.",
++    "typing": "{names} sta scrivendo…"
+   }
  }
 diff --git a/packages/i18n/src/locales/it/empty-state.json b/packages/i18n/src/locales/it/empty-state.json
 index 1af7d40..41e89e4 100644
@@ -185344,10 +188154,10 @@ index 36520b8..51893ae 100644
      "invalid_base_url_error": "URL base non valido",
      "client_id_title": "ID Client",
 diff --git a/packages/i18n/src/locales/it/navigation.json b/packages/i18n/src/locales/it/navigation.json
-index db31c30..3f7e3ea 100644
+index db31c30..d412ed4 100644
 --- a/packages/i18n/src/locales/it/navigation.json
 +++ b/packages/i18n/src/locales/it/navigation.json
-@@ -25,10 +25,11 @@
+@@ -25,10 +25,12 @@
      "favorites": "Preferiti",
      "pro": "Pro",
      "upgrade": "Aggiorna",
@@ -185359,7 +188169,8 @@ index db31c30..3f7e3ea 100644
 -    "business": "Business"
 +    "plane_pro": "Tequio Pro",
 +    "business": "Business",
-+    "finance": "Finance"
++    "finance": "Finance",
++    "channels": "Canali"
    }
  }
 diff --git a/packages/i18n/src/locales/it/power-k.json b/packages/i18n/src/locales/it/power-k.json
@@ -185789,7 +188600,7 @@ index d3dd8d3..0f5426b 100644
            }
          }
 diff --git a/packages/i18n/src/locales/ja/common.json b/packages/i18n/src/locales/ja/common.json
-index 4899411..255bbe2 100644
+index 4899411..ce9ceed 100644
 --- a/packages/i18n/src/locales/ja/common.json
 +++ b/packages/i18n/src/locales/ja/common.json
 @@ -244,7 +244,7 @@
@@ -185801,11 +188612,10 @@ index 4899411..255bbe2 100644
    "please_select_at_least_one_invitation": "少なくとも1つの招待を選択してください。",
    "please_select_at_least_one_invitation_description": "ワークスペースに参加するには少なくとも1つの招待を選択してください。",
    "we_see_that_someone_has_invited_you_to_join_a_workspace": "誰かがあなたをワークスペースに招待しています",
-@@ -867,5 +867,354 @@
+@@ -867,5 +867,379 @@
        "description": "作業項目をJSONファイルにエクスポートします。",
        "short_description": "JSONとしてエクスポート"
      }
--  }
 +  },
 +  "drive": {
 +    "title": "Files",
@@ -186155,7 +188965,32 @@ index 4899411..255bbe2 100644
 +    }
 +  },
 +  "source_code": "Source code",
-+  "agpl_notice": "Modified version of Plane, licensed under AGPL v3."
++  "agpl_notice": "Modified version of Plane, licensed under AGPL v3.",
++  "chat": {
++    "title": "チャンネル",
++    "channels": "チャンネル",
++    "workspace_section": "ワークスペース",
++    "projects_section": "プロジェクト",
++    "new_channel": "新しいチャンネル",
++    "create_channel": "チャンネルを作成",
++    "create_channel_failed": "チャンネルを作成できませんでした",
++    "channel_name_placeholder": "例：お知らせ",
++    "no_channels": "チャンネルはまだありません。",
++    "composer_placeholder": "メッセージを入力… @でメンション",
++    "reply_placeholder": "スレッドで返信…",
++    "message_removed": "このメッセージは削除されました",
++    "edited": "編集済み",
++    "reply_count": "{count, plural, other {#件の返信}}",
++    "reply_in_thread": "スレッドで返信",
++    "thread": "スレッド",
++    "link_work_item": "作業アイテムをリンク",
++    "create_work_item": "作業アイテムを作成",
++    "empty_title": "メッセージはまだありません",
++    "empty_description": "このチャンネルに最初のメッセージを書きましょう。",
++    "beginning_of_channel": "ここがチャンネルの始まりです。",
++    "select_channel": "チャンネルを選択してください。",
++    "typing": "{names}が入力中…"
+   }
  }
 diff --git a/packages/i18n/src/locales/ja/integration.json b/packages/i18n/src/locales/ja/integration.json
 index e238e33..669d30c 100644
@@ -186193,10 +189028,10 @@ index e238e33..669d30c 100644
      "invalid_base_url_error": "Base URLが無効です",
      "client_id_title": "Client ID",
 diff --git a/packages/i18n/src/locales/ja/navigation.json b/packages/i18n/src/locales/ja/navigation.json
-index 207ec74..aca5f9a 100644
+index 207ec74..99cd4c1 100644
 --- a/packages/i18n/src/locales/ja/navigation.json
 +++ b/packages/i18n/src/locales/ja/navigation.json
-@@ -28,7 +28,8 @@
+@@ -28,7 +28,9 @@
      "pi_chat": "AIチャット",
      "epics": "エピック",
      "upgrade_plan": "プランをアップグレード",
@@ -186204,7 +189039,8 @@ index 207ec74..aca5f9a 100644
 -    "business": "ビジネス"
 +    "plane_pro": "Tequio Pro",
 +    "business": "ビジネス",
-+    "finance": "Finance"
++    "finance": "Finance",
++    "channels": "チャンネル"
    }
  }
 diff --git a/packages/i18n/src/locales/ja/template.json b/packages/i18n/src/locales/ja/template.json
@@ -186395,7 +189231,7 @@ index 8d77f70..279ae09 100644
        "fixed_schedule": "고정 일정",
        "schedule": {
 diff --git a/packages/i18n/src/locales/ko/common.json b/packages/i18n/src/locales/ko/common.json
-index 73eea6b..8f996bc 100644
+index 73eea6b..a7460ae 100644
 --- a/packages/i18n/src/locales/ko/common.json
 +++ b/packages/i18n/src/locales/ko/common.json
 @@ -244,7 +244,7 @@
@@ -186416,11 +189252,10 @@ index 73eea6b..8f996bc 100644
      "choose_view_logs_from_setup_sh_and_docker_logs_to_be_sure": "확실히 하려면 setup.sh와 Docker 로그에서 View Logs를 선택하세요."
    },
    "customize_navigation": "내비게이션 사용자 지정",
-@@ -867,5 +867,354 @@
+@@ -867,5 +867,379 @@
        "description": "작업 항목을 JSON 파일로 내보냅니다.",
        "short_description": "JSON으로 내보내기"
      }
--  }
 +  },
 +  "drive": {
 +    "title": "Files",
@@ -186770,7 +189605,32 @@ index 73eea6b..8f996bc 100644
 +    }
 +  },
 +  "source_code": "Source code",
-+  "agpl_notice": "Modified version of Plane, licensed under AGPL v3."
++  "agpl_notice": "Modified version of Plane, licensed under AGPL v3.",
++  "chat": {
++    "title": "채널",
++    "channels": "채널",
++    "workspace_section": "워크스페이스",
++    "projects_section": "프로젝트",
++    "new_channel": "새 채널",
++    "create_channel": "채널 만들기",
++    "create_channel_failed": "채널을 만들 수 없습니다",
++    "channel_name_placeholder": "예: 공지사항",
++    "no_channels": "아직 채널이 없습니다.",
++    "composer_placeholder": "메시지를 입력하세요… @로 멘션",
++    "reply_placeholder": "스레드에 답장…",
++    "message_removed": "이 메시지는 삭제되었습니다",
++    "edited": "수정됨",
++    "reply_count": "{count, plural, other {답글 #개}}",
++    "reply_in_thread": "스레드에 답장",
++    "thread": "스레드",
++    "link_work_item": "작업 항목 연결",
++    "create_work_item": "작업 항목 만들기",
++    "empty_title": "아직 메시지가 없습니다",
++    "empty_description": "이 채널에 첫 메시지를 남겨보세요.",
++    "beginning_of_channel": "채널의 시작입니다.",
++    "select_channel": "채널을 선택하세요.",
++    "typing": "{names}님이 입력 중…"
+   }
  }
 diff --git a/packages/i18n/src/locales/ko/empty-state.json b/packages/i18n/src/locales/ko/empty-state.json
 index d37876b..ee33004 100644
@@ -186847,16 +189707,17 @@ index cb7e6ad..347a697 100644
      "invalid_base_url_error": "Base URL이 유효하지 않습니다",
      "client_id_title": "Client ID",
 diff --git a/packages/i18n/src/locales/ko/navigation.json b/packages/i18n/src/locales/ko/navigation.json
-index 86ba3b7..ed2b818 100644
+index 86ba3b7..0033666 100644
 --- a/packages/i18n/src/locales/ko/navigation.json
 +++ b/packages/i18n/src/locales/ko/navigation.json
-@@ -29,6 +29,7 @@
+@@ -29,6 +29,8 @@
      "epics": "에픽스",
      "upgrade_plan": "업그레이드 플랜",
      "plane_pro": "플레인 프로",
 -    "business": "비즈니스"
 +    "business": "비즈니스",
-+    "finance": "Finance"
++    "finance": "Finance",
++    "channels": "채널"
    }
  }
 diff --git a/packages/i18n/src/locales/ko/power-k.json b/packages/i18n/src/locales/ko/power-k.json
@@ -187163,7 +190024,7 @@ index 0632d1f..6396693 100644
        "fixed_schedule": "Stały harmonogram",
        "schedule": {
 diff --git a/packages/i18n/src/locales/pl/common.json b/packages/i18n/src/locales/pl/common.json
-index 4c4850c..a569111 100644
+index 4c4850c..72ae03a 100644
 --- a/packages/i18n/src/locales/pl/common.json
 +++ b/packages/i18n/src/locales/pl/common.json
 @@ -244,7 +244,7 @@
@@ -187184,11 +190045,10 @@ index 4c4850c..a569111 100644
      "choose_view_logs_from_setup_sh_and_docker_logs_to_be_sure": "Wybierz View Logs z setup.sh i logów Docker, aby mieć pewność."
    },
    "customize_navigation": "Dostosuj nawigację",
-@@ -867,5 +867,354 @@
+@@ -867,5 +867,379 @@
        "description": "Eksportuj elementy do pliku JSON.",
        "short_description": "Eksportuj jako JSON"
      }
--  }
 +  },
 +  "drive": {
 +    "title": "Files",
@@ -187538,7 +190398,32 @@ index 4c4850c..a569111 100644
 +    }
 +  },
 +  "source_code": "Source code",
-+  "agpl_notice": "Modified version of Plane, licensed under AGPL v3."
++  "agpl_notice": "Modified version of Plane, licensed under AGPL v3.",
++  "chat": {
++    "title": "Kanały",
++    "channels": "Kanały",
++    "workspace_section": "Przestrzeń robocza",
++    "projects_section": "Projekty",
++    "new_channel": "Nowy kanał",
++    "create_channel": "Utwórz kanał",
++    "create_channel_failed": "Nie udało się utworzyć kanału",
++    "channel_name_placeholder": "np. ogłoszenia",
++    "no_channels": "Brak kanałów.",
++    "composer_placeholder": "Napisz wiadomość… @ aby wspomnieć",
++    "reply_placeholder": "Odpowiedz w wątku…",
++    "message_removed": "Ta wiadomość została usunięta",
++    "edited": "edytowano",
++    "reply_count": "{count, plural, one {# odpowiedź} few {# odpowiedzi} other {# odpowiedzi}}",
++    "reply_in_thread": "Odpowiedz w wątku",
++    "thread": "Wątek",
++    "link_work_item": "Połącz element pracy",
++    "create_work_item": "Utwórz element pracy",
++    "empty_title": "Brak wiadomości",
++    "empty_description": "Napisz jako pierwszy na tym kanale.",
++    "beginning_of_channel": "To początek kanału.",
++    "select_channel": "Wybierz kanał, aby zacząć.",
++    "typing": "{names} pisze…"
+   }
  }
 diff --git a/packages/i18n/src/locales/pl/empty-state.json b/packages/i18n/src/locales/pl/empty-state.json
 index 9ade0d8..b6f317c 100644
@@ -187789,16 +190674,17 @@ index 67c05cc..a5904b5 100644
      "invalid_base_url_error": "Nieprawidłowy URL bazowy",
      "client_id_title": "ID klienta",
 diff --git a/packages/i18n/src/locales/pl/navigation.json b/packages/i18n/src/locales/pl/navigation.json
-index 3089b6d..58f309c 100644
+index 3089b6d..71af212 100644
 --- a/packages/i18n/src/locales/pl/navigation.json
 +++ b/packages/i18n/src/locales/pl/navigation.json
-@@ -29,6 +29,7 @@
+@@ -29,6 +29,8 @@
      "epics": "Epiki",
      "upgrade_plan": "Apgrejduj plan",
      "plane_pro": "Plejn Pro",
 -    "business": "Biznes"
 +    "business": "Biznes",
-+    "finance": "Finance"
++    "finance": "Finance",
++    "channels": "Kanały"
    }
  }
 diff --git a/packages/i18n/src/locales/pl/power-k.json b/packages/i18n/src/locales/pl/power-k.json
@@ -188238,7 +191124,7 @@ index 3eab73f..c2c7c08 100644
        "fixed_schedule": "Agendamento fixo",
        "schedule": {
 diff --git a/packages/i18n/src/locales/pt-BR/common.json b/packages/i18n/src/locales/pt-BR/common.json
-index 565e85d..7e97726 100644
+index 565e85d..8e075c2 100644
 --- a/packages/i18n/src/locales/pt-BR/common.json
 +++ b/packages/i18n/src/locales/pt-BR/common.json
 @@ -244,7 +244,7 @@
@@ -188259,11 +191145,10 @@ index 565e85d..7e97726 100644
      "choose_view_logs_from_setup_sh_and_docker_logs_to_be_sure": "Escolha View Logs do setup.sh e logs do Docker para ter certeza."
    },
    "customize_navigation": "Personalizar navegação",
-@@ -867,5 +867,354 @@
+@@ -867,5 +867,379 @@
        "description": "Exporte itens de trabalho para um arquivo JSON.",
        "short_description": "Exportar como JSON"
      }
--  }
 +  },
 +  "drive": {
 +    "title": "Files",
@@ -188613,7 +191498,32 @@ index 565e85d..7e97726 100644
 +    }
 +  },
 +  "source_code": "Código-fonte",
-+  "agpl_notice": "Versão modificada do Plane, sob licença AGPL v3."
++  "agpl_notice": "Versão modificada do Plane, sob licença AGPL v3.",
++  "chat": {
++    "title": "Canais",
++    "channels": "Canais",
++    "workspace_section": "Espaço de trabalho",
++    "projects_section": "Projetos",
++    "new_channel": "Novo canal",
++    "create_channel": "Criar canal",
++    "create_channel_failed": "Não foi possível criar o canal",
++    "channel_name_placeholder": "ex.: anúncios",
++    "no_channels": "Ainda não há canais.",
++    "composer_placeholder": "Escreva uma mensagem… use @ para mencionar",
++    "reply_placeholder": "Responder no tópico…",
++    "message_removed": "Esta mensagem foi excluída",
++    "edited": "editado",
++    "reply_count": "{count, plural, one {# resposta} other {# respostas}}",
++    "reply_in_thread": "Responder no tópico",
++    "thread": "Tópico",
++    "link_work_item": "Vincular item de trabalho",
++    "create_work_item": "Criar item de trabalho",
++    "empty_title": "Ainda não há mensagens",
++    "empty_description": "Seja a primeira pessoa a escrever neste canal.",
++    "beginning_of_channel": "Este é o início do canal.",
++    "select_channel": "Selecione um canal para começar.",
++    "typing": "{names} está digitando…"
+   }
  }
 diff --git a/packages/i18n/src/locales/pt-BR/empty-state.json b/packages/i18n/src/locales/pt-BR/empty-state.json
 index e9863a4..0378061 100644
@@ -188864,10 +191774,10 @@ index b094ffa..53819ed 100644
      "invalid_base_url_error": "URL base inválida",
      "client_id_title": "ID do Cliente",
 diff --git a/packages/i18n/src/locales/pt-BR/navigation.json b/packages/i18n/src/locales/pt-BR/navigation.json
-index c2a2d62..682f45c 100644
+index c2a2d62..49c20c9 100644
 --- a/packages/i18n/src/locales/pt-BR/navigation.json
 +++ b/packages/i18n/src/locales/pt-BR/navigation.json
-@@ -28,7 +28,8 @@
+@@ -28,7 +28,9 @@
      "pi_chat": "Chat AI",
      "epics": "Épicos",
      "upgrade_plan": "Atualizar plano",
@@ -188875,7 +191785,8 @@ index c2a2d62..682f45c 100644
 -    "business": "Business"
 +    "plane_pro": "Tequio Pro",
 +    "business": "Business",
-+    "finance": "Finance"
++    "finance": "Finance",
++    "channels": "Canais"
    }
  }
 diff --git a/packages/i18n/src/locales/pt-BR/power-k.json b/packages/i18n/src/locales/pt-BR/power-k.json
@@ -189363,7 +192274,7 @@ index 509bbb1..0c56d9c 100644
        "fixed_schedule": "Program fix",
        "schedule": {
 diff --git a/packages/i18n/src/locales/ro/common.json b/packages/i18n/src/locales/ro/common.json
-index e2b44ce..7638f02 100644
+index e2b44ce..0e194dd 100644
 --- a/packages/i18n/src/locales/ro/common.json
 +++ b/packages/i18n/src/locales/ro/common.json
 @@ -244,7 +244,7 @@
@@ -189393,11 +192304,10 @@ index e2b44ce..7638f02 100644
    "in_app": "În-app",
    "forms": "Formulare",
    "milestones": "Jaloane",
-@@ -867,5 +867,354 @@
+@@ -867,5 +867,379 @@
        "description": "Exportă activitățile într-un fișier JSON.",
        "short_description": "Exportă ca JSON"
      }
--  }
 +  },
 +  "drive": {
 +    "title": "Files",
@@ -189747,7 +192657,32 @@ index e2b44ce..7638f02 100644
 +    }
 +  },
 +  "source_code": "Source code",
-+  "agpl_notice": "Modified version of Plane, licensed under AGPL v3."
++  "agpl_notice": "Modified version of Plane, licensed under AGPL v3.",
++  "chat": {
++    "title": "Canale",
++    "channels": "Canale",
++    "workspace_section": "Spațiu de lucru",
++    "projects_section": "Proiecte",
++    "new_channel": "Canal nou",
++    "create_channel": "Creează canal",
++    "create_channel_failed": "Canalul nu a putut fi creat",
++    "channel_name_placeholder": "ex. anunțuri",
++    "no_channels": "Încă nu există canale.",
++    "composer_placeholder": "Scrie un mesaj… folosește @ pentru mențiuni",
++    "reply_placeholder": "Răspunde în fir…",
++    "message_removed": "Acest mesaj a fost șters",
++    "edited": "editat",
++    "reply_count": "{count, plural, one {# răspuns} few {# răspunsuri} other {# de răspunsuri}}",
++    "reply_in_thread": "Răspunde în fir",
++    "thread": "Fir",
++    "link_work_item": "Leagă element de lucru",
++    "create_work_item": "Creează element de lucru",
++    "empty_title": "Încă nu există mesaje",
++    "empty_description": "Fii primul care scrie pe acest canal.",
++    "beginning_of_channel": "Acesta este începutul canalului.",
++    "select_channel": "Selectează un canal pentru a începe.",
++    "typing": "{names} scrie…"
+   }
  }
 diff --git a/packages/i18n/src/locales/ro/empty-state.json b/packages/i18n/src/locales/ro/empty-state.json
 index a613a68..32f35f3 100644
@@ -189998,10 +192933,10 @@ index b6b92f4..d604ce5 100644
      "invalid_base_url_error": "URL-ul de bază este invalid",
      "client_id_title": "ID Client",
 diff --git a/packages/i18n/src/locales/ro/navigation.json b/packages/i18n/src/locales/ro/navigation.json
-index e56d5aa..8d98f59 100644
+index e56d5aa..9622292 100644
 --- a/packages/i18n/src/locales/ro/navigation.json
 +++ b/packages/i18n/src/locales/ro/navigation.json
-@@ -25,10 +25,11 @@
+@@ -25,10 +25,12 @@
      "favorites": "Favorite",
      "pro": "Pro",
      "upgrade": "Treci la versiunea superioară",
@@ -190013,7 +192948,8 @@ index e56d5aa..8d98f59 100644
 -    "business": "Business"
 +    "plane_pro": "Tequio Pro",
 +    "business": "Business",
-+    "finance": "Finance"
++    "finance": "Finance",
++    "channels": "Canale"
    }
  }
 diff --git a/packages/i18n/src/locales/ro/power-k.json b/packages/i18n/src/locales/ro/power-k.json
@@ -190495,7 +193431,7 @@ index a97e9e6..7ce3fde 100644
        "fixed_schedule": "Фиксированное расписание",
        "schedule": {
 diff --git a/packages/i18n/src/locales/ru/common.json b/packages/i18n/src/locales/ru/common.json
-index c2881e5..73e2b0b 100644
+index c2881e5..b3e60e5 100644
 --- a/packages/i18n/src/locales/ru/common.json
 +++ b/packages/i18n/src/locales/ru/common.json
 @@ -244,7 +244,7 @@
@@ -190516,11 +193452,10 @@ index c2881e5..73e2b0b 100644
      "choose_view_logs_from_setup_sh_and_docker_logs_to_be_sure": "Выберите View Logs из setup.sh и логов Docker, чтобы убедиться."
    },
    "customize_navigation": "Настроить навигацию",
-@@ -867,5 +867,354 @@
+@@ -867,5 +867,379 @@
        "description": "Экспорт рабочих элементов в JSON-файл.",
        "short_description": "Экспорт в json"
      }
--  }
 +  },
 +  "drive": {
 +    "title": "Files",
@@ -190870,7 +193805,32 @@ index c2881e5..73e2b0b 100644
 +    }
 +  },
 +  "source_code": "Source code",
-+  "agpl_notice": "Modified version of Plane, licensed under AGPL v3."
++  "agpl_notice": "Modified version of Plane, licensed under AGPL v3.",
++  "chat": {
++    "title": "Каналы",
++    "channels": "Каналы",
++    "workspace_section": "Рабочее пространство",
++    "projects_section": "Проекты",
++    "new_channel": "Новый канал",
++    "create_channel": "Создать канал",
++    "create_channel_failed": "Не удалось создать канал",
++    "channel_name_placeholder": "например, объявления",
++    "no_channels": "Каналов пока нет.",
++    "composer_placeholder": "Напишите сообщение… @ для упоминания",
++    "reply_placeholder": "Ответить в треде…",
++    "message_removed": "Это сообщение удалено",
++    "edited": "изменено",
++    "reply_count": "{count, plural, one {# ответ} few {# ответа} other {# ответов}}",
++    "reply_in_thread": "Ответить в треде",
++    "thread": "Тред",
++    "link_work_item": "Привязать задачу",
++    "create_work_item": "Создать задачу",
++    "empty_title": "Сообщений пока нет",
++    "empty_description": "Напишите первым в этом канале.",
++    "beginning_of_channel": "Это начало канала.",
++    "select_channel": "Выберите канал, чтобы начать.",
++    "typing": "{names} печатает…"
+   }
  }
 diff --git a/packages/i18n/src/locales/ru/empty-state.json b/packages/i18n/src/locales/ru/empty-state.json
 index e322a5e..d433978 100644
@@ -191121,16 +194081,17 @@ index 2ca6489..317d892 100644
      "invalid_base_url_error": "Неверная базовая URL",
      "client_id_title": "ID клиента",
 diff --git a/packages/i18n/src/locales/ru/navigation.json b/packages/i18n/src/locales/ru/navigation.json
-index 80bbdd8..5647d12 100644
+index 80bbdd8..45e4497 100644
 --- a/packages/i18n/src/locales/ru/navigation.json
 +++ b/packages/i18n/src/locales/ru/navigation.json
-@@ -29,6 +29,7 @@
+@@ -29,6 +29,8 @@
      "epics": "Эпики",
      "upgrade_plan": "Апгрейд план",
      "plane_pro": "Плейн Про",
 -    "business": "Бизнес"
 +    "business": "Бизнес",
-+    "finance": "Finance"
++    "finance": "Finance",
++    "channels": "Каналы"
    }
  }
 diff --git a/packages/i18n/src/locales/ru/power-k.json b/packages/i18n/src/locales/ru/power-k.json
@@ -191607,7 +194568,7 @@ index 3e7dbc5..27f375f 100644
        "fixed_schedule": "Pevný rozvrh",
        "schedule": {
 diff --git a/packages/i18n/src/locales/sk/common.json b/packages/i18n/src/locales/sk/common.json
-index 4fc339c..7f924b7 100644
+index 4fc339c..ef44f6b 100644
 --- a/packages/i18n/src/locales/sk/common.json
 +++ b/packages/i18n/src/locales/sk/common.json
 @@ -244,7 +244,7 @@
@@ -191628,11 +194589,10 @@ index 4fc339c..7f924b7 100644
      "choose_view_logs_from_setup_sh_and_docker_logs_to_be_sure": "Vyberte View Logs z setup.sh a Docker logov, aby ste si boli istí."
    },
    "customize_navigation": "Prispôsobiť navigáciu",
-@@ -867,5 +867,354 @@
+@@ -867,5 +867,379 @@
        "description": "Exportujte položky do JSON.",
        "short_description": "Exportovať ako JSON"
      }
--  }
 +  },
 +  "drive": {
 +    "title": "Files",
@@ -191982,7 +194942,32 @@ index 4fc339c..7f924b7 100644
 +    }
 +  },
 +  "source_code": "Source code",
-+  "agpl_notice": "Modified version of Plane, licensed under AGPL v3."
++  "agpl_notice": "Modified version of Plane, licensed under AGPL v3.",
++  "chat": {
++    "title": "Kanály",
++    "channels": "Kanály",
++    "workspace_section": "Pracovný priestor",
++    "projects_section": "Projekty",
++    "new_channel": "Nový kanál",
++    "create_channel": "Vytvoriť kanál",
++    "create_channel_failed": "Kanál sa nepodarilo vytvoriť",
++    "channel_name_placeholder": "napr. oznamy",
++    "no_channels": "Zatiaľ žiadne kanály.",
++    "composer_placeholder": "Napíšte správu… @ pre zmienku",
++    "reply_placeholder": "Odpovedať vo vlákne…",
++    "message_removed": "Táto správa bola odstránená",
++    "edited": "upravené",
++    "reply_count": "{count, plural, one {# odpoveď} few {# odpovede} other {# odpovedí}}",
++    "reply_in_thread": "Odpovedať vo vlákne",
++    "thread": "Vlákno",
++    "link_work_item": "Prepojiť pracovnú položku",
++    "create_work_item": "Vytvoriť pracovnú položku",
++    "empty_title": "Zatiaľ žiadne správy",
++    "empty_description": "Napíšte do tohto kanála ako prvý.",
++    "beginning_of_channel": "Toto je začiatok kanála.",
++    "select_channel": "Vyberte kanál.",
++    "typing": "{names} píše…"
+   }
  }
 diff --git a/packages/i18n/src/locales/sk/empty-state.json b/packages/i18n/src/locales/sk/empty-state.json
 index 15bc7d2..0a09f0f 100644
@@ -192233,16 +195218,17 @@ index 79689a4..1284028 100644
      "invalid_base_url_error": "Neplatná základná URL",
      "client_id_title": "ID klienta",
 diff --git a/packages/i18n/src/locales/sk/navigation.json b/packages/i18n/src/locales/sk/navigation.json
-index 0d09286..1156fc4 100644
+index 0d09286..f4f21ce 100644
 --- a/packages/i18n/src/locales/sk/navigation.json
 +++ b/packages/i18n/src/locales/sk/navigation.json
-@@ -29,6 +29,7 @@
+@@ -29,6 +29,8 @@
      "epics": "Epiky",
      "upgrade_plan": "Apgrejd plán",
      "plane_pro": "Plejn Pro",
 -    "business": "Biznis"
 +    "business": "Biznis",
-+    "finance": "Finance"
++    "finance": "Finance",
++    "channels": "Kanály"
    }
  }
 diff --git a/packages/i18n/src/locales/sk/power-k.json b/packages/i18n/src/locales/sk/power-k.json
@@ -192671,7 +195657,7 @@ index 5d44f94..bd09842 100644
        "fixed_schedule": "Sabit zamanlama",
        "schedule": {
 diff --git a/packages/i18n/src/locales/tr-TR/common.json b/packages/i18n/src/locales/tr-TR/common.json
-index 74bd5cb..9c60bd9 100644
+index 74bd5cb..7442b8c 100644
 --- a/packages/i18n/src/locales/tr-TR/common.json
 +++ b/packages/i18n/src/locales/tr-TR/common.json
 @@ -244,7 +244,7 @@
@@ -192701,11 +195687,10 @@ index 74bd5cb..9c60bd9 100644
    "in_app": "Uygulama İçi",
    "forms": "Formlar",
    "milestones": "Kilometre taşları",
-@@ -867,5 +867,354 @@
+@@ -867,5 +867,379 @@
        "description": "İş öğelerini JSON dosyasına aktarın.",
        "short_description": "JSON olarak aktar"
      }
--  }
 +  },
 +  "drive": {
 +    "title": "Files",
@@ -193055,7 +196040,32 @@ index 74bd5cb..9c60bd9 100644
 +    }
 +  },
 +  "source_code": "Source code",
-+  "agpl_notice": "Modified version of Plane, licensed under AGPL v3."
++  "agpl_notice": "Modified version of Plane, licensed under AGPL v3.",
++  "chat": {
++    "title": "Kanallar",
++    "channels": "Kanallar",
++    "workspace_section": "Çalışma alanı",
++    "projects_section": "Projeler",
++    "new_channel": "Yeni kanal",
++    "create_channel": "Kanal oluştur",
++    "create_channel_failed": "Kanal oluşturulamadı",
++    "channel_name_placeholder": "örn. duyurular",
++    "no_channels": "Henüz kanal yok.",
++    "composer_placeholder": "Bir mesaj yazın… bahsetmek için @ kullanın",
++    "reply_placeholder": "Konuda yanıtla…",
++    "message_removed": "Bu mesaj silindi",
++    "edited": "düzenlendi",
++    "reply_count": "{count, plural, other {# yanıt}}",
++    "reply_in_thread": "Konuda yanıtla",
++    "thread": "Konu",
++    "link_work_item": "İş öğesi bağla",
++    "create_work_item": "İş öğesi oluştur",
++    "empty_title": "Henüz mesaj yok",
++    "empty_description": "Bu kanala ilk yazan siz olun.",
++    "beginning_of_channel": "Bu, kanalın başlangıcıdır.",
++    "select_channel": "Başlamak için bir kanal seçin.",
++    "typing": "{names} yazıyor…"
+   }
  }
 diff --git a/packages/i18n/src/locales/tr-TR/empty-state.json b/packages/i18n/src/locales/tr-TR/empty-state.json
 index c326cea..475198a 100644
@@ -193306,16 +196316,17 @@ index 0d9074f..beb01ba 100644
      "invalid_base_url_error": "Geçersiz base URL",
      "client_id_title": "Client ID",
 diff --git a/packages/i18n/src/locales/tr-TR/navigation.json b/packages/i18n/src/locales/tr-TR/navigation.json
-index f347e01..8640ecb 100644
+index f347e01..9f6fe8e 100644
 --- a/packages/i18n/src/locales/tr-TR/navigation.json
 +++ b/packages/i18n/src/locales/tr-TR/navigation.json
-@@ -29,6 +29,7 @@
+@@ -29,6 +29,8 @@
      "epics": "Epiks",
      "upgrade_plan": "Apgreyd plen",
      "plane_pro": "Pleyn Pro",
 -    "business": "Biznis"
 +    "business": "Biznis",
-+    "finance": "Finance"
++    "finance": "Finance",
++    "channels": "Kanallar"
    }
  }
 diff --git a/packages/i18n/src/locales/tr-TR/power-k.json b/packages/i18n/src/locales/tr-TR/power-k.json
@@ -193776,7 +196787,7 @@ index 25a1f98..64286c8 100644
        "fixed_schedule": "Фіксований розклад",
        "schedule": {
 diff --git a/packages/i18n/src/locales/ua/common.json b/packages/i18n/src/locales/ua/common.json
-index 89bd906..dbee573 100644
+index 89bd906..0cb92cf 100644
 --- a/packages/i18n/src/locales/ua/common.json
 +++ b/packages/i18n/src/locales/ua/common.json
 @@ -244,7 +244,7 @@
@@ -193797,11 +196808,10 @@ index 89bd906..dbee573 100644
      "choose_view_logs_from_setup_sh_and_docker_logs_to_be_sure": "Виберіть View Logs з setup.sh та логів Docker, щоб переконатися."
    },
    "customize_navigation": "Налаштувати навігацію",
-@@ -867,5 +867,354 @@
+@@ -867,5 +867,379 @@
        "description": "Експортуйте одиниці у формат JSON.",
        "short_description": "Експортувати як JSON"
      }
--  }
 +  },
 +  "drive": {
 +    "title": "Files",
@@ -194151,7 +197161,32 @@ index 89bd906..dbee573 100644
 +    }
 +  },
 +  "source_code": "Source code",
-+  "agpl_notice": "Modified version of Plane, licensed under AGPL v3."
++  "agpl_notice": "Modified version of Plane, licensed under AGPL v3.",
++  "chat": {
++    "title": "Канали",
++    "channels": "Канали",
++    "workspace_section": "Робочий простір",
++    "projects_section": "Проєкти",
++    "new_channel": "Новий канал",
++    "create_channel": "Створити канал",
++    "create_channel_failed": "Не вдалося створити канал",
++    "channel_name_placeholder": "напр., оголошення",
++    "no_channels": "Каналів поки немає.",
++    "composer_placeholder": "Напишіть повідомлення… @ для згадки",
++    "reply_placeholder": "Відповісти в гілці…",
++    "message_removed": "Це повідомлення видалено",
++    "edited": "змінено",
++    "reply_count": "{count, plural, one {# відповідь} few {# відповіді} other {# відповідей}}",
++    "reply_in_thread": "Відповісти в гілці",
++    "thread": "Гілка",
++    "link_work_item": "Прив'язати робочий елемент",
++    "create_work_item": "Створити робочий елемент",
++    "empty_title": "Повідомлень поки немає",
++    "empty_description": "Напишіть першим у цьому каналі.",
++    "beginning_of_channel": "Це початок каналу.",
++    "select_channel": "Оберіть канал, щоб почати.",
++    "typing": "{names} пише…"
+   }
  }
 diff --git a/packages/i18n/src/locales/ua/empty-state.json b/packages/i18n/src/locales/ua/empty-state.json
 index a1672ce..4009715 100644
@@ -194300,16 +197335,17 @@ index df88777..0f72823 100644
      "invalid_base_url_error": "Недійсна базова URL",
      "client_id_title": "ID Клієнта",
 diff --git a/packages/i18n/src/locales/ua/navigation.json b/packages/i18n/src/locales/ua/navigation.json
-index 742ef12..0a00df0 100644
+index 742ef12..cfaccf9 100644
 --- a/packages/i18n/src/locales/ua/navigation.json
 +++ b/packages/i18n/src/locales/ua/navigation.json
-@@ -29,6 +29,7 @@
+@@ -29,6 +29,8 @@
      "epics": "Епікс",
      "upgrade_plan": "Апгрейд план",
      "plane_pro": "Плейн Про",
 -    "business": "Бізнес"
 +    "business": "Бізнес",
-+    "finance": "Finance"
++    "finance": "Finance",
++    "channels": "Канали"
    }
  }
 diff --git a/packages/i18n/src/locales/ua/power-k.json b/packages/i18n/src/locales/ua/power-k.json
@@ -194703,7 +197739,7 @@ index 8dec0fb..fd3adb2 100644
        "fixed_schedule": "Lịch trình cố định",
        "schedule": {
 diff --git a/packages/i18n/src/locales/vi-VN/common.json b/packages/i18n/src/locales/vi-VN/common.json
-index f9aae43..8c66aa7 100644
+index f9aae43..40821cb 100644
 --- a/packages/i18n/src/locales/vi-VN/common.json
 +++ b/packages/i18n/src/locales/vi-VN/common.json
 @@ -244,7 +244,7 @@
@@ -194733,11 +197769,10 @@ index f9aae43..8c66aa7 100644
    "in_app": "Trong ứng dụng",
    "forms": "Biểu mẫu",
    "milestones": "Cột mốc",
-@@ -867,5 +867,354 @@
+@@ -867,5 +867,379 @@
        "description": "Xuất mục công việc thành tệp JSON.",
        "short_description": "Xuất sang JSON"
      }
--  }
 +  },
 +  "drive": {
 +    "title": "Files",
@@ -195087,7 +198122,32 @@ index f9aae43..8c66aa7 100644
 +    }
 +  },
 +  "source_code": "Source code",
-+  "agpl_notice": "Modified version of Plane, licensed under AGPL v3."
++  "agpl_notice": "Modified version of Plane, licensed under AGPL v3.",
++  "chat": {
++    "title": "Kênh",
++    "channels": "Kênh",
++    "workspace_section": "Không gian làm việc",
++    "projects_section": "Dự án",
++    "new_channel": "Kênh mới",
++    "create_channel": "Tạo kênh",
++    "create_channel_failed": "Không thể tạo kênh",
++    "channel_name_placeholder": "vd: thông báo",
++    "no_channels": "Chưa có kênh nào.",
++    "composer_placeholder": "Viết tin nhắn… dùng @ để nhắc đến",
++    "reply_placeholder": "Trả lời trong luồng…",
++    "message_removed": "Tin nhắn này đã bị xóa",
++    "edited": "đã chỉnh sửa",
++    "reply_count": "{count, plural, other {# phản hồi}}",
++    "reply_in_thread": "Trả lời trong luồng",
++    "thread": "Luồng",
++    "link_work_item": "Liên kết mục công việc",
++    "create_work_item": "Tạo mục công việc",
++    "empty_title": "Chưa có tin nhắn",
++    "empty_description": "Hãy là người đầu tiên viết trong kênh này.",
++    "beginning_of_channel": "Đây là điểm bắt đầu của kênh.",
++    "select_channel": "Chọn một kênh để bắt đầu.",
++    "typing": "{names} đang nhập…"
+   }
  }
 diff --git a/packages/i18n/src/locales/vi-VN/empty-state.json b/packages/i18n/src/locales/vi-VN/empty-state.json
 index 3e6a3be..6da1341 100644
@@ -195338,10 +198398,10 @@ index b884fb2..ab73943 100644
      "invalid_base_url_error": "URL cơ bản không hợp lệ",
      "client_id_title": "ID Khách Hàng",
 diff --git a/packages/i18n/src/locales/vi-VN/navigation.json b/packages/i18n/src/locales/vi-VN/navigation.json
-index 1e5d213..bd7dcda 100644
+index 1e5d213..9a638e9 100644
 --- a/packages/i18n/src/locales/vi-VN/navigation.json
 +++ b/packages/i18n/src/locales/vi-VN/navigation.json
-@@ -25,10 +25,11 @@
+@@ -25,10 +25,12 @@
      "favorites": "Yêu thích",
      "pro": "Phiên bản Pro",
      "upgrade": "Nâng cấp",
@@ -195353,7 +198413,8 @@ index 1e5d213..bd7dcda 100644
 -    "business": "Doanh nghiệp"
 +    "plane_pro": "Tequio Pro",
 +    "business": "Doanh nghiệp",
-+    "finance": "Finance"
++    "finance": "Finance",
++    "channels": "Kênh"
    }
  }
 diff --git a/packages/i18n/src/locales/vi-VN/power-k.json b/packages/i18n/src/locales/vi-VN/power-k.json
@@ -195841,7 +198902,7 @@ index 3f057bd..9322b6f 100644
        "fixed_schedule": "固定计划",
        "schedule": {
 diff --git a/packages/i18n/src/locales/zh-CN/common.json b/packages/i18n/src/locales/zh-CN/common.json
-index dd67d92..669328c 100644
+index dd67d92..211143b 100644
 --- a/packages/i18n/src/locales/zh-CN/common.json
 +++ b/packages/i18n/src/locales/zh-CN/common.json
 @@ -820,7 +820,7 @@
@@ -195853,11 +198914,10 @@ index dd67d92..669328c 100644
      "choose_view_logs_from_setup_sh_and_docker_logs_to_be_sure": "请选择“查看日志”来查看 setup.sh 和 Docker 日志，以确认问题。"
    },
    "customize_navigation": "自定义导航",
-@@ -867,5 +867,354 @@
+@@ -867,5 +867,379 @@
        "description": "将工作项导出为 JSON 文件。",
        "short_description": "导出为 JSON"
      }
--  }
 +  },
 +  "drive": {
 +    "title": "Files",
@@ -196207,7 +199267,32 @@ index dd67d92..669328c 100644
 +    }
 +  },
 +  "source_code": "Source code",
-+  "agpl_notice": "Modified version of Plane, licensed under AGPL v3."
++  "agpl_notice": "Modified version of Plane, licensed under AGPL v3.",
++  "chat": {
++    "title": "频道",
++    "channels": "频道",
++    "workspace_section": "工作区",
++    "projects_section": "项目",
++    "new_channel": "新建频道",
++    "create_channel": "创建频道",
++    "create_channel_failed": "无法创建频道",
++    "channel_name_placeholder": "例如：公告",
++    "no_channels": "还没有频道。",
++    "composer_placeholder": "输入消息… 用 @ 提及成员",
++    "reply_placeholder": "在话题中回复…",
++    "message_removed": "此消息已被删除",
++    "edited": "已编辑",
++    "reply_count": "{count, plural, other {# 条回复}}",
++    "reply_in_thread": "在话题中回复",
++    "thread": "话题",
++    "link_work_item": "关联工作项",
++    "create_work_item": "创建工作项",
++    "empty_title": "还没有消息",
++    "empty_description": "来发布这个频道的第一条消息吧。",
++    "beginning_of_channel": "这里是频道的开始。",
++    "select_channel": "选择一个频道开始。",
++    "typing": "{names} 正在输入…"
+   }
  }
 diff --git a/packages/i18n/src/locales/zh-CN/empty-state.json b/packages/i18n/src/locales/zh-CN/empty-state.json
 index 6dd4704..b79cf53 100644
@@ -196418,10 +199503,10 @@ index 3ea1da4..773a93e 100644
      "invalid_base_url_error": "无效的基 URL",
      "client_id_title": "Client ID",
 diff --git a/packages/i18n/src/locales/zh-CN/navigation.json b/packages/i18n/src/locales/zh-CN/navigation.json
-index 0fe15a3..e578ce7 100644
+index 0fe15a3..41384b2 100644
 --- a/packages/i18n/src/locales/zh-CN/navigation.json
 +++ b/packages/i18n/src/locales/zh-CN/navigation.json
-@@ -28,7 +28,8 @@
+@@ -28,7 +28,9 @@
      "pi_chat": "AI 聊天",
      "epics": "史诗",
      "upgrade_plan": "升级计划",
@@ -196429,7 +199514,8 @@ index 0fe15a3..e578ce7 100644
 -    "business": "商业版"
 +    "plane_pro": "Tequio Pro",
 +    "business": "商业版",
-+    "finance": "Finance"
++    "finance": "Finance",
++    "channels": "频道"
    }
  }
 diff --git a/packages/i18n/src/locales/zh-CN/power-k.json b/packages/i18n/src/locales/zh-CN/power-k.json
@@ -196812,7 +199898,7 @@ index 27b9a4b..c71e752 100644
        "fixed_schedule": "固定排程",
        "schedule": {
 diff --git a/packages/i18n/src/locales/zh-TW/common.json b/packages/i18n/src/locales/zh-TW/common.json
-index 834a2d9..78fba7a 100644
+index 834a2d9..b492607 100644
 --- a/packages/i18n/src/locales/zh-TW/common.json
 +++ b/packages/i18n/src/locales/zh-TW/common.json
 @@ -244,7 +244,7 @@
@@ -196833,11 +199919,10 @@ index 834a2d9..78fba7a 100644
      "choose_view_logs_from_setup_sh_and_docker_logs_to_be_sure": "從 setup.sh 和 Docker 日誌中選擇 View Logs 來確認。"
    },
    "customize_navigation": "自訂導覽",
-@@ -867,5 +867,354 @@
+@@ -867,5 +867,379 @@
        "description": "將工作事項匯出為 JSON 檔案。",
        "short_description": "匯出為 JSON"
      }
--  }
 +  },
 +  "drive": {
 +    "title": "Files",
@@ -197187,7 +200272,32 @@ index 834a2d9..78fba7a 100644
 +    }
 +  },
 +  "source_code": "Source code",
-+  "agpl_notice": "Modified version of Plane, licensed under AGPL v3."
++  "agpl_notice": "Modified version of Plane, licensed under AGPL v3.",
++  "chat": {
++    "title": "頻道",
++    "channels": "頻道",
++    "workspace_section": "工作區",
++    "projects_section": "專案",
++    "new_channel": "新增頻道",
++    "create_channel": "建立頻道",
++    "create_channel_failed": "無法建立頻道",
++    "channel_name_placeholder": "例如：公告",
++    "no_channels": "還沒有頻道。",
++    "composer_placeholder": "輸入訊息… 用 @ 提及成員",
++    "reply_placeholder": "在討論串中回覆…",
++    "message_removed": "此訊息已被刪除",
++    "edited": "已編輯",
++    "reply_count": "{count, plural, other {# 則回覆}}",
++    "reply_in_thread": "在討論串中回覆",
++    "thread": "討論串",
++    "link_work_item": "連結工作項目",
++    "create_work_item": "建立工作項目",
++    "empty_title": "還沒有訊息",
++    "empty_description": "成為第一個在此頻道發言的人。",
++    "beginning_of_channel": "這是頻道的開始。",
++    "select_channel": "選擇一個頻道開始。",
++    "typing": "{names} 正在輸入…"
+   }
  }
 diff --git a/packages/i18n/src/locales/zh-TW/empty-state.json b/packages/i18n/src/locales/zh-TW/empty-state.json
 index ebb0ad8..5ee24a0 100644
@@ -197429,16 +200539,17 @@ index fa9fac6..baaf89c 100644
      "invalid_base_url_error": "無效的基礎 URL",
      "client_id_title": "Client ID",
 diff --git a/packages/i18n/src/locales/zh-TW/navigation.json b/packages/i18n/src/locales/zh-TW/navigation.json
-index 93bd736..7239eb4 100644
+index 93bd736..852b503 100644
 --- a/packages/i18n/src/locales/zh-TW/navigation.json
 +++ b/packages/i18n/src/locales/zh-TW/navigation.json
-@@ -29,6 +29,7 @@
+@@ -29,6 +29,8 @@
      "epics": "史詩",
      "upgrade_plan": "升級方案",
      "plane_pro": "平面專業版",
 -    "business": "商業"
 +    "business": "商業",
-+    "finance": "Finance"
++    "finance": "Finance",
++    "channels": "頻道"
    }
  }
 diff --git a/packages/i18n/src/locales/zh-TW/power-k.json b/packages/i18n/src/locales/zh-TW/power-k.json
@@ -197927,10 +201038,20 @@ index 25acfeb..1178ed7 100644
    );
  }
 diff --git a/pnpm-lock.yaml b/pnpm-lock.yaml
-index bbf11e2..f30a3b0 100644
+index bbf11e2..4992513 100644
 --- a/pnpm-lock.yaml
 +++ b/pnpm-lock.yaml
-@@ -1410,6 +1410,9 @@ importers:
+@@ -1039,6 +1039,9 @@ importers:
+       '@headlessui/react':
+         specifier: 'catalog:'
+         version: 1.7.19(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
++      '@hocuspocus/provider':
++        specifier: 'catalog:'
++        version: 2.15.2(y-protocols@1.0.6(yjs@13.6.27))(yjs@13.6.27)
+       '@plane/constants':
+         specifier: workspace:*
+         version: link:../../packages/constants
+@@ -1410,6 +1413,9 @@ importers:
        lucide-react:
          specifier: 'catalog:'
          version: 0.469.0(react@18.3.1)
@@ -197940,7 +201061,7 @@ index bbf11e2..f30a3b0 100644
        prosemirror-codemark:
          specifier: 'catalog:'
          version: 0.4.2(prosemirror-inputrules@1.5.0)(prosemirror-model@1.25.3)(prosemirror-state@1.4.3)(prosemirror-view@1.40.0)
-@@ -1985,6 +1988,9 @@ packages:
+@@ -1985,6 +1991,9 @@ packages:
      resolution: {integrity: sha512-UrcABB+4bUrFABwbluTIBErXwvbsU/V7TZWfmbgJfbkwiBuziS9gxdODUyuiecfdGQ85jglMW6juS3+z5TsKLw==}
      engines: {node: '>=10'}
  
@@ -197950,7 +201071,7 @@ index bbf11e2..f30a3b0 100644
    '@atlaskit/pragmatic-drag-and-drop-auto-scroll@1.4.0':
      resolution: {integrity: sha512-5GoikoTSW13UX76F9TDeWB8x3jbbGlp/Y+3aRkHe1MOBMkrWkwNpJ42MIVhhX/6NSeaZiPumP0KbGJVs2tOWSQ==}
  
-@@ -2274,6 +2280,12 @@ packages:
+@@ -2274,6 +2283,12 @@ packages:
    '@bprogress/core@1.3.4':
      resolution: {integrity: sha512-q/AqpurI/1uJzOrQROuZWixn/+ARekh+uvJGwLCP6HQ/EqAX4SkvNf618tSBxL4NysC0MwqAppb/mRw6Tzi61w==}
  
@@ -197963,7 +201084,7 @@ index bbf11e2..f30a3b0 100644
    '@chromatic-com/storybook@5.2.1':
      resolution: {integrity: sha512-z6I7NJk/0VngA64y5TNYaB4Hc2X8+90n4op6lBt9PvWk5TmIlFLDqdX33rlrwbNRkkYijVgA/wO04rVYXi5Mlg==}
      engines: {node: '>=20.0.0', yarn: '>=1.22.18'}
-@@ -2708,6 +2720,12 @@ packages:
+@@ -2708,6 +2723,12 @@ packages:
    '@iarna/toml@2.2.5':
      resolution: {integrity: sha512-trnsAYxU3xnS1gPHPyU961coFyLkh4gAD/0zQ5mymY4yOZ+CYvsPqUbOFSw0aDM4y0tV7tiFxL/1XfXPNC6IPg==}
  
@@ -197976,7 +201097,7 @@ index bbf11e2..f30a3b0 100644
    '@icons/material@0.2.4':
      resolution: {integrity: sha512-QPcGmICAPbGLGb6F/yNf/KzKqvFx8z5qx3D1yFqVAjoFmXK35EgyW+cJ57Te3CNsmzblwtzakLGFqHPqrfb4Tw==}
      peerDependencies:
-@@ -2930,6 +2948,9 @@ packages:
+@@ -2930,6 +2951,9 @@ packages:
        '@types/react': '>=16'
        react: '>=16'
  
@@ -197986,7 +201107,7 @@ index bbf11e2..f30a3b0 100644
    '@mjackson/node-fetch-server@0.2.0':
      resolution: {integrity: sha512-EMlH1e30yzmTpGLQjlFmaDAjyOeZhng1/XCd7DExR8PNAnG/G1tyruZxEoUe11ClnwGhGrtsdnyyUx1frSzjng==}
  
-@@ -5157,30 +5178,96 @@ packages:
+@@ -5157,30 +5181,96 @@ packages:
    '@types/d3-array@3.2.1':
      resolution: {integrity: sha512-Y2Jn2idRrLzUfAKV2LyRImR+y4oa2AntrgID95SHJxuMUrkNXmanDSed71sRNZysveJVt1hLLemQZIady0FpEg==}
  
@@ -198083,7 +201204,7 @@ index bbf11e2..f30a3b0 100644
    '@types/debug@4.1.12':
      resolution: {integrity: sha512-vIChWdVG3LG1SMxEvI/AK+FWJthlrqlTu7fbrlywTkkaONwk/UAGaULXRlf8vkzFBLVm0zkMdCquhL5aOjhXPQ==}
  
-@@ -5217,6 +5304,9 @@ packages:
+@@ -5217,6 +5307,9 @@ packages:
    '@types/express@4.17.23':
      resolution: {integrity: sha512-Crp6WY9aTYP3qPi2wGDo9iUe/rceX01UMhnF1jmwDcKCFM6cx7YhGP/Mpr3y9AASpfHixIG0E6azCcL5OcDHsQ==}
  
@@ -198093,7 +201214,7 @@ index bbf11e2..f30a3b0 100644
    '@types/hast@2.3.10':
      resolution: {integrity: sha512-McWspRw8xx8J9HurkVBfYj0xKoE25tOFlHGdx4MJ5xORQrMGZNqJhVQWaIbm6Oyla5kYOXtDiopzKRJzEOkwJw==}
  
-@@ -5323,6 +5413,9 @@ packages:
+@@ -5323,6 +5416,9 @@ packages:
    '@types/triple-beam@1.3.5':
      resolution: {integrity: sha512-6WaYesThRMCl19iryMYP7/x2OVgCtbIVflDGFpWnb9irXI3UjYE4AzmYuiUKY1AJstGijoY+MgUszMgRxIYTYw==}
  
@@ -198103,7 +201224,7 @@ index bbf11e2..f30a3b0 100644
    '@types/unist@2.0.11':
      resolution: {integrity: sha512-CmBKiL6NNo/OqgmMn95Fk9Whlp2mtvIv+KNpQKN2F4SjvrEesubTRWGYSg+BnWZOnlCaSTU1sMpsBOzgbYhnsA==}
  
-@@ -5343,6 +5436,9 @@ packages:
+@@ -5343,6 +5439,9 @@ packages:
      resolution: {integrity: sha512-WmoN8qaIAo7WTYWbAZuG8PYEhn5fkz7dZrqTBZ7dtt//lL2Gwms1IcnQ5yHqjDfX8Ft5j4YzDM23f87zBfDe9g==}
      deprecated: Potential CWE-502 - Update to 1.3.1 or higher
  
@@ -198113,7 +201234,7 @@ index bbf11e2..f30a3b0 100644
    '@vitest/coverage-v8@4.1.8':
      resolution: {integrity: sha512-lt3kovsyHwYe00wq4D1ti0Z974fWj4NLp6siqiyEufUpyFwK9Yhi7rBhac9JL5aA0zoMrJqc4vYPZRUnI7l7nw==}
      peerDependencies:
-@@ -5931,6 +6027,10 @@ packages:
+@@ -5931,6 +6030,10 @@ packages:
    commander@2.20.3:
      resolution: {integrity: sha512-GpVkmM8vF2vQUkj2LvZmD35JxeJOLCwJ9cUkugyk2nuhbv3+mJvpLYYt+0+USMxE+oj+ey/lJEnhZw75x/OMcQ==}
  
@@ -198124,7 +201245,7 @@ index bbf11e2..f30a3b0 100644
    commander@8.3.0:
      resolution: {integrity: sha512-OkTL9umf+He2DZkUq8f8J9of7yL6RJKI24dVITBmNfZBmri9zYZQrKkuXiKhyfPSu8tUhnVBB1iKXevvnlR4Ww==}
      engines: {node: '>= 12'}
-@@ -5989,6 +6089,12 @@ packages:
+@@ -5989,6 +6092,12 @@ packages:
      resolution: {integrity: sha512-KIHbLJqu73RGr/hnbrO9uBeixNGuvSQjul/jdFvS/KFSIH1hWVd1ng7zOHx+YrEfInLG7q4n6GHQ9cDtxv/P6g==}
      engines: {node: '>= 0.10'}
  
@@ -198137,7 +201258,7 @@ index bbf11e2..f30a3b0 100644
    cosmiconfig@8.3.6:
      resolution: {integrity: sha512-kcZ6+W5QzcJ3P1Mt+83OUv/oHFqZHIx8DuxG6eZ5RGMERoLqp4BuGjhHLYGK+Kf5XVkQvqBSmAy/nGWN3qDgEA==}
      engines: {node: '>=14'}
-@@ -6010,6 +6116,7 @@ packages:
+@@ -6010,6 +6119,7 @@ packages:
  
    crypto-js@4.2.0:
      resolution: {integrity: sha512-KALDyEYgpY+Rlob/iriUtjV6d5Eq+Y191A5g4UqLAi8CyGP9N1+FdVbkc1SxKc2r4YAYqG8JzO2KGL+AizD70Q==}
@@ -198145,7 +201266,7 @@ index bbf11e2..f30a3b0 100644
  
    css-loader@7.1.4:
      resolution: {integrity: sha512-vv3J9tlOl04WjiMvHQI/9tmIrCxVrj6PFbHemBB1iihpeRbi/I4h033eoFIhwxBBqLhI0KYFS7yvynBFhIZfTw==}
-@@ -6048,34 +6155,129 @@ packages:
+@@ -6048,34 +6158,129 @@ packages:
    csstype@3.1.3:
      resolution: {integrity: sha512-M1uQkMl8rQK/szD0LNhtqxIPLpimGm8sOBwU7lLnCpSbTyY3yeU1Vc7l4KT5zT4s/yOxHH5O7tIuuLOCnLADRw==}
  
@@ -198275,7 +201396,7 @@ index bbf11e2..f30a3b0 100644
    d3-shape@3.2.0:
      resolution: {integrity: sha512-SaLBuwGm3MOViRq2ABk3eLoxwZELpH6zhl3FbAoJ7Vm1gofKx6El1Ib5z23NUEhF9AsGl7y+dzLe5Cw2AArGTA==}
      engines: {node: '>=12'}
-@@ -6092,6 +6294,23 @@ packages:
+@@ -6092,6 +6297,23 @@ packages:
      resolution: {integrity: sha512-ndfJ/JxxMd3nw31uyKoY2naivF+r29V+Lc0svZxe1JvvIRmi8hUsrMvdOwgS1o6uBHmiz91geQ0ylPP0aj1VUA==}
      engines: {node: '>=12'}
  
@@ -198299,7 +201420,7 @@ index bbf11e2..f30a3b0 100644
    date-fns-jalali@4.1.0-0:
      resolution: {integrity: sha512-hTIP/z+t+qKwBDcmmsnmjWTduxCg+5KfdqWQvb2X/8C9+knYY6epN/pfxdDuyVlSVeFz0sM5eEfwIUQ70U4ckg==}
  
-@@ -6184,6 +6403,9 @@ packages:
+@@ -6184,6 +6406,9 @@ packages:
    defu@6.1.5:
      resolution: {integrity: sha512-pwdBJxJuJXmqrLO6s0VBmfbRz+G7FUzkjldAsdi9Yrv86mPyzq0ll1o8+8gB4Gsr6GJHbK1Lh3ngllgTInDCjA==}
  
@@ -198309,7 +201430,7 @@ index bbf11e2..f30a3b0 100644
    delayed-stream@1.0.0:
      resolution: {integrity: sha512-ZySD7Nf91aLB0RxL4KGrKHBXl7Eds1DAmEdcoVawXnLD7SDhpNgtuII2aAkg7a7QS41jxPSZ17p4VdGnMHk3MQ==}
      engines: {node: '>=0.4.0'}
-@@ -6275,6 +6497,9 @@ packages:
+@@ -6275,6 +6500,9 @@ packages:
      resolution: {integrity: sha512-cgwlv/1iFQiFnU96XXgROh8xTeetsnJiDsTc7TYCLFd9+/WNkIqPTxiM/8pSd8VIrhXGTf1Ny1q1hquVqDJB5w==}
      engines: {node: '>= 4'}
  
@@ -198319,7 +201440,7 @@ index bbf11e2..f30a3b0 100644
    domutils@2.8.0:
      resolution: {integrity: sha512-w96Cjofp72M5IIhpjgobBimYEfoPjx1Vx0BSX9P30WBdZW2WIKU0T1Bd0kz2eNZ9ikjKgHbEyKx8BB6H1L3h3A==}
  
-@@ -6421,6 +6646,9 @@ packages:
+@@ -6421,6 +6649,9 @@ packages:
      resolution: {integrity: sha512-j6vWzfrGVfyXxge+O0x5sh6cvxAog0a/4Rdd2K36zCMV5eJ+/+tOAngRO8cODMNWbVRdVlmGZQL2YS3yR8bIUA==}
      engines: {node: '>= 0.4'}
  
@@ -198329,7 +201450,7 @@ index bbf11e2..f30a3b0 100644
    esbuild@0.28.1:
      resolution: {integrity: sha512-HrJrvZv5ayxBzPfwphOoNzkzOIIlifzk0KJrGK2c8R4+LKpMtpYLQeUdjnwjWv/LZlkH2laZk+4w78pi99D4Vw==}
      engines: {node: '>=18'}
-@@ -6598,6 +6826,9 @@ packages:
+@@ -6598,6 +6829,9 @@ packages:
    fast-uri@3.1.5:
      resolution: {integrity: sha512-gHwA1O9LDIcKunMKhObS/HimwtehO1nPUECKAu5TpKgaO19fcWEl4bliWe1jWxVFvIXztJjjQ4L8XQ1EU9f7Jw==}
  
@@ -198339,7 +201460,7 @@ index bbf11e2..f30a3b0 100644
    fastq@1.20.1:
      resolution: {integrity: sha512-GGToxJ/w1x32s/D2EKND7kTil4n8OVk/9mycTc4VDza13lOvpUZTGX3mFSCtV9ksdGBVzvsyAVLM6mHFThxXxw==}
  
-@@ -6834,6 +7065,9 @@ packages:
+@@ -6834,6 +7068,9 @@ packages:
    gud@1.0.0:
      resolution: {integrity: sha512-zGEOVKFM5sVPPrYs7J5/hYEw2Pof8KCyOwyhG8sAF26mCAeUFAcYPu1mwB7hhpIP29zOIBaDqwuHdLp0jvZXjw==}
  
@@ -198349,7 +201470,7 @@ index bbf11e2..f30a3b0 100644
    has-flag@3.0.0:
      resolution: {integrity: sha512-sKJf1+ceQBr4SMkvQnBDNDtf4TXpVhVGateu0t918bl30FnbE2m4vNLX+VWe/dpjlb+HugGYzW7uQXH98HPEYw==}
      engines: {node: '>=4'}
-@@ -7018,6 +7252,10 @@ packages:
+@@ -7018,6 +7255,10 @@ packages:
      resolution: {integrity: sha512-v3MXnZAcvnywkTUEZomIActle7RXXeedOR31wwl7VlyoXO4Qi9arvSenNQWne1TcRwhCL1HwLI21bEqdpj8/rA==}
      engines: {node: '>=0.10.0'}
  
@@ -198360,7 +201481,7 @@ index bbf11e2..f30a3b0 100644
    icss-utils@5.1.0:
      resolution: {integrity: sha512-soFhflCVWLfRNOPU3iv5Z9VUdT44xFRbzjLsEzSr5AQmgqPMTHdU3PMT1Cf1ssx8fLNJDA1juftYl+PUcv3MqA==}
      engines: {node: ^10 || ^12 || >= 14}
-@@ -7042,6 +7280,9 @@ packages:
+@@ -7042,6 +7283,9 @@ packages:
      resolution: {integrity: sha512-pYkiyXVL2Mf3pozdlDGV6NAObxQx13Ae8knZk1UJRJ6uRW/ZRmTGHlQYtrsSl7ubuE5F8CD1z+s1n4RHNuTtuA==}
      engines: {node: '>=18'}
  
@@ -198370,7 +201491,7 @@ index bbf11e2..f30a3b0 100644
    imurmurhash@0.1.4:
      resolution: {integrity: sha512-JmXMZ6wuvDmLiHEml9ykzqO6lwFbof0GG4IkcGaENdCRDDmMVnny7s5HsIgHCbaq0w2MyPhDqkhTUgS2LU2PHA==}
      engines: {node: '>=0.8.19'}
-@@ -7063,6 +7304,9 @@ packages:
+@@ -7063,6 +7307,9 @@ packages:
    inline-style-parser@0.1.1:
      resolution: {integrity: sha512-7NXolsK4CAS5+xvdj5OMMbI962hU/wvwoxk+LWR9Ek9bVtyuuYScDN6eS0rUm6TxApFpw7CX1o4uJzcd4AyD3Q==}
  
@@ -198380,7 +201501,7 @@ index bbf11e2..f30a3b0 100644
    internmap@2.0.3:
      resolution: {integrity: sha512-5Hh7Y1wQbvY5ooGgPbDaL5iYLAPzMTUrjMulskHLH6wnv/A+1q5rgEaiuqEjB+oxGXIVZs1FF+R/KPN3ZSQYYg==}
      engines: {node: '>=12'}
-@@ -7288,9 +7532,16 @@ packages:
+@@ -7288,9 +7535,16 @@ packages:
    jsx-dom-cjs@8.1.6:
      resolution: {integrity: sha512-aeGqlIZ3IBKF2+B0cKXZGh10OHxxABuHD9tlS10suXDXXG0c4wMkJios9xVslduflSNEQJVlicME3EBCYgxGvA==}
  
@@ -198397,7 +201518,7 @@ index bbf11e2..f30a3b0 100644
    kind-of@6.0.3:
      resolution: {integrity: sha512-dcS1ul+9tmeD95T+x28/ehLgd9mENa3LsvDTtzm3vyBEO7RPptvAD+t44WVXaUjTBRcrpFeFlC8WCruUR456hw==}
      engines: {node: '>=0.10.0'}
-@@ -7312,6 +7563,12 @@ packages:
+@@ -7312,6 +7566,12 @@ packages:
    launder@1.7.1:
      resolution: {integrity: sha512-mU6WRz5EusL9ZZuiZ5SO4Y6C0P9PAUR9iwdb6bzj4KDihm28DiHFw+/yk9DBH4f+Pv1wuzQ4e2jV3oQ7mkIqvw==}
  
@@ -198410,7 +201531,7 @@ index bbf11e2..f30a3b0 100644
    levn@0.4.1:
      resolution: {integrity: sha512-+bT2uH4E5LGE7h/n3evcS/sQlJXCpIp6ym8OWJ5eV6+67Dsql/LaaT7qJBAt2rzfoa/5QBGBhxDix1dMt2kQKQ==}
      engines: {node: '>= 0.8.0'}
-@@ -7596,6 +7853,11 @@ packages:
+@@ -7596,6 +7856,11 @@ packages:
    markdown-table@3.0.4:
      resolution: {integrity: sha512-wiYz4+JrLyb/DqW2hkFJxP7Vd7JuTDm77fvbM8VfEQdmSMqcImWeeRbHwZjBjIFki/VaMK2BhFi7oUUZeM5bqw==}
  
@@ -198422,7 +201543,7 @@ index bbf11e2..f30a3b0 100644
    masonry-layout@4.2.2:
      resolution: {integrity: sha512-iGtAlrpHNyxaR19CvKC3npnEcAwszXoyJiI8ARV2ePi7fmYhIud25MHK8Zx4P0LCC4d3TNO9+rFa1KoK1OEOaA==}
  
-@@ -7679,6 +7941,9 @@ packages:
+@@ -7679,6 +7944,9 @@ packages:
      resolution: {integrity: sha512-8q7VEgMJW4J8tcfVPy8g09NcQwZdbwFEqhe/WZkoIzjn/3TGDwtOCYtXGxA3O8tPzpczCCDgv+P2P5y00ZJOOg==}
      engines: {node: '>= 8'}
  
@@ -198432,7 +201553,7 @@ index bbf11e2..f30a3b0 100644
    methods@1.1.2:
      resolution: {integrity: sha512-iclAHeNqNm68zFtnZ0e+1L2yUIdvzNoauKU4WBA3VvH/vPFieF7qfRlwUZU+DA9P9bPXIS90ulxoUoCH23sV2w==}
      engines: {node: '>= 0.6'}
-@@ -8166,6 +8431,9 @@ packages:
+@@ -8166,6 +8434,9 @@ packages:
    package-json-from-dist@1.0.1:
      resolution: {integrity: sha512-UEZIS3/by4OC8vL3P2dTXRETpebLI2NiI5vIrjaD/5UtrkFX/tNbwjTSRAGC/+7CAo2pIcBaRgWmcBBHcsaCIw==}
  
@@ -198442,7 +201563,7 @@ index bbf11e2..f30a3b0 100644
    pako@0.2.9:
      resolution: {integrity: sha512-NUcwaKxUxWrZLpDG+z/xZaCgQITkA/Dv4V/T6bw7VON6l1Xz/VnrBqrYjZQ12TamKHzITTfOEIYUj48y2KXImA==}
  
-@@ -8202,6 +8470,9 @@ packages:
+@@ -8202,6 +8473,9 @@ packages:
    path-case@3.0.4:
      resolution: {integrity: sha512-qO4qCFjXqVTrcbPt/hQfhTQ+VhFsqNKOPtytgNKkKxSoEp3XPUQ8ObFuePylOIok5gjn69ry8XiULxCwot3Wfg==}
  
@@ -198452,7 +201573,7 @@ index bbf11e2..f30a3b0 100644
    path-exists@3.0.0:
      resolution: {integrity: sha512-bpC7GYwiDYQ4wYLe+FA8lhRjhQCMcQGuSgGGqDkg/QerRWw9CmGRT0iSOVRSZJ29NMLZgIzqaljJ63oaL4NIJQ==}
      engines: {node: '>=4'}
-@@ -8285,6 +8556,12 @@ packages:
+@@ -8285,6 +8559,12 @@ packages:
    pkg-types@2.3.0:
      resolution: {integrity: sha512-SIqCzDRg0s9npO5XQ3tNZioRY1uK06lA41ynBC1YmFTmnY6FjUjVt6s4LoADmwoig1qqD0oK8h1p/8mlMx8Oig==}
  
@@ -198465,7 +201586,7 @@ index bbf11e2..f30a3b0 100644
    popper.js@1.16.1:
      resolution: {integrity: sha512-Wb4p1J4zyFTbM+u6WuO4XstYx4Ky9Cewe4DWrel7B0w6VVICvPwdOpotjzcf6eD8TsckVnIMNONQyPIUFOUbCQ==}
      deprecated: You can find the new Popper v2 at @popperjs/core, this package is dedicated to the legacy v1
-@@ -8825,6 +9102,9 @@ packages:
+@@ -8825,6 +9105,9 @@ packages:
      deprecated: Rimraf versions prior to v4 are no longer supported
      hasBin: true
  
@@ -198475,7 +201596,7 @@ index bbf11e2..f30a3b0 100644
    rolldown-plugin-dts@0.17.8:
      resolution: {integrity: sha512-76EEBlhF00yeY6M7VpMkWKI4r9WjuoMiOGey7j4D6zf3m0BR+ZrrY9hvSXdueJ3ljxSLq4DJBKFpX/X9+L7EKw==}
      engines: {node: '>=20.19.0'}
-@@ -8857,6 +9137,9 @@ packages:
+@@ -8857,6 +9140,9 @@ packages:
    rope-sequence@1.3.4:
      resolution: {integrity: sha512-UT5EDe2cu2E/6O4igUr5PSFs23nvvukicWHx6GnOPlHAiiYbzNuCRQCuiUdHJQcqKalLKlrYJnjY0ySGsXNQXQ==}
  
@@ -198485,7 +201606,7 @@ index bbf11e2..f30a3b0 100644
    run-applescript@7.1.0:
      resolution: {integrity: sha512-DPe5pVFaAsinSaV6QjQ6gdiedWDcRCbUuiQfQa2wmWV7+xC9bGulGI8+TdRmoFkAPaBXk8CrAbnlY2ISniJ47Q==}
      engines: {node: '>=18'}
-@@ -8864,6 +9147,9 @@ packages:
+@@ -8864,6 +9150,9 @@ packages:
    run-parallel@1.2.0:
      resolution: {integrity: sha512-5l4VyZR86LZ/lDxZTR6jqL8AFE2S0IFLMP26AbjsLVADxHdhB/c0GUsH+y39UfCi3dzz8OlQuPmnaJOMoDHQBA==}
  
@@ -198495,7 +201616,7 @@ index bbf11e2..f30a3b0 100644
    sade@1.8.1:
      resolution: {integrity: sha512-xal3CZX1Xlo/k4ApwCFrHVACi9fBqJ7V+mwhBsuf/1IOKbBy098Fex+Wa/5QMubw09pSZ/u8EY8PWgevJsXp1A==}
      engines: {node: '>=6'}
-@@ -9072,6 +9358,9 @@ packages:
+@@ -9072,6 +9361,9 @@ packages:
        vite-plus:
          optional: true
  
@@ -198505,7 +201626,7 @@ index bbf11e2..f30a3b0 100644
    string-argv@0.3.2:
      resolution: {integrity: sha512-aqD2Q0144Z+/RqG52NeHEkZauTAUWJO8c6yTftGJKO3Tja5tUgIfmIl6kExvhtxSDP7fXB6DvzkfMpCd/F3G+Q==}
      engines: {node: '>=0.6.19'}
-@@ -9145,6 +9434,9 @@ packages:
+@@ -9145,6 +9437,9 @@ packages:
    style-to-object@0.4.4:
      resolution: {integrity: sha512-HYNoHZa2GorYNyqiCaBgsxvcJIn7OHq6inEga+E6Ke3m5JkoqpQbnFssk4jwe+K7AhGa2fcha4wSOf1Kn01dMg==}
  
@@ -198515,7 +201636,7 @@ index bbf11e2..f30a3b0 100644
    supports-color@5.5.0:
      resolution: {integrity: sha512-QjVjwdXIt408MIiAqCX4oUKsgU2EqAGzs2Ppkm4aQYbjm+ZEWEcW4SfFNTr4uMNZma0ey4f5lgLrkB0aX0QMow==}
      engines: {node: '>=4'}
-@@ -9924,6 +10216,11 @@ snapshots:
+@@ -9924,6 +10219,11 @@ snapshots:
  
    '@alloc/quick-lru@5.2.0': {}
  
@@ -198527,7 +201648,7 @@ index bbf11e2..f30a3b0 100644
    '@atlaskit/pragmatic-drag-and-drop-auto-scroll@1.4.0':
      dependencies:
        '@atlaskit/pragmatic-drag-and-drop': 1.7.4
-@@ -10308,6 +10605,10 @@ snapshots:
+@@ -10308,6 +10608,10 @@ snapshots:
  
    '@bprogress/core@1.3.4': {}
  
@@ -198538,7 +201659,7 @@ index bbf11e2..f30a3b0 100644
    '@chromatic-com/storybook@5.2.1(storybook@10.4.6(@testing-library/dom@10.4.0)(@types/react@18.3.11)(prettier@3.7.4)(react-dom@18.3.1(react@18.3.1))(react@18.3.1))':
      dependencies:
        '@neoconfetti/react': 1.0.0
-@@ -10747,6 +11048,14 @@ snapshots:
+@@ -10747,6 +11051,14 @@ snapshots:
  
    '@iarna/toml@2.2.5': {}
  
@@ -198553,7 +201674,7 @@ index bbf11e2..f30a3b0 100644
    '@icons/material@0.2.4(react@18.3.1)':
      dependencies:
        react: 18.3.1
-@@ -10913,6 +11222,10 @@ snapshots:
+@@ -10913,6 +11225,10 @@ snapshots:
        '@types/react': 18.3.11
        react: 18.3.1
  
@@ -198564,7 +201685,7 @@ index bbf11e2..f30a3b0 100644
    '@mjackson/node-fetch-server@0.2.0': {}
  
    '@msgpackr-extract/msgpackr-extract-darwin-arm64@3.0.3':
-@@ -12769,28 +13082,121 @@ snapshots:
+@@ -12769,28 +13085,121 @@ snapshots:
  
    '@types/d3-array@3.2.1': {}
  
@@ -198686,7 +201807,7 @@ index bbf11e2..f30a3b0 100644
    '@types/debug@4.1.12':
      dependencies:
        '@types/ms': 2.1.0
-@@ -12842,6 +13248,8 @@ snapshots:
+@@ -12842,6 +13251,8 @@ snapshots:
        '@types/qs': 6.14.0
        '@types/serve-static': 1.15.8
  
@@ -198695,7 +201816,7 @@ index bbf11e2..f30a3b0 100644
    '@types/hast@2.3.10':
      dependencies:
        '@types/unist': 2.0.11
-@@ -12952,6 +13360,9 @@ snapshots:
+@@ -12952,6 +13363,9 @@ snapshots:
  
    '@types/triple-beam@1.3.5': {}
  
@@ -198705,7 +201826,7 @@ index bbf11e2..f30a3b0 100644
    '@types/unist@2.0.11': {}
  
    '@types/unist@3.0.3': {}
-@@ -12966,6 +13377,11 @@ snapshots:
+@@ -12966,6 +13380,11 @@ snapshots:
  
    '@ungap/structured-clone@1.3.0': {}
  
@@ -198717,7 +201838,7 @@ index bbf11e2..f30a3b0 100644
    '@vitest/coverage-v8@4.1.8(vitest@4.1.8)':
      dependencies:
        '@bcoe/v8-coverage': 1.0.2
-@@ -13619,6 +14035,8 @@ snapshots:
+@@ -13619,6 +14038,8 @@ snapshots:
  
    commander@2.20.3: {}
  
@@ -198726,7 +201847,7 @@ index bbf11e2..f30a3b0 100644
    commander@8.3.0: {}
  
    commondir@1.0.1: {}
-@@ -13682,6 +14100,14 @@ snapshots:
+@@ -13682,6 +14103,14 @@ snapshots:
        object-assign: 4.1.1
        vary: 1.1.2
  
@@ -198741,7 +201862,7 @@ index bbf11e2..f30a3b0 100644
    cosmiconfig@8.3.6(typescript@5.8.3):
      dependencies:
        import-fresh: 3.3.1
-@@ -13748,22 +14174,107 @@ snapshots:
+@@ -13748,22 +14177,107 @@ snapshots:
  
    csstype@3.1.3: {}
  
@@ -198849,7 +201970,7 @@ index bbf11e2..f30a3b0 100644
    d3-scale@4.0.2:
      dependencies:
        d3-array: 3.2.4
-@@ -13772,6 +14283,12 @@ snapshots:
+@@ -13772,6 +14286,12 @@ snapshots:
        d3-time: 3.1.0
        d3-time-format: 4.1.0
  
@@ -198862,7 +201983,7 @@ index bbf11e2..f30a3b0 100644
    d3-shape@3.2.0:
      dependencies:
        d3-path: 3.1.0
-@@ -13786,6 +14303,61 @@ snapshots:
+@@ -13786,6 +14306,61 @@ snapshots:
  
    d3-timer@3.0.1: {}
  
@@ -198924,7 +202045,7 @@ index bbf11e2..f30a3b0 100644
    date-fns-jalali@4.1.0-0: {}
  
    date-fns@4.1.0: {}
-@@ -13856,6 +14428,10 @@ snapshots:
+@@ -13856,6 +14431,10 @@ snapshots:
  
    defu@6.1.5: {}
  
@@ -198935,7 +202056,7 @@ index bbf11e2..f30a3b0 100644
    delayed-stream@1.0.0: {}
  
    denque@1.5.1: {}
-@@ -13936,6 +14512,10 @@ snapshots:
+@@ -13936,6 +14515,10 @@ snapshots:
      dependencies:
        domelementtype: 2.3.0
  
@@ -198946,7 +202067,7 @@ index bbf11e2..f30a3b0 100644
    domutils@2.8.0:
      dependencies:
        dom-serializer: 1.4.1
-@@ -14070,6 +14650,8 @@ snapshots:
+@@ -14070,6 +14653,8 @@ snapshots:
        has-tostringtag: 1.0.2
        hasown: 2.0.4
  
@@ -198955,7 +202076,7 @@ index bbf11e2..f30a3b0 100644
    esbuild@0.28.1:
      optionalDependencies:
        '@esbuild/aix-ppc64': 0.28.1
-@@ -14311,6 +14893,10 @@ snapshots:
+@@ -14311,6 +14896,10 @@ snapshots:
  
    fast-uri@3.1.5: {}
  
@@ -198966,7 +202087,7 @@ index bbf11e2..f30a3b0 100644
    fastq@1.20.1:
      dependencies:
        reusify: 1.1.0
-@@ -14556,6 +15142,8 @@ snapshots:
+@@ -14556,6 +15145,8 @@ snapshots:
  
    gud@1.0.0: {}
  
@@ -198975,7 +202096,7 @@ index bbf11e2..f30a3b0 100644
    has-flag@3.0.0: {}
  
    has-flag@4.0.0: {}
-@@ -14808,6 +15396,10 @@ snapshots:
+@@ -14808,6 +15399,10 @@ snapshots:
      dependencies:
        safer-buffer: 2.1.2
  
@@ -198986,7 +202107,7 @@ index bbf11e2..f30a3b0 100644
    icss-utils@5.1.0(postcss@8.5.25):
      dependencies:
        postcss: 8.5.25
-@@ -14832,6 +15424,8 @@ snapshots:
+@@ -14832,6 +15427,8 @@ snapshots:
        cjs-module-lexer: 2.2.0
        module-details-from-path: 1.0.4
  
@@ -198995,7 +202116,7 @@ index bbf11e2..f30a3b0 100644
    imurmurhash@0.1.4: {}
  
    indent-string@4.0.0: {}
-@@ -14844,6 +15438,8 @@ snapshots:
+@@ -14844,6 +15441,8 @@ snapshots:
  
    inline-style-parser@0.1.1: {}
  
@@ -199004,7 +202125,7 @@ index bbf11e2..f30a3b0 100644
    internmap@2.0.3: {}
  
    intl-messageformat@10.7.16:
-@@ -15062,10 +15658,16 @@ snapshots:
+@@ -15062,10 +15661,16 @@ snapshots:
      dependencies:
        csstype: 3.1.3
  
@@ -199021,7 +202142,7 @@ index bbf11e2..f30a3b0 100644
    kind-of@6.0.3: {}
  
    kleur@3.0.3: {}
-@@ -15080,6 +15682,10 @@ snapshots:
+@@ -15080,6 +15685,10 @@ snapshots:
      dependencies:
        dayjs: 1.11.21
  
@@ -199032,7 +202153,7 @@ index bbf11e2..f30a3b0 100644
    levn@0.4.1:
      dependencies:
        prelude-ls: 1.2.1
-@@ -15331,6 +15937,8 @@ snapshots:
+@@ -15331,6 +15940,8 @@ snapshots:
  
    markdown-table@3.0.4: {}
  
@@ -199041,7 +202162,7 @@ index bbf11e2..f30a3b0 100644
    masonry-layout@4.2.2:
      dependencies:
        get-size: 2.0.3
-@@ -15495,6 +16103,31 @@ snapshots:
+@@ -15495,6 +16106,31 @@ snapshots:
  
    merge2@1.4.1: {}
  
@@ -199073,7 +202194,7 @@ index bbf11e2..f30a3b0 100644
    methods@1.1.2: {}
  
    micromark-core-commonmark@1.1.0:
-@@ -16230,6 +16863,8 @@ snapshots:
+@@ -16230,6 +16866,8 @@ snapshots:
  
    package-json-from-dist@1.0.1: {}
  
@@ -199082,7 +202203,7 @@ index bbf11e2..f30a3b0 100644
    pako@0.2.9: {}
  
    pako@1.0.11: {}
-@@ -16270,6 +16905,8 @@ snapshots:
+@@ -16270,6 +16908,8 @@ snapshots:
        dot-case: 3.0.4
        tslib: 2.8.1
  
@@ -199091,7 +202212,7 @@ index bbf11e2..f30a3b0 100644
    path-exists@3.0.0: {}
  
    path-exists@4.0.0: {}
-@@ -16330,6 +16967,13 @@ snapshots:
+@@ -16330,6 +16970,13 @@ snapshots:
        exsolve: 1.0.8
        pathe: 2.0.3
  
@@ -199105,7 +202226,7 @@ index bbf11e2..f30a3b0 100644
    popper.js@1.16.1: {}
  
    postcss-cli@11.0.1(jiti@2.7.0)(postcss@8.5.25)(tsx@4.20.6):
-@@ -17037,6 +17681,8 @@ snapshots:
+@@ -17037,6 +17684,8 @@ snapshots:
      dependencies:
        glob: 11.1.0
  
@@ -199114,7 +202235,7 @@ index bbf11e2..f30a3b0 100644
    rolldown-plugin-dts@0.17.8(oxc-resolver@11.20.0)(rolldown@1.0.0-beta.46)(typescript@5.8.3):
      dependencies:
        '@babel/generator': 7.28.5
-@@ -17097,12 +17743,21 @@ snapshots:
+@@ -17097,12 +17746,21 @@ snapshots:
  
    rope-sequence@1.3.4: {}
  
@@ -199136,7 +202257,7 @@ index bbf11e2..f30a3b0 100644
    sade@1.8.1:
      dependencies:
        mri: 1.2.0
-@@ -17386,6 +18041,8 @@ snapshots:
+@@ -17386,6 +18044,8 @@ snapshots:
        - react-dom
        - utf-8-validate
  
@@ -199145,7 +202266,7 @@ index bbf11e2..f30a3b0 100644
    string-argv@0.3.2: {}
  
    string-width@4.2.3:
-@@ -17458,6 +18115,8 @@ snapshots:
+@@ -17458,6 +18118,8 @@ snapshots:
      dependencies:
        inline-style-parser: 0.1.1
  

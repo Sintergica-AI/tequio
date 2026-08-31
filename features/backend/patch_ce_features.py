@@ -77,6 +77,24 @@ patch(
 
 
 # ---------------------------------------------------------------------------
+# Chat module (canales tipo ClickUp): register the app and mount its URLs.
+# Anchored on the assistant lines because that patch runs first on the same
+# file; patch() is idempotent, so rebuilds over a patched image are no-ops.
+# ---------------------------------------------------------------------------
+patch(
+    "/code/plane/settings/common.py",
+    '    "plane.assistant",\n    # Third-party things',
+    '    "plane.assistant",\n    "plane.chat",\n    # Third-party things',
+)
+patch(
+    "/code/plane/urls.py",
+    '    path("api/", include("plane.assistant.urls")),',
+    '    path("api/", include("plane.assistant.urls")),\n'
+    '    path("api/", include("plane.chat.urls")),',
+)
+
+
+# ---------------------------------------------------------------------------
 # Idioma de perfil por defecto: "es". El frontend arranca en español para
 # visitantes sin preferencia (DEFAULT_LANGUAGE en packages/i18n); si el perfil
 # naciera en "en", el usuario nuevo veria la interfaz cambiar a ingles tras
@@ -111,6 +129,8 @@ for f in (
     *sorted(glob.glob("/code/plane/finance/migrations/*.py")),
     *sorted(glob.glob("/code/plane/assistant/*.py")),
     *sorted(glob.glob("/code/plane/assistant/migrations/*.py")),
+    *sorted(glob.glob("/code/plane/chat/*.py")),
+    *sorted(glob.glob("/code/plane/chat/migrations/*.py")),
 ):
     py_compile.compile(f, doraise=True)
     print(f"{OK} compiles {f}")
