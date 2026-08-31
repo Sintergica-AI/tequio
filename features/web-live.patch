@@ -113293,6 +113293,152 @@ index b386030..df8c387 100644
                </span>
              </Link>
            </div>
+diff --git a/apps/web/core/components/chat/attachments.ts b/apps/web/core/components/chat/attachments.ts
+new file mode 100644
+index 0000000..c324940
+--- /dev/null
++++ b/apps/web/core/components/chat/attachments.ts
+@@ -0,0 +1,140 @@
++/**
++ * Sintergica CE extension: the chat attachment markup contract.
++ *
++ * The asset id of an attachment travels INSIDE message_html, so three clients
++ * (this composer, the message card, the mobile app) have to agree on the exact
++ * markup. Build, parse and strip live together here: changing the markup on one
++ * side without the others is then impossible to do by accident.
++ *
++ * Images ride as <image-component src="<asset_id>">, which is the contract the
++ * mobile app already implements and what the editor itself produces. Every other
++ * file rides as an anchor carrying data-chat-file: a client that knows nothing
++ * about this convention still shows a working download link, and the web renders
++ * it as a chip instead.
++ *
++ * Derived from Plane CE code (AGPL-3.0-only).
++ */
++
++/** Marks an anchor as a file attachment rather than prose the user typed. */
++export const CHAT_FILE_ATTRIBUTE = "data-chat-file";
++
++export type TChatFileAttachment = {
++  assetId: string;
++  name: string;
++  size: number;
++  type: string;
++  url: string;
++};
++
++/** Images render inline; everything else becomes a download chip. */
++export const isImageAttachment = (type: string | undefined): boolean => !!type?.startsWith("image/");
++
++const escapeHtml = (value: string): string =>
++  value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
++
++/**
++ * Markup appended to a message for its attachments. Attachments carry their own
++ * url so that parse → build round-trips exactly, which is what keeps an edit of
++ * the message text from rewriting its attachments.
++ */
++export const buildAttachmentsHtml = (attachments: TChatFileAttachment[]): string =>
++  attachments
++    .map((attachment) => {
++      const id = escapeHtml(attachment.assetId);
++      if (isImageAttachment(attachment.type)) {
++        return `<image-component src="${id}" id="${id}" status="uploaded"></image-component>`;
++      }
++      return `<p><a href="${escapeHtml(attachment.url)}" ${CHAT_FILE_ATTRIBUTE}="${id}" data-name="${escapeHtml(
++        attachment.name
++      )}" data-size="${attachment.size}" data-type="${escapeHtml(attachment.type)}">${escapeHtml(attachment.name)}</a></p>`;
++    })
++    .join("");
++
++/** The file attachments carried by a stored message, for the chip row. */
++export const parseFileAttachments = (messageHtml: string | null | undefined): TChatFileAttachment[] => {
++  if (!messageHtml || !messageHtml.includes(CHAT_FILE_ATTRIBUTE)) return [];
++  try {
++    const doc = new DOMParser().parseFromString(messageHtml, "text/html");
++    return Array.from(doc.querySelectorAll(`a[${CHAT_FILE_ATTRIBUTE}]`)).map((anchor) => ({
++      assetId: anchor.getAttribute(CHAT_FILE_ATTRIBUTE) ?? "",
++      name: anchor.getAttribute("data-name") || anchor.textContent || "",
++      size: Number(anchor.getAttribute("data-size")) || 0,
++      type: anchor.getAttribute("data-type") ?? "",
++      url: anchor.getAttribute("href") ?? "",
++    }));
++  } catch {
++    // unparseable html: no chips, the text still renders
++    return [];
++  }
++};
++
++/**
++ * Removes a node and the paragraph it was alone in — the anchor usually sits in
++ * its own paragraph, and leaving that behind adds a blank line per attachment.
++ */
++const removeWithEmptyParagraph = (node: Element): void => {
++  const parent = node.parentElement;
++  node.remove();
++  if (parent && parent.tagName === "P" && !parent.textContent?.trim() && parent.children.length === 0) {
++    parent.remove();
++  }
++};
++
++/**
++ * The message body without its attachment anchors — the chips already show
++ * them, and rendering both reads as the file being sent twice.
++ */
++export const stripFileAttachments = (messageHtml: string | null | undefined): string => {
++  if (!messageHtml || !messageHtml.includes(CHAT_FILE_ATTRIBUTE)) return messageHtml ?? "";
++  try {
++    const doc = new DOMParser().parseFromString(messageHtml, "text/html");
++    doc.querySelectorAll(`a[${CHAT_FILE_ATTRIBUTE}]`).forEach(removeWithEmptyParagraph);
++    return doc.body.innerHTML;
++  } catch {
++    return messageHtml;
++  }
++};
++
++/**
++ * Splits a stored message into the text an edit box may show and the attachment
++ * markup that has to survive the edit untouched.
++ *
++ * Editing runs the body through the editor, and the editor drops what its
++ * schema does not model: the image node is disabled while editing (so an image
++ * would be deleted on save) and the link mark keeps no data-* attributes (so a
++ * file chip would decay into a bare link). Neither is recoverable afterwards, so
++ * attachments never enter the editor at all — they are put back verbatim.
++ *
++ * Does not assume the image tag comes closed. Every client writes it closed
++ * today, but an unclosed <image-component> makes the HTML parser adopt the rest
++ * of the message as its children, and extracting outerHTML would then swallow
++ * the body. The guard below repairs that shape instead of trusting the writer,
++ * so a change in another client cannot corrupt messages here.
++ */
++export const splitMessageForEditing = (
++  messageHtml: string | null | undefined
++): { body: string; attachmentsHtml: string } => {
++  if (!messageHtml) return { body: "", attachmentsHtml: "" };
++  try {
++    const doc = new DOMParser().parseFromString(messageHtml, "text/html");
++    const attachmentsHtml: string[] = [];
++    doc.querySelectorAll(`image-component, a[${CHAT_FILE_ATTRIBUTE}]`).forEach((node) => {
++      const isImage = node.tagName.toLowerCase() !== "a";
++      // An image node is an atom, so children can only mean the source left its
++      // tag unclosed and the parser adopted what followed: lift that content
++      // back out before extracting. Anchors are NOT atoms — their text is the
++      // file name — so this must never touch them.
++      if (isImage) {
++        while (node.firstChild) node.parentNode?.insertBefore(node.firstChild, node);
++      }
++      // File anchors are re-wrapped so the stored markup keeps the exact shape
++      // the composer writes; image nodes are already block-level.
++      attachmentsHtml.push(isImage ? node.outerHTML : `<p>${node.outerHTML}</p>`);
++      removeWithEmptyParagraph(node);
++    });
++    return { body: doc.body.innerHTML, attachmentsHtml: attachmentsHtml.join("") };
++  } catch {
++    // Unparseable html: edit the whole thing rather than silently drop content.
++    return { body: messageHtml, attachmentsHtml: "" };
++  }
++};
 diff --git a/apps/web/core/components/chat/channel-list.tsx b/apps/web/core/components/chat/channel-list.tsx
 new file mode 100644
 index 0000000..ab7d4af
@@ -114387,37 +114533,49 @@ index 0000000..c80ccca
 +});
 diff --git a/apps/web/core/components/chat/composer.tsx b/apps/web/core/components/chat/composer.tsx
 new file mode 100644
-index 0000000..f263fa6
+index 0000000..2dd8b2c
 --- /dev/null
 +++ b/apps/web/core/components/chat/composer.tsx
-@@ -0,0 +1,272 @@
+@@ -0,0 +1,439 @@
 +/**
 + * Sintergica CE extension: chat message composer.
 + *
 + * Slack/Glue-style composer: editor on top and an action bar below with a
-+ * formatting toggle (Aa), an emoji picker, an @-mention shortcut, an
-+ * attachment button and a send button. Enter sends, Shift+Enter breaks the
-+ * line.
++ * formatting toggle (Aa), an emoji picker, an @-mention shortcut, an attach
++ * menu and a send button. Enter sends, Shift+Enter breaks the line.
++ *
++ * Attachments are NOT the editor's image node. That node inserts an empty
++ * "Add an image" placeholder into the document and only fills it once a file
++ * comes back from the picker — cancel the picker and the placeholder is stuck
++ * in the message with no way to remove it, which is exactly what users hit.
++ * Here the composer owns the file input, uploads to a tray beside the editor,
++ * and only writes markup into the message when the upload has landed. It also
++ * means any file type works, not just images.
 + *
 + * Derived from Plane CE code (AGPL-3.0-only).
 + */
 +
 +import { useCallback, useEffect, useRef, useState } from "react";
 +import { observer } from "mobx-react";
-+import { ArrowUp, AtSign, CaseSensitive, Paperclip, Smile } from "lucide-react";
++import { ArrowUp, AtSign, CaseSensitive, FileText, Loader2, Paperclip, Plus, Smile, X } from "lucide-react";
 +// plane imports
 +import type { EditorRefApi, ToolbarMenuItem } from "@plane/editor";
-+import { IMAGE_ITEM, TOOLBAR_ITEMS } from "@plane/editor";
++import { TOOLBAR_ITEMS } from "@plane/editor";
 +import { useTranslation } from "@plane/i18n";
 +import { EmojiReactionPicker } from "@plane/propel/emoji-reaction";
++import { TOAST_TYPE, setToast } from "@plane/propel/toast";
 +import { Tooltip } from "@plane/propel/tooltip";
-+import { cn, isCommentEmpty } from "@plane/utils";
++import { CustomMenu } from "@plane/ui";
++import { cn, convertBytesToSize, isCommentEmpty } from "@plane/utils";
 +// components
 +import { LiteTextEditor } from "@/components/editor/lite-text";
 +// hooks
 +import { useWorkspace } from "@/hooks/store/use-workspace";
 +// services
 +import { ChatService } from "@/services/chat.service";
++// local imports
++import { buildAttachmentsHtml } from "./attachments";
++import { ChatDocumentPickerModal, type TPickedDocument } from "./document-picker-modal";
 +
 +const chatService = new ChatService();
 +
@@ -114428,6 +114586,19 @@ index 0000000..f263fa6
 +  TOOLBAR_ITEMS.lite.list,
 +  TOOLBAR_ITEMS.lite.userAction,
 +];
++
++// Mirrors CHAT_FILE_SIZE_LIMIT in the backend: the server rejects anyway, but
++// only after the whole file has been read, which reads as a hang.
++const MAX_ATTACHMENT_SIZE = 25 * 1024 * 1024;
++
++type TPendingAttachment = {
++  tempId: string;
++  name: string;
++  size: number;
++  type: string;
++  status: "uploading" | "uploaded" | "error";
++  assetId?: string;
++};
 +
 +type TProps = {
 +  workspaceSlug: string;
@@ -114448,16 +114619,26 @@ index 0000000..f263fa6
 +  const [isSubmitting, setIsSubmitting] = useState(false);
 +  const [showFormatting, setShowFormatting] = useState(false);
 +  const [isEmojiOpen, setIsEmojiOpen] = useState(false);
++  const [isDocPickerOpen, setIsDocPickerOpen] = useState(false);
 +  const [isEditorReady, setIsEditorReady] = useState(false);
 +  const [activeStates, setActiveStates] = useState<Record<string, boolean>>({});
++  const [attachments, setAttachments] = useState<TPendingAttachment[]>([]);
 +  // refs
 +  const editorRef = useRef<EditorRefApi>(null);
++  const fileInputRef = useRef<HTMLInputElement>(null);
 +  // store hooks
 +  const workspaceStore = useWorkspace();
 +  const { t } = useTranslation();
 +  // derived values
 +  const workspaceId = workspaceStore.getWorkspaceBySlug(workspaceSlug)?.id as string;
-+  const isEmpty = isCommentEmpty(html);
++  const uploadChannelId = assetChannelId ?? channelId;
++  const isTextEmpty = isCommentEmpty(html);
++  const isUploading = attachments.some((a) => a.status === "uploading");
++  const readyAttachments = attachments.filter((a) => a.status === "uploaded" && a.assetId);
++  // A message of nothing but attachments is legitimate, so the send button
++  // follows either source of content — but never mid-upload, or the asset id
++  // would not exist yet.
++  const canSend = (!isTextEmpty || readyAttachments.length > 0) && !isUploading && !isSubmitting;
 +
 +  const executeCommand = useCallback((item: ToolbarMenuItem) => {
 +    // TODO: update this while toolbar homogenization
@@ -114501,15 +114682,81 @@ index 0000000..f263fa6
 +    editorRef.current?.setEditorValueAtCursorPosition(content);
 +  }, []);
 +
++  const uploadAttachment = useCallback(
++    async (file: File) => {
++      const tempId = `${file.name}-${file.size}-${Math.random().toString(36).slice(2)}`;
++      setAttachments((prev) => [
++        ...prev,
++        { tempId, name: file.name, size: file.size, type: file.type, status: "uploading" },
++      ]);
++      try {
++        const assetId = await chatService.uploadChannelAsset(workspaceSlug, uploadChannelId, file);
++        setAttachments((prev) =>
++          prev.map((a) => (a.tempId === tempId ? { ...a, status: "uploaded" as const, assetId } : a))
++        );
++      } catch (error: unknown) {
++        setAttachments((prev) => prev.map((a) => (a.tempId === tempId ? { ...a, status: "error" as const } : a)));
++        setToast({
++          type: TOAST_TYPE.ERROR,
++          title: t("chat.attachment_failed", { name: file.name }),
++          message: (error as { error?: string })?.error ?? undefined,
++        });
++      }
++    },
++    [t, uploadChannelId, workspaceSlug]
++  );
++
++  const onFilesPicked = (event: React.ChangeEvent<HTMLInputElement>) => {
++    const files = Array.from(event.target.files ?? []);
++    // Reset immediately so picking the same file twice in a row still fires.
++    event.target.value = "";
++    files.forEach((file) => {
++      if (file.size > MAX_ATTACHMENT_SIZE) {
++        setToast({
++          type: TOAST_TYPE.ERROR,
++          title: t("chat.attachment_too_large", { name: file.name }),
++          message: convertBytesToSize(MAX_ATTACHMENT_SIZE),
++        });
++        return;
++      }
++      void uploadAttachment(file);
++    });
++  };
++
++  const removeAttachment = (tempId: string) => setAttachments((prev) => prev.filter((a) => a.tempId !== tempId));
++
++  const insertDocumentLink = (document: TPickedDocument) => {
++    const escaped = document.title.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
++    const href = document.url.replace(/"/g, "&quot;");
++    insertAtCursor(`<a href="${href}">${escaped}</a> `);
++  };
++
 +  const submit = async () => {
-+    if (isEmpty || isSubmitting) return;
++    if (!canSend) return;
 +    setIsSubmitting(true);
 +    // Capture then clear immediately: the message shows up optimistically in
 +    // the list, so the composer should feel instant.
-+    const payload = { message_html: html, message_json: json };
++    const payload = {
++      message_html:
++        (isTextEmpty ? "" : html) +
++        buildAttachmentsHtml(
++          readyAttachments.map((a) => ({
++            assetId: a.assetId as string,
++            name: a.name,
++            size: a.size,
++            type: a.type,
++            url: chatService.getAssetUrl(workspaceSlug, uploadChannelId, a.assetId as string),
++          }))
++        ),
++      // The editor's JSON doc knows nothing about the attachments appended
++      // above, so shipping it would describe a message that isn't the one being
++      // sent. No JSON is better than a JSON that contradicts the html.
++      message_json: readyAttachments.length > 0 ? null : json,
++    };
 +    onTyping?.(false);
 +    setHtml("<p></p>");
 +    setJson(null);
++    setAttachments([]);
 +    editorRef.current?.clearEditor();
 +    try {
 +      await onSend(payload);
@@ -114520,7 +114767,8 @@ index 0000000..f263fa6
 +    }
 +  };
 +
-+  const actionButtonClass = "grid size-7 place-items-center rounded text-tertiary transition-colors hover:bg-layer-1 hover:text-secondary";
++  const actionButtonClass =
++    "grid size-7 place-items-center rounded text-tertiary transition-colors hover:bg-layer-1 hover:text-secondary";
 +
 +  return (
 +    // Enter se maneja en el contenedor, como hace CommentCreate: el evento
@@ -114534,8 +114782,7 @@ index 0000000..f263fa6
 +          !e.shiftKey &&
 +          !e.ctrlKey &&
 +          !e.metaKey &&
-+          !isEmpty &&
-+          !isSubmitting &&
++          canSend &&
 +          editorRef.current?.isEditorReadyToDiscard()
 +        ) {
 +          e.preventDefault();
@@ -114544,6 +114791,44 @@ index 0000000..f263fa6
 +      }}
 +    >
 +      <div className="rounded-lg border border-subtle bg-surface-1 transition-colors focus-within:border-strong">
++        {/* pending attachments */}
++        {attachments.length > 0 && (
++          <div className="flex flex-wrap gap-2 border-b border-subtle p-2">
++            {attachments.map((attachment) => (
++              <div
++                key={attachment.tempId}
++                className={cn("flex max-w-64 items-center gap-2 rounded border border-subtle bg-layer-1 px-2 py-1.5", {
++                  "border-danger-primary/40 bg-danger-subtle": attachment.status === "error",
++                })}
++              >
++                {attachment.status === "uploading" ? (
++                  <Loader2 className="size-4 flex-shrink-0 animate-spin text-tertiary" />
++                ) : (
++                  <FileText
++                    className={cn("size-4 flex-shrink-0 text-tertiary", {
++                      "text-danger-primary": attachment.status === "error",
++                    })}
++                  />
++                )}
++                <div className="min-w-0 flex-1">
++                  <p className="truncate text-11 font-medium">{attachment.name}</p>
++                  <p className="text-11 text-tertiary">
++                    {attachment.status === "error" ? t("chat.attachment_error") : convertBytesToSize(attachment.size)}
++                  </p>
++                </div>
++                <Tooltip tooltipContent={t("chat.remove_attachment")}>
++                  <button
++                    type="button"
++                    onClick={() => removeAttachment(attachment.tempId)}
++                    className="grid size-5 flex-shrink-0 place-items-center rounded text-tertiary hover:bg-layer-2 hover:text-secondary"
++                  >
++                    <X className="size-3" />
++                  </button>
++                </Tooltip>
++              </div>
++            ))}
++          </div>
++        )}
 +        <LiteTextEditor
 +          editable
 +          ref={editorRef}
@@ -114566,7 +114851,7 @@ index 0000000..f263fa6
 +          handleEditorReady={(ready) => setIsEditorReady(ready)}
 +          containerClassName="min-h-min px-2 pt-1.5"
 +          uploadFile={async (_blockId, file) =>
-+            await chatService.uploadChannelAsset(workspaceSlug, assetChannelId ?? channelId, file)
++            await chatService.uploadChannelAsset(workspaceSlug, uploadChannelId, file)
 +          }
 +          duplicateFile={async () => {
 +            throw new Error("Duplicating attachments is not supported in chat.");
@@ -114579,7 +114864,7 @@ index 0000000..f263fa6
 +              <div
 +                key={groupIndex}
 +                className={cn("flex items-center gap-0.5", {
-+                  "border-l border-subtle pl-1.5 ml-1": groupIndex !== 0,
++                  "ml-1 border-l border-subtle pl-1.5": groupIndex !== 0,
 +                })}
 +              >
 +                {group.map((item) => {
@@ -114642,17 +114927,38 @@ index 0000000..f263fa6
 +                <AtSign className="size-4" />
 +              </button>
 +            </Tooltip>
-+            <Tooltip tooltipContent={t("common.attach")}>
-+              <button type="button" onClick={() => executeCommand(IMAGE_ITEM)} className={actionButtonClass}>
-+                <Paperclip className="size-4" />
-+              </button>
-+            </Tooltip>
++            <CustomMenu
++              placement="top-start"
++              closeOnSelect
++              customButtonClassName={actionButtonClass}
++              customButton={
++                <Tooltip tooltipContent={t("chat.toolbar_attach")}>
++                  <span className="grid place-items-center">
++                    <Plus className="size-4" />
++                  </span>
++                </Tooltip>
++              }
++            >
++              <CustomMenu.MenuItem onClick={() => fileInputRef.current?.click()}>
++                <span className="flex items-center gap-2">
++                  <Paperclip className="size-3.5" />
++                  {t("chat.attach_file")}
++                </span>
++              </CustomMenu.MenuItem>
++              <CustomMenu.MenuItem onClick={() => setIsDocPickerOpen(true)}>
++                <span className="flex items-center gap-2">
++                  <FileText className="size-3.5" />
++                  {t("chat.link_document")}
++                </span>
++              </CustomMenu.MenuItem>
++            </CustomMenu>
++            <input ref={fileInputRef} type="file" multiple hidden onChange={onFilesPicked} />
 +          </div>
 +          <Tooltip tooltipContent={t("chat.send")}>
 +            <button
 +              type="button"
 +              onClick={() => void submit()}
-+              disabled={isEmpty || isSubmitting}
++              disabled={!canSend}
 +              className="grid size-7 place-items-center rounded-full bg-accent-primary text-white transition-colors hover:bg-accent-primary/80 disabled:bg-layer-1 disabled:text-placeholder"
 +            >
 +              <ArrowUp className="size-4" />
@@ -114660,7 +114966,222 @@ index 0000000..f263fa6
 +          </Tooltip>
 +        </div>
 +      </div>
++      <ChatDocumentPickerModal
++        workspaceSlug={workspaceSlug}
++        projectId={projectId}
++        isOpen={isDocPickerOpen}
++        onClose={() => setIsDocPickerOpen(false)}
++        onPick={insertDocumentLink}
++      />
 +    </div>
++  );
++});
+diff --git a/apps/web/core/components/chat/document-picker-modal.tsx b/apps/web/core/components/chat/document-picker-modal.tsx
+new file mode 100644
+index 0000000..e5cabd3
+--- /dev/null
++++ b/apps/web/core/components/chat/document-picker-modal.tsx
+@@ -0,0 +1,202 @@
++/**
++ * Sintergica CE extension: pick a wiki page or a document-manager item to link
++ * in a chat message.
++ *
++ * Everything the workspace already stores as a document is offered from one
++ * search box, grouped by where it lives. The result is a plain anchor in the
++ * message: it stays a working link in every client, including the mobile app,
++ * with no markup contract to keep in sync.
++ *
++ * Derived from Plane CE code (AGPL-3.0-only).
++ */
++
++import { useMemo, useState } from "react";
++import { observer } from "mobx-react";
++import { FileText, Link2, Paperclip, Search } from "lucide-react";
++import useSWR from "swr";
++// plane imports
++import { useTranslation } from "@plane/i18n";
++import { EModalPosition, EModalWidth, ModalCore } from "@plane/ui";
++import { cn, convertBytesToSize, getPageName } from "@plane/utils";
++// hooks
++import { useDrive } from "@/hooks/store/use-drive";
++import { EPageStoreType, usePageStore } from "@/hooks/store/use-page-store";
++// services
++import { DriveService } from "@/services/drive.service";
++
++const driveService = new DriveService();
++
++export type TPickedDocument = {
++  title: string;
++  url: string;
++};
++
++type TEntry = TPickedDocument & {
++  key: string;
++  detail?: string;
++  isLink?: boolean;
++};
++
++type TSection = {
++  key: string;
++  label: string;
++  entries: TEntry[];
++};
++
++type TProps = {
++  workspaceSlug: string;
++  /** the channel's project, when it has one — its documents matter most here */
++  projectId?: string;
++  isOpen: boolean;
++  onClose: () => void;
++  onPick: (document: TPickedDocument) => void;
++};
++
++export const ChatDocumentPickerModal = observer(function ChatDocumentPickerModal(props: TProps) {
++  const { workspaceSlug, projectId, isOpen, onClose, onPick } = props;
++  // states
++  const [query, setQuery] = useState("");
++  // store hooks
++  const { t } = useTranslation();
++  const drive = useDrive();
++  const wikiStore = usePageStore(EPageStoreType.WORKSPACE);
++  const projectPageStore = usePageStore(EPageStoreType.PROJECT);
++
++  // Every source is fetched at once when the modal opens: the point of this
++  // dialog is one search box over all of them, so a per-tab fetch would just
++  // make the first keystroke in each group feel broken.
++  useSWR(isOpen ? `CHAT_DOC_PICKER_WIKI_${workspaceSlug}` : null, () => wikiStore.fetchPagesList(workspaceSlug, ""), {
++    revalidateOnFocus: false,
++  });
++  useSWR(isOpen ? `CHAT_DOC_PICKER_DRIVE_${workspaceSlug}` : null, () => drive.fetchFiles(workspaceSlug), {
++    revalidateOnFocus: false,
++  });
++  useSWR(
++    isOpen && projectId ? `CHAT_DOC_PICKER_PROJECT_PAGES_${workspaceSlug}_${projectId}` : null,
++    () => projectPageStore.fetchPagesList(workspaceSlug, projectId as string),
++    { revalidateOnFocus: false }
++  );
++  useSWR(
++    isOpen && projectId ? `CHAT_DOC_PICKER_PROJECT_DRIVE_${workspaceSlug}_${projectId}` : null,
++    () => drive.fetchFiles(workspaceSlug, projectId),
++    { revalidateOnFocus: false }
++  );
++
++  const sections = useMemo<TSection[]>(() => {
++    const livePages = (store: typeof wikiStore, scopeProjectId?: string) =>
++      Object.values(store.data ?? {}).filter((page) => {
++        if (page.archived_at || page.deleted_at) return false;
++        if (!scopeProjectId) return true;
++        return page.project_ids?.includes(scopeProjectId);
++      });
++
++    const driveEntries = (scopeProjectId?: string): TEntry[] =>
++      (drive.getFiles(workspaceSlug, scopeProjectId) ?? []).map((file) => ({
++        key: `drive-${file.id}`,
++        title: file.name,
++        // A drive "link" entry is already a URL someone saved; sending the
++        // download route for it would point at nothing.
++        url:
++          file.kind === "link"
++            ? file.url
++            : driveService.getPreviewUrl(workspaceSlug, file.id, scopeProjectId),
++        detail: file.kind === "link" ? undefined : convertBytesToSize(file.size),
++        isLink: file.kind === "link",
++      }));
++
++    const result: TSection[] = [
++      {
++        key: "wiki",
++        label: t("chat.section_wiki"),
++        entries: livePages(wikiStore).map((page) => ({
++          key: `wiki-${page.id}`,
++          title: getPageName(page.name),
++          url: page.getRedirectionLink(),
++        })),
++      },
++      { key: "drive", label: t("chat.section_documents"), entries: driveEntries() },
++    ];
++
++    if (projectId) {
++      result.push({
++        key: "project-pages",
++        label: t("chat.section_project_pages"),
++        entries: livePages(projectPageStore, projectId).map((page) => ({
++          key: `project-page-${page.id}`,
++          title: getPageName(page.name),
++          url: page.getRedirectionLink(),
++        })),
++      });
++      result.push({
++        key: "project-drive",
++        label: t("chat.section_project_documents"),
++        entries: driveEntries(projectId),
++      });
++    }
++
++    const needle = query.trim().toLowerCase();
++    return result
++      .map((section) => ({
++        ...section,
++        entries: needle ? section.entries.filter((e) => e.title.toLowerCase().includes(needle)) : section.entries,
++      }))
++      .filter((section) => section.entries.length > 0);
++  }, [drive, projectId, projectPageStore, query, t, wikiStore, workspaceSlug]);
++
++  const close = () => {
++    setQuery("");
++    onClose();
++  };
++
++  const pick = (entry: TEntry) => {
++    onPick({ title: entry.title, url: entry.url });
++    close();
++  };
++
++  return (
++    <ModalCore isOpen={isOpen} handleClose={close} position={EModalPosition.TOP} width={EModalWidth.XL}>
++      <div className="flex items-center gap-2 border-b border-subtle px-4 py-3">
++        <Search className="size-4 flex-shrink-0 text-tertiary" />
++        <input
++          autoFocus
++          type="text"
++          className="w-full bg-transparent text-sm outline-none placeholder:text-placeholder"
++          placeholder={t("chat.search_documents")}
++          value={query}
++          onChange={(e) => setQuery(e.target.value)}
++        />
++      </div>
++      <div className="max-h-96 overflow-y-auto p-2">
++        {sections.length === 0 ? (
++          <p className="px-2 py-6 text-center text-sm text-tertiary">{t("chat.no_documents")}</p>
++        ) : (
++          sections.map((section) => (
++            <div key={section.key} className="mb-2 last:mb-0">
++              <p className="px-2 py-1 text-11 font-medium uppercase tracking-wide text-tertiary">{section.label}</p>
++              {section.entries.map((entry) => (
++                <button
++                  key={entry.key}
++                  type="button"
++                  onClick={() => pick(entry)}
++                  className={cn(
++                    "flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm hover:bg-layer-1"
++                  )}
++                >
++                  {entry.isLink ? (
++                    <Link2 className="size-4 flex-shrink-0 text-tertiary" />
++                  ) : section.key.includes("drive") ? (
++                    <Paperclip className="size-4 flex-shrink-0 text-tertiary" />
++                  ) : (
++                    <FileText className="size-4 flex-shrink-0 text-tertiary" />
++                  )}
++                  <span className="truncate">{entry.title}</span>
++                  {entry.detail && <span className="ml-auto flex-shrink-0 text-11 text-tertiary">{entry.detail}</span>}
++                </button>
++              ))}
++            </div>
++          ))
++        )}
++      </div>
++    </ModalCore>
 +  );
 +});
 diff --git a/apps/web/core/components/chat/index.ts b/apps/web/core/components/chat/index.ts
@@ -114871,12 +115392,63 @@ index 0000000..94b022b
 +    </div>
 +  );
 +});
+diff --git a/apps/web/core/components/chat/message-attachments.tsx b/apps/web/core/components/chat/message-attachments.tsx
+new file mode 100644
+index 0000000..a81a0da
+--- /dev/null
++++ b/apps/web/core/components/chat/message-attachments.tsx
+@@ -0,0 +1,45 @@
++/**
++ * Sintergica CE extension: the file chips under a chat message.
++ *
++ * Images are not here — they render inline inside the message body, which is
++ * what people expect from a chat. This row is for everything else: a name, a
++ * size and a download.
++ *
++ * Derived from Plane CE code (AGPL-3.0-only).
++ */
++
++import { Download, FileText } from "lucide-react";
++// plane imports
++import { convertBytesToSize } from "@plane/utils";
++// local imports
++import type { TChatFileAttachment } from "./attachments";
++
++type TProps = {
++  attachments: TChatFileAttachment[];
++};
++
++export function ChatMessageAttachments(props: TProps) {
++  const { attachments } = props;
++  if (attachments.length === 0) return null;
++
++  return (
++    <div className="mt-1 flex flex-wrap gap-1.5">
++      {attachments.map((attachment) => (
++        <a
++          key={attachment.assetId}
++          href={attachment.url}
++          target="_blank"
++          rel="noreferrer noopener"
++          className="group flex max-w-72 items-center gap-2 rounded border border-subtle bg-layer-1 px-2 py-1.5 transition-colors hover:border-strong hover:bg-layer-2"
++        >
++          <FileText className="size-4 flex-shrink-0 text-tertiary" />
++          <div className="min-w-0 flex-1">
++            <p className="truncate text-11 font-medium">{attachment.name}</p>
++            {attachment.size > 0 && <p className="text-11 text-tertiary">{convertBytesToSize(attachment.size)}</p>}
++          </div>
++          <Download className="size-3.5 flex-shrink-0 text-tertiary opacity-0 transition-opacity group-hover:opacity-100" />
++        </a>
++      ))}
++    </div>
++  );
++}
 diff --git a/apps/web/core/components/chat/message-card.tsx b/apps/web/core/components/chat/message-card.tsx
 new file mode 100644
-index 0000000..2e8a644
+index 0000000..f32ba3f
 --- /dev/null
 +++ b/apps/web/core/components/chat/message-card.tsx
-@@ -0,0 +1,306 @@
+@@ -0,0 +1,323 @@
 +/**
 + * Sintergica CE extension: one chat message bubble.
 + *
@@ -114907,7 +115479,9 @@ index 0000000..2e8a644
 +// services
 +import type { TChatMessage } from "@/services/chat.service";
 +// local imports
++import { parseFileAttachments, splitMessageForEditing, stripFileAttachments } from "./attachments";
 +import { ChatLinkPreview } from "./link-preview";
++import { ChatMessageAttachments } from "./message-attachments";
 +import { WorkItemChip } from "./work-item-chip";
 +
 +type TProps = {
@@ -114924,7 +115498,11 @@ index 0000000..2e8a644
 +  const { workspaceSlug, message, grouped = false, inThread = false, onOpenThread, onLinkWorkItem, onCreateWorkItem } = props;
 +  // states
 +  const [isEditing, setIsEditing] = useState(false);
-+  const [editHtml, setEditHtml] = useState(message.message_html);
++  // Editing works on the text only; attachments are put back verbatim on save.
++  // A round trip through the editor would drop the data-* attributes of a file
++  // anchor and delete image nodes outright (the image extension is disabled
++  // below), and neither loss is recoverable once saved.
++  const [editHtml, setEditHtml] = useState(() => splitMessageForEditing(message.message_html).body);
 +  const [isPickerOpen, setIsPickerOpen] = useState(false);
 +  // store hooks
 +  const chat = useChat();
@@ -114939,6 +115517,14 @@ index 0000000..2e8a644
 +  const isTemp = message.id.startsWith("temp-");
 +  const channel = chat.channels[message.channel];
 +  const projectId = channel?.project ?? undefined;
++  // File attachments live inside message_html as anchors so that every client
++  // shows at least a working link. Here they become chips, so the anchors come
++  // out of the body — rendering both reads as the file being sent twice.
++  const fileAttachments = parseFileAttachments(message.message_html);
++  const bodyHtml = stripFileAttachments(message.message_html);
++  // Display keeps images inline but drops the file anchors (the chips show
++  // those); editing has to hold back both — see splitMessageForEditing.
++  const editSplit = splitMessageForEditing(message.message_html);
 +
 +  const reactionGroups: EmojiReactionType[] = [];
 +  for (const r of message.reactions) {
@@ -114967,8 +115553,10 @@ index 0000000..2e8a644
 +  };
 +
 +  const saveEdit = async () => {
-+    if (isCommentEmpty(editHtml)) return;
-+    await chat.editMessage(workspaceSlug, message.channel, message.id, { message_html: editHtml });
++    if (isCommentEmpty(editHtml) && !editSplit.attachmentsHtml) return;
++    await chat.editMessage(workspaceSlug, message.channel, message.id, {
++      message_html: (isCommentEmpty(editHtml) ? "" : editHtml) + editSplit.attachmentsHtml,
++    });
 +    setIsEditing(false);
 +  };
 +
@@ -115023,7 +115611,7 @@ index 0000000..2e8a644
 +              ref={editorRef}
 +              id={`chat-edit-${message.id}`}
 +              initialValue={editHtml}
-+              value={message.message_html}
++              value={editSplit.body}
 +              workspaceId={workspaceId}
 +              workspaceSlug={workspaceSlug}
 +              projectId={projectId}
@@ -115053,7 +115641,7 @@ index 0000000..2e8a644
 +          <LiteTextEditor
 +            editable={false}
 +            id={`chat-msg-${message.id}`}
-+            initialValue={message.message_html}
++            initialValue={bodyHtml}
 +            workspaceId={workspaceId}
 +            workspaceSlug={workspaceSlug}
 +            projectId={projectId}
@@ -115062,6 +115650,7 @@ index 0000000..2e8a644
 +            parentClassName="border-none"
 +          />
 +        )}
++        {!isEditing && <ChatMessageAttachments attachments={fileAttachments} />}
 +        {!isEditing && !isTemp && (
 +          <ChatLinkPreview workspaceSlug={workspaceSlug} messageHtml={message.message_html} />
 +        )}
@@ -115159,7 +115748,7 @@ index 0000000..2e8a644
 +            {isMine && (
 +              <CustomMenu.MenuItem
 +                onClick={() => {
-+                  setEditHtml(message.message_html);
++                  setEditHtml(editSplit.body);
 +                  setIsEditing(true);
 +                }}
 +              >
@@ -124148,10 +124737,10 @@ index 0000000..7e91e5a
 +}
 diff --git a/apps/web/core/services/chat.service.ts b/apps/web/core/services/chat.service.ts
 new file mode 100644
-index 0000000..1dae8ad
+index 0000000..a52ae62
 --- /dev/null
 +++ b/apps/web/core/services/chat.service.ts
-@@ -0,0 +1,432 @@
+@@ -0,0 +1,437 @@
 +/**
 + * Sintergica CE extension: chat channels (ClickUp-style) service.
 + *
@@ -124582,6 +125171,11 @@ index 0000000..1dae8ad
 +    await fileUploadService.uploadFile(presign.upload_data.url, payload);
 +    await this.patch(`${this.base(workspaceSlug)}/channels/${channelId}/assets/${presign.asset_id}/`, {});
 +    return presign.asset_id as string;
++  }
++
++  /** Download route for an attachment; the backend redirects to a signed URL. */
++  getAssetUrl(workspaceSlug: string, channelId: string, assetId: string): string {
++    return `${API_BASE_URL}${this.base(workspaceSlug)}/channels/${channelId}/assets/${assetId}/`;
 +  }
 +}
 diff --git a/apps/web/core/services/drive.service.ts b/apps/web/core/services/drive.service.ts
@@ -195190,7 +195784,7 @@ index 5aa7d2f..32afb6d 100644
        "fixed_schedule": "Pevný rozvrh",
        "schedule": {
 diff --git a/packages/i18n/src/locales/cs/common.json b/packages/i18n/src/locales/cs/common.json
-index c1e9372..e583126 100644
+index c1e9372..23ce855 100644
 --- a/packages/i18n/src/locales/cs/common.json
 +++ b/packages/i18n/src/locales/cs/common.json
 @@ -244,7 +244,7 @@
@@ -195220,7 +195814,7 @@ index c1e9372..e583126 100644
    "in_app": "V aplikaci",
    "forms": "Formuláře",
    "milestones": "Milníky",
-@@ -867,5 +867,435 @@
+@@ -867,5 +867,448 @@
        "description": "Exportujte položky do JSON.",
        "short_description": "Exportovat jako JSON"
      }
@@ -195653,7 +196247,20 @@ index c1e9372..e583126 100644
 +    "toolbar_format": "Formátování",
 +    "toolbar_emoji": "Emoji",
 +    "toolbar_mention": "Zmínit někoho",
-+    "send": "Odeslat"
++    "send": "Odeslat",
++    "toolbar_attach": "Přiložit",
++    "attach_file": "Nahrát soubor",
++    "link_document": "Připojit dokument",
++    "search_documents": "Hledat dokumenty…",
++    "no_documents": "Nebyly nalezeny žádné dokumenty.",
++    "section_wiki": "Wiki",
++    "section_documents": "Dokumenty",
++    "section_project_pages": "Stránky projektu",
++    "section_project_documents": "Dokumenty projektu",
++    "remove_attachment": "Odebrat",
++    "attachment_error": "Nahrání selhalo",
++    "attachment_failed": "Soubor {name} se nepodařilo nahrát",
++    "attachment_too_large": "{name} překračuje limit velikosti"
    }
  }
 diff --git a/packages/i18n/src/locales/cs/empty-state.json b/packages/i18n/src/locales/cs/empty-state.json
@@ -196362,7 +196969,7 @@ index 66379d4..2c778e6 100644
        "fixed_schedule": "Fester Zeitplan",
        "schedule": {
 diff --git a/packages/i18n/src/locales/de/common.json b/packages/i18n/src/locales/de/common.json
-index 1e18d4e..411f39e 100644
+index 1e18d4e..0aeb7dd 100644
 --- a/packages/i18n/src/locales/de/common.json
 +++ b/packages/i18n/src/locales/de/common.json
 @@ -244,7 +244,7 @@
@@ -196383,7 +196990,7 @@ index 1e18d4e..411f39e 100644
      "choose_view_logs_from_setup_sh_and_docker_logs_to_be_sure": "Wählen Sie View Logs aus setup.sh und Docker-Logs, um sicherzugehen."
    },
    "customize_navigation": "Navigation anpassen",
-@@ -867,5 +867,435 @@
+@@ -867,5 +867,448 @@
        "description": "Arbeitselemente in JSON exportieren.",
        "short_description": "Als JSON exportieren"
      }
@@ -196816,7 +197423,20 @@ index 1e18d4e..411f39e 100644
 +    "toolbar_format": "Formatierung",
 +    "toolbar_emoji": "Emoji",
 +    "toolbar_mention": "Jemanden erwähnen",
-+    "send": "Senden"
++    "send": "Senden",
++    "toolbar_attach": "Anhängen",
++    "attach_file": "Datei hochladen",
++    "link_document": "Dokument verknüpfen",
++    "search_documents": "Dokumente suchen…",
++    "no_documents": "Keine Dokumente gefunden.",
++    "section_wiki": "Wiki",
++    "section_documents": "Dokumente",
++    "section_project_pages": "Projektseiten",
++    "section_project_documents": "Projektdokumente",
++    "remove_attachment": "Entfernen",
++    "attachment_error": "Hochladen fehlgeschlagen",
++    "attachment_failed": "{name} konnte nicht hochgeladen werden",
++    "attachment_too_large": "{name} überschreitet die Größenbeschränkung"
    }
  }
 diff --git a/packages/i18n/src/locales/de/empty-state.json b/packages/i18n/src/locales/de/empty-state.json
@@ -197510,7 +198130,7 @@ index 64779c7..c549990 100644
        "fixed_schedule": "Fixed schedule",
        "schedule": {
 diff --git a/packages/i18n/src/locales/en/common.json b/packages/i18n/src/locales/en/common.json
-index a138304..e2d8bdb 100644
+index a138304..654d647 100644
 --- a/packages/i18n/src/locales/en/common.json
 +++ b/packages/i18n/src/locales/en/common.json
 @@ -244,7 +244,7 @@
@@ -197540,7 +198160,7 @@ index a138304..e2d8bdb 100644
    "in_app": "In-app",
    "forms": "Forms",
    "milestones": "Milestones",
-@@ -867,5 +867,435 @@
+@@ -867,5 +867,448 @@
        "description": "Export work items to a JSON file.",
        "short_description": "Export as json"
      }
@@ -197973,7 +198593,20 @@ index a138304..e2d8bdb 100644
 +    "toolbar_format": "Formatting",
 +    "toolbar_emoji": "Emoji",
 +    "toolbar_mention": "Mention someone",
-+    "send": "Send"
++    "send": "Send",
++    "toolbar_attach": "Attach",
++    "attach_file": "Upload a file",
++    "link_document": "Link a document",
++    "search_documents": "Search documents…",
++    "no_documents": "No documents found.",
++    "section_wiki": "Wiki",
++    "section_documents": "Documents",
++    "section_project_pages": "Project pages",
++    "section_project_documents": "Project documents",
++    "remove_attachment": "Remove",
++    "attachment_error": "Upload failed",
++    "attachment_failed": "Could not upload {name}",
++    "attachment_too_large": "{name} exceeds the size limit"
    }
  }
 diff --git a/packages/i18n/src/locales/en/empty-state.json b/packages/i18n/src/locales/en/empty-state.json
@@ -198741,7 +199374,7 @@ index f49d529..b042251 100644
        "fixed_schedule": "Horario fijo",
        "schedule": {
 diff --git a/packages/i18n/src/locales/es/common.json b/packages/i18n/src/locales/es/common.json
-index 64440c9..731ec78 100644
+index 64440c9..a90f8d7 100644
 --- a/packages/i18n/src/locales/es/common.json
 +++ b/packages/i18n/src/locales/es/common.json
 @@ -145,7 +145,7 @@
@@ -198780,7 +199413,7 @@ index 64440c9..731ec78 100644
    "in_app": "En la aplicación",
    "forms": "Formularios",
    "milestones": "Hitos",
-@@ -867,5 +867,435 @@
+@@ -867,5 +867,448 @@
        "description": "Exporta elementos de trabajo a un archivo JSON.",
        "short_description": "Exportar como json"
      }
@@ -199213,7 +199846,20 @@ index 64440c9..731ec78 100644
 +    "toolbar_format": "Formato",
 +    "toolbar_emoji": "Emoji",
 +    "toolbar_mention": "Mencionar a alguien",
-+    "send": "Enviar"
++    "send": "Enviar",
++    "toolbar_attach": "Adjuntar",
++    "attach_file": "Subir un archivo",
++    "link_document": "Enlazar un documento",
++    "search_documents": "Buscar documentos…",
++    "no_documents": "No se encontraron documentos.",
++    "section_wiki": "Wiki",
++    "section_documents": "Documentos",
++    "section_project_pages": "Páginas del proyecto",
++    "section_project_documents": "Documentos del proyecto",
++    "remove_attachment": "Quitar",
++    "attachment_error": "Falló la subida",
++    "attachment_failed": "No se pudo subir {name}",
++    "attachment_too_large": "{name} supera el límite de tamaño"
    }
  }
 diff --git a/packages/i18n/src/locales/es/empty-state.json b/packages/i18n/src/locales/es/empty-state.json
@@ -199972,7 +200618,7 @@ index 5343f12..1a31636 100644
        "fixed_schedule": "Horaire fixe",
        "schedule": {
 diff --git a/packages/i18n/src/locales/fr/common.json b/packages/i18n/src/locales/fr/common.json
-index a94ab8a..df628d4 100644
+index a94ab8a..85d36b4 100644
 --- a/packages/i18n/src/locales/fr/common.json
 +++ b/packages/i18n/src/locales/fr/common.json
 @@ -244,7 +244,7 @@
@@ -200002,7 +200648,7 @@ index a94ab8a..df628d4 100644
    "in_app": "Dans l'application",
    "forms": "Formulaires",
    "milestones": "Jalons",
-@@ -867,5 +867,435 @@
+@@ -867,5 +867,448 @@
        "description": "Exportez les éléments de travail vers un fichier JSON.",
        "short_description": "Exporter en json"
      }
@@ -200435,7 +201081,20 @@ index a94ab8a..df628d4 100644
 +    "toolbar_format": "Mise en forme",
 +    "toolbar_emoji": "Émoji",
 +    "toolbar_mention": "Mentionner quelqu'un",
-+    "send": "Envoyer"
++    "send": "Envoyer",
++    "toolbar_attach": "Joindre",
++    "attach_file": "Téléverser un fichier",
++    "link_document": "Lier un document",
++    "search_documents": "Rechercher des documents…",
++    "no_documents": "Aucun document trouvé.",
++    "section_wiki": "Wiki",
++    "section_documents": "Documents",
++    "section_project_pages": "Pages du projet",
++    "section_project_documents": "Documents du projet",
++    "remove_attachment": "Retirer",
++    "attachment_error": "Échec du téléversement",
++    "attachment_failed": "Impossible de téléverser {name}",
++    "attachment_too_large": "{name} dépasse la taille limite"
    }
  }
 diff --git a/packages/i18n/src/locales/fr/empty-state.json b/packages/i18n/src/locales/fr/empty-state.json
@@ -201192,7 +201851,7 @@ index 2fd8636..c6ce762 100644
        "fixed_schedule": "Jadwal tetap",
        "schedule": {
 diff --git a/packages/i18n/src/locales/id/common.json b/packages/i18n/src/locales/id/common.json
-index 7d26685..5f8d345 100644
+index 7d26685..8e6e290 100644
 --- a/packages/i18n/src/locales/id/common.json
 +++ b/packages/i18n/src/locales/id/common.json
 @@ -244,7 +244,7 @@
@@ -201213,7 +201872,7 @@ index 7d26685..5f8d345 100644
      "choose_view_logs_from_setup_sh_and_docker_logs_to_be_sure": "Pilih View Logs dari setup.sh dan log Docker untuk memastikan."
    },
    "customize_navigation": "Sesuaikan navigasi",
-@@ -867,5 +867,435 @@
+@@ -867,5 +867,448 @@
        "description": "Ekspor item kerja ke file JSON.",
        "short_description": "Ekspor sebagai json"
      }
@@ -201646,7 +202305,20 @@ index 7d26685..5f8d345 100644
 +    "toolbar_format": "Pemformatan",
 +    "toolbar_emoji": "Emoji",
 +    "toolbar_mention": "Sebut seseorang",
-+    "send": "Kirim"
++    "send": "Kirim",
++    "toolbar_attach": "Lampirkan",
++    "attach_file": "Unggah berkas",
++    "link_document": "Tautkan dokumen",
++    "search_documents": "Cari dokumen…",
++    "no_documents": "Tidak ada dokumen yang ditemukan.",
++    "section_wiki": "Wiki",
++    "section_documents": "Dokumen",
++    "section_project_pages": "Halaman proyek",
++    "section_project_documents": "Dokumen proyek",
++    "remove_attachment": "Hapus",
++    "attachment_error": "Unggahan gagal",
++    "attachment_failed": "Tidak dapat mengunggah {name}",
++    "attachment_too_large": "{name} melebihi batas ukuran"
    }
  }
 diff --git a/packages/i18n/src/locales/id/empty-state.json b/packages/i18n/src/locales/id/empty-state.json
@@ -202404,7 +203076,7 @@ index f279366..b302f18 100644
        "fixed_schedule": "Pianificazione fissa",
        "schedule": {
 diff --git a/packages/i18n/src/locales/it/common.json b/packages/i18n/src/locales/it/common.json
-index 6fda1b0..5fa1ab1 100644
+index 6fda1b0..ff1f907 100644
 --- a/packages/i18n/src/locales/it/common.json
 +++ b/packages/i18n/src/locales/it/common.json
 @@ -244,7 +244,7 @@
@@ -202434,7 +203106,7 @@ index 6fda1b0..5fa1ab1 100644
    "in_app": "In-app",
    "forms": "Moduli",
    "milestones": "Milestone",
-@@ -867,5 +867,435 @@
+@@ -867,5 +867,448 @@
        "description": "Esporta elementi di lavoro in un file JSON.",
        "short_description": "Esporta come JSON"
      }
@@ -202867,7 +203539,20 @@ index 6fda1b0..5fa1ab1 100644
 +    "toolbar_format": "Formattazione",
 +    "toolbar_emoji": "Emoji",
 +    "toolbar_mention": "Menzionare qualcuno",
-+    "send": "Invia"
++    "send": "Invia",
++    "toolbar_attach": "Allega",
++    "attach_file": "Carica un file",
++    "link_document": "Collega un documento",
++    "search_documents": "Cerca documenti…",
++    "no_documents": "Nessun documento trovato.",
++    "section_wiki": "Wiki",
++    "section_documents": "Documenti",
++    "section_project_pages": "Pagine del progetto",
++    "section_project_documents": "Documenti del progetto",
++    "remove_attachment": "Rimuovi",
++    "attachment_error": "Caricamento non riuscito",
++    "attachment_failed": "Impossibile caricare {name}",
++    "attachment_too_large": "{name} supera il limite di dimensione"
    }
  }
 diff --git a/packages/i18n/src/locales/it/empty-state.json b/packages/i18n/src/locales/it/empty-state.json
@@ -203566,7 +204251,7 @@ index d3dd8d3..0f5426b 100644
            }
          }
 diff --git a/packages/i18n/src/locales/ja/common.json b/packages/i18n/src/locales/ja/common.json
-index 4899411..4618f1f 100644
+index 4899411..13f710b 100644
 --- a/packages/i18n/src/locales/ja/common.json
 +++ b/packages/i18n/src/locales/ja/common.json
 @@ -244,7 +244,7 @@
@@ -203578,7 +204263,7 @@ index 4899411..4618f1f 100644
    "please_select_at_least_one_invitation": "少なくとも1つの招待を選択してください。",
    "please_select_at_least_one_invitation_description": "ワークスペースに参加するには少なくとも1つの招待を選択してください。",
    "we_see_that_someone_has_invited_you_to_join_a_workspace": "誰かがあなたをワークスペースに招待しています",
-@@ -867,5 +867,435 @@
+@@ -867,5 +867,448 @@
        "description": "作業項目をJSONファイルにエクスポートします。",
        "short_description": "JSONとしてエクスポート"
      }
@@ -204011,7 +204696,20 @@ index 4899411..4618f1f 100644
 +    "toolbar_format": "書式設定",
 +    "toolbar_emoji": "絵文字",
 +    "toolbar_mention": "メンションする",
-+    "send": "送信"
++    "send": "送信",
++    "toolbar_attach": "添付",
++    "attach_file": "ファイルをアップロード",
++    "link_document": "ドキュメントをリンク",
++    "search_documents": "ドキュメントを検索…",
++    "no_documents": "ドキュメントが見つかりません。",
++    "section_wiki": "Wiki",
++    "section_documents": "ドキュメント",
++    "section_project_pages": "プロジェクトのページ",
++    "section_project_documents": "プロジェクトのドキュメント",
++    "remove_attachment": "削除",
++    "attachment_error": "アップロードに失敗しました",
++    "attachment_failed": "{name}をアップロードできませんでした",
++    "attachment_too_large": "{name}はサイズ制限を超えています"
    }
  }
 diff --git a/packages/i18n/src/locales/ja/integration.json b/packages/i18n/src/locales/ja/integration.json
@@ -204254,7 +204952,7 @@ index 8d77f70..279ae09 100644
        "fixed_schedule": "고정 일정",
        "schedule": {
 diff --git a/packages/i18n/src/locales/ko/common.json b/packages/i18n/src/locales/ko/common.json
-index 73eea6b..e68eeec 100644
+index 73eea6b..f97f64a 100644
 --- a/packages/i18n/src/locales/ko/common.json
 +++ b/packages/i18n/src/locales/ko/common.json
 @@ -244,7 +244,7 @@
@@ -204275,7 +204973,7 @@ index 73eea6b..e68eeec 100644
      "choose_view_logs_from_setup_sh_and_docker_logs_to_be_sure": "확실히 하려면 setup.sh와 Docker 로그에서 View Logs를 선택하세요."
    },
    "customize_navigation": "내비게이션 사용자 지정",
-@@ -867,5 +867,435 @@
+@@ -867,5 +867,448 @@
        "description": "작업 항목을 JSON 파일로 내보냅니다.",
        "short_description": "JSON으로 내보내기"
      }
@@ -204708,7 +205406,20 @@ index 73eea6b..e68eeec 100644
 +    "toolbar_format": "서식",
 +    "toolbar_emoji": "이모지",
 +    "toolbar_mention": "멘션하기",
-+    "send": "보내기"
++    "send": "보내기",
++    "toolbar_attach": "첨부",
++    "attach_file": "파일 업로드",
++    "link_document": "문서 연결",
++    "search_documents": "문서 검색…",
++    "no_documents": "문서를 찾을 수 없습니다.",
++    "section_wiki": "Wiki",
++    "section_documents": "문서",
++    "section_project_pages": "프로젝트 페이지",
++    "section_project_documents": "프로젝트 문서",
++    "remove_attachment": "제거",
++    "attachment_error": "업로드에 실패했습니다",
++    "attachment_failed": "{name}을(를) 업로드할 수 없습니다",
++    "attachment_too_large": "{name}이(가) 크기 제한을 초과합니다"
    }
  }
 diff --git a/packages/i18n/src/locales/ko/empty-state.json b/packages/i18n/src/locales/ko/empty-state.json
@@ -205104,7 +205815,7 @@ index 0632d1f..6396693 100644
        "fixed_schedule": "Stały harmonogram",
        "schedule": {
 diff --git a/packages/i18n/src/locales/pl/common.json b/packages/i18n/src/locales/pl/common.json
-index 4c4850c..d50a494 100644
+index 4c4850c..551989f 100644
 --- a/packages/i18n/src/locales/pl/common.json
 +++ b/packages/i18n/src/locales/pl/common.json
 @@ -244,7 +244,7 @@
@@ -205125,7 +205836,7 @@ index 4c4850c..d50a494 100644
      "choose_view_logs_from_setup_sh_and_docker_logs_to_be_sure": "Wybierz View Logs z setup.sh i logów Docker, aby mieć pewność."
    },
    "customize_navigation": "Dostosuj nawigację",
-@@ -867,5 +867,435 @@
+@@ -867,5 +867,448 @@
        "description": "Eksportuj elementy do pliku JSON.",
        "short_description": "Eksportuj jako JSON"
      }
@@ -205558,7 +206269,20 @@ index 4c4850c..d50a494 100644
 +    "toolbar_format": "Formatowanie",
 +    "toolbar_emoji": "Emoji",
 +    "toolbar_mention": "Wspomnij o kimś",
-+    "send": "Wyślij"
++    "send": "Wyślij",
++    "toolbar_attach": "Załącz",
++    "attach_file": "Prześlij plik",
++    "link_document": "Połącz dokument",
++    "search_documents": "Szukaj dokumentów…",
++    "no_documents": "Nie znaleziono dokumentów.",
++    "section_wiki": "Wiki",
++    "section_documents": "Dokumenty",
++    "section_project_pages": "Strony projektu",
++    "section_project_documents": "Dokumenty projektu",
++    "remove_attachment": "Usuń",
++    "attachment_error": "Przesyłanie nie powiodło się",
++    "attachment_failed": "Nie udało się przesłać {name}",
++    "attachment_too_large": "{name} przekracza limit rozmiaru"
    }
  }
 diff --git a/packages/i18n/src/locales/pl/empty-state.json b/packages/i18n/src/locales/pl/empty-state.json
@@ -206261,7 +206985,7 @@ index 3eab73f..c2c7c08 100644
        "fixed_schedule": "Agendamento fixo",
        "schedule": {
 diff --git a/packages/i18n/src/locales/pt-BR/common.json b/packages/i18n/src/locales/pt-BR/common.json
-index 565e85d..162a35d 100644
+index 565e85d..d11633d 100644
 --- a/packages/i18n/src/locales/pt-BR/common.json
 +++ b/packages/i18n/src/locales/pt-BR/common.json
 @@ -244,7 +244,7 @@
@@ -206282,7 +207006,7 @@ index 565e85d..162a35d 100644
      "choose_view_logs_from_setup_sh_and_docker_logs_to_be_sure": "Escolha View Logs do setup.sh e logs do Docker para ter certeza."
    },
    "customize_navigation": "Personalizar navegação",
-@@ -867,5 +867,435 @@
+@@ -867,5 +867,448 @@
        "description": "Exporte itens de trabalho para um arquivo JSON.",
        "short_description": "Exportar como JSON"
      }
@@ -206715,7 +207439,20 @@ index 565e85d..162a35d 100644
 +    "toolbar_format": "Formatação",
 +    "toolbar_emoji": "Emoji",
 +    "toolbar_mention": "Mencionar alguém",
-+    "send": "Enviar"
++    "send": "Enviar",
++    "toolbar_attach": "Anexar",
++    "attach_file": "Enviar um arquivo",
++    "link_document": "Vincular um documento",
++    "search_documents": "Pesquisar documentos…",
++    "no_documents": "Nenhum documento encontrado.",
++    "section_wiki": "Wiki",
++    "section_documents": "Documentos",
++    "section_project_pages": "Páginas do projeto",
++    "section_project_documents": "Documentos do projeto",
++    "remove_attachment": "Remover",
++    "attachment_error": "Falha no envio",
++    "attachment_failed": "Não foi possível enviar {name}",
++    "attachment_too_large": "{name} excede o limite de tamanho"
    }
  }
 diff --git a/packages/i18n/src/locales/pt-BR/empty-state.json b/packages/i18n/src/locales/pt-BR/empty-state.json
@@ -207468,7 +208205,7 @@ index 509bbb1..0c56d9c 100644
        "fixed_schedule": "Program fix",
        "schedule": {
 diff --git a/packages/i18n/src/locales/ro/common.json b/packages/i18n/src/locales/ro/common.json
-index e2b44ce..a9b7718 100644
+index e2b44ce..f7ef22d 100644
 --- a/packages/i18n/src/locales/ro/common.json
 +++ b/packages/i18n/src/locales/ro/common.json
 @@ -244,7 +244,7 @@
@@ -207498,7 +208235,7 @@ index e2b44ce..a9b7718 100644
    "in_app": "În-app",
    "forms": "Formulare",
    "milestones": "Jaloane",
-@@ -867,5 +867,435 @@
+@@ -867,5 +867,448 @@
        "description": "Exportă activitățile într-un fișier JSON.",
        "short_description": "Exportă ca JSON"
      }
@@ -207931,7 +208668,20 @@ index e2b44ce..a9b7718 100644
 +    "toolbar_format": "Formatare",
 +    "toolbar_emoji": "Emoji",
 +    "toolbar_mention": "Menționați pe cineva",
-+    "send": "Trimite"
++    "send": "Trimite",
++    "toolbar_attach": "Atașați",
++    "attach_file": "Încărcați un fișier",
++    "link_document": "Legați un document",
++    "search_documents": "Căutați documente…",
++    "no_documents": "Nu s-au găsit documente.",
++    "section_wiki": "Wiki",
++    "section_documents": "Documente",
++    "section_project_pages": "Paginile proiectului",
++    "section_project_documents": "Documentele proiectului",
++    "remove_attachment": "Eliminați",
++    "attachment_error": "Încărcarea a eșuat",
++    "attachment_failed": "Fișierul {name} nu a putut fi încărcat",
++    "attachment_too_large": "{name} depășește limita de dimensiune"
    }
  }
 diff --git a/packages/i18n/src/locales/ro/empty-state.json b/packages/i18n/src/locales/ro/empty-state.json
@@ -208682,7 +209432,7 @@ index a97e9e6..7ce3fde 100644
        "fixed_schedule": "Фиксированное расписание",
        "schedule": {
 diff --git a/packages/i18n/src/locales/ru/common.json b/packages/i18n/src/locales/ru/common.json
-index c2881e5..20abfe8 100644
+index c2881e5..0628c52 100644
 --- a/packages/i18n/src/locales/ru/common.json
 +++ b/packages/i18n/src/locales/ru/common.json
 @@ -244,7 +244,7 @@
@@ -208703,7 +209453,7 @@ index c2881e5..20abfe8 100644
      "choose_view_logs_from_setup_sh_and_docker_logs_to_be_sure": "Выберите View Logs из setup.sh и логов Docker, чтобы убедиться."
    },
    "customize_navigation": "Настроить навигацию",
-@@ -867,5 +867,435 @@
+@@ -867,5 +867,448 @@
        "description": "Экспорт рабочих элементов в JSON-файл.",
        "short_description": "Экспорт в json"
      }
@@ -209136,7 +209886,20 @@ index c2881e5..20abfe8 100644
 +    "toolbar_format": "Форматирование",
 +    "toolbar_emoji": "Эмодзи",
 +    "toolbar_mention": "Упомянуть участника",
-+    "send": "Отправить"
++    "send": "Отправить",
++    "toolbar_attach": "Прикрепить",
++    "attach_file": "Загрузить файл",
++    "link_document": "Связать документ",
++    "search_documents": "Поиск документов…",
++    "no_documents": "Документы не найдены.",
++    "section_wiki": "Wiki",
++    "section_documents": "Документы",
++    "section_project_pages": "Страницы проекта",
++    "section_project_documents": "Документы проекта",
++    "remove_attachment": "Убрать",
++    "attachment_error": "Не удалось загрузить",
++    "attachment_failed": "Не удалось загрузить {name}",
++    "attachment_too_large": "{name} превышает ограничение по размеру"
    }
  }
 diff --git a/packages/i18n/src/locales/ru/empty-state.json b/packages/i18n/src/locales/ru/empty-state.json
@@ -209876,7 +210639,7 @@ index 3e7dbc5..27f375f 100644
        "fixed_schedule": "Pevný rozvrh",
        "schedule": {
 diff --git a/packages/i18n/src/locales/sk/common.json b/packages/i18n/src/locales/sk/common.json
-index 4fc339c..edd8caa 100644
+index 4fc339c..329ba89 100644
 --- a/packages/i18n/src/locales/sk/common.json
 +++ b/packages/i18n/src/locales/sk/common.json
 @@ -244,7 +244,7 @@
@@ -209897,7 +210660,7 @@ index 4fc339c..edd8caa 100644
      "choose_view_logs_from_setup_sh_and_docker_logs_to_be_sure": "Vyberte View Logs z setup.sh a Docker logov, aby ste si boli istí."
    },
    "customize_navigation": "Prispôsobiť navigáciu",
-@@ -867,5 +867,435 @@
+@@ -867,5 +867,448 @@
        "description": "Exportujte položky do JSON.",
        "short_description": "Exportovať ako JSON"
      }
@@ -210330,7 +211093,20 @@ index 4fc339c..edd8caa 100644
 +    "toolbar_format": "Formátovanie",
 +    "toolbar_emoji": "Emoji",
 +    "toolbar_mention": "Spomenúť niekoho",
-+    "send": "Odoslať"
++    "send": "Odoslať",
++    "toolbar_attach": "Priložiť",
++    "attach_file": "Nahrať súbor",
++    "link_document": "Pripojiť dokument",
++    "search_documents": "Hľadať dokumenty…",
++    "no_documents": "Nenašli sa žiadne dokumenty.",
++    "section_wiki": "Wiki",
++    "section_documents": "Dokumenty",
++    "section_project_pages": "Stránky projektu",
++    "section_project_documents": "Dokumenty projektu",
++    "remove_attachment": "Odstrániť",
++    "attachment_error": "Nahrávanie zlyhalo",
++    "attachment_failed": "Súbor {name} sa nepodarilo nahrať",
++    "attachment_too_large": "{name} prekračuje limit veľkosti"
    }
  }
 diff --git a/packages/i18n/src/locales/sk/empty-state.json b/packages/i18n/src/locales/sk/empty-state.json
@@ -211022,7 +211798,7 @@ index 5d44f94..bd09842 100644
        "fixed_schedule": "Sabit zamanlama",
        "schedule": {
 diff --git a/packages/i18n/src/locales/tr-TR/common.json b/packages/i18n/src/locales/tr-TR/common.json
-index 74bd5cb..35a65e6 100644
+index 74bd5cb..b0495f2 100644
 --- a/packages/i18n/src/locales/tr-TR/common.json
 +++ b/packages/i18n/src/locales/tr-TR/common.json
 @@ -244,7 +244,7 @@
@@ -211052,7 +211828,7 @@ index 74bd5cb..35a65e6 100644
    "in_app": "Uygulama İçi",
    "forms": "Formlar",
    "milestones": "Kilometre taşları",
-@@ -867,5 +867,435 @@
+@@ -867,5 +867,448 @@
        "description": "İş öğelerini JSON dosyasına aktarın.",
        "short_description": "JSON olarak aktar"
      }
@@ -211485,7 +212261,20 @@ index 74bd5cb..35a65e6 100644
 +    "toolbar_format": "Biçimlendirme",
 +    "toolbar_emoji": "Emoji",
 +    "toolbar_mention": "Birinden bahsedin",
-+    "send": "Gönder"
++    "send": "Gönder",
++    "toolbar_attach": "Ekle",
++    "attach_file": "Dosya yükleyin",
++    "link_document": "Belge bağlayın",
++    "search_documents": "Belgelerde arayın…",
++    "no_documents": "Belge bulunamadı.",
++    "section_wiki": "Wiki",
++    "section_documents": "Belgeler",
++    "section_project_pages": "Proje sayfaları",
++    "section_project_documents": "Proje belgeleri",
++    "remove_attachment": "Kaldırın",
++    "attachment_error": "Yükleme başarısız oldu",
++    "attachment_failed": "{name} yüklenemedi",
++    "attachment_too_large": "{name} boyut sınırını aşıyor"
    }
  }
 diff --git a/packages/i18n/src/locales/tr-TR/empty-state.json b/packages/i18n/src/locales/tr-TR/empty-state.json
@@ -212209,7 +212998,7 @@ index 25a1f98..64286c8 100644
        "fixed_schedule": "Фіксований розклад",
        "schedule": {
 diff --git a/packages/i18n/src/locales/ua/common.json b/packages/i18n/src/locales/ua/common.json
-index 89bd906..87a1806 100644
+index 89bd906..06a8c07 100644
 --- a/packages/i18n/src/locales/ua/common.json
 +++ b/packages/i18n/src/locales/ua/common.json
 @@ -244,7 +244,7 @@
@@ -212230,7 +213019,7 @@ index 89bd906..87a1806 100644
      "choose_view_logs_from_setup_sh_and_docker_logs_to_be_sure": "Виберіть View Logs з setup.sh та логів Docker, щоб переконатися."
    },
    "customize_navigation": "Налаштувати навігацію",
-@@ -867,5 +867,435 @@
+@@ -867,5 +867,448 @@
        "description": "Експортуйте одиниці у формат JSON.",
        "short_description": "Експортувати як JSON"
      }
@@ -212663,7 +213452,20 @@ index 89bd906..87a1806 100644
 +    "toolbar_format": "Форматування",
 +    "toolbar_emoji": "Емодзі",
 +    "toolbar_mention": "Згадати учасника",
-+    "send": "Надіслати"
++    "send": "Надіслати",
++    "toolbar_attach": "Прикріпити",
++    "attach_file": "Завантажити файл",
++    "link_document": "Пов'язати документ",
++    "search_documents": "Пошук документів…",
++    "no_documents": "Документи не знайдено.",
++    "section_wiki": "Wiki",
++    "section_documents": "Документи",
++    "section_project_pages": "Сторінки проєкту",
++    "section_project_documents": "Документи проєкту",
++    "remove_attachment": "Прибрати",
++    "attachment_error": "Не вдалося завантажити",
++    "attachment_failed": "Не вдалося завантажити {name}",
++    "attachment_too_large": "{name} перевищує обмеження розміру"
    }
  }
 diff --git a/packages/i18n/src/locales/ua/empty-state.json b/packages/i18n/src/locales/ua/empty-state.json
@@ -213218,7 +214020,7 @@ index 8dec0fb..fd3adb2 100644
        "fixed_schedule": "Lịch trình cố định",
        "schedule": {
 diff --git a/packages/i18n/src/locales/vi-VN/common.json b/packages/i18n/src/locales/vi-VN/common.json
-index f9aae43..ca8e66b 100644
+index f9aae43..969c489 100644
 --- a/packages/i18n/src/locales/vi-VN/common.json
 +++ b/packages/i18n/src/locales/vi-VN/common.json
 @@ -244,7 +244,7 @@
@@ -213248,7 +214050,7 @@ index f9aae43..ca8e66b 100644
    "in_app": "Trong ứng dụng",
    "forms": "Biểu mẫu",
    "milestones": "Cột mốc",
-@@ -867,5 +867,435 @@
+@@ -867,5 +867,448 @@
        "description": "Xuất mục công việc thành tệp JSON.",
        "short_description": "Xuất sang JSON"
      }
@@ -213681,7 +214483,20 @@ index f9aae43..ca8e66b 100644
 +    "toolbar_format": "Định dạng",
 +    "toolbar_emoji": "Biểu tượng cảm xúc",
 +    "toolbar_mention": "Nhắc đến ai đó",
-+    "send": "Gửi"
++    "send": "Gửi",
++    "toolbar_attach": "Đính kèm",
++    "attach_file": "Tải lên tệp",
++    "link_document": "Liên kết tài liệu",
++    "search_documents": "Tìm kiếm tài liệu…",
++    "no_documents": "Không tìm thấy tài liệu nào.",
++    "section_wiki": "Wiki",
++    "section_documents": "Tài liệu",
++    "section_project_pages": "Trang của dự án",
++    "section_project_documents": "Tài liệu của dự án",
++    "remove_attachment": "Xóa",
++    "attachment_error": "Tải lên thất bại",
++    "attachment_failed": "Không thể tải lên {name}",
++    "attachment_too_large": "{name} vượt quá giới hạn dung lượng"
    }
  }
 diff --git a/packages/i18n/src/locales/vi-VN/empty-state.json b/packages/i18n/src/locales/vi-VN/empty-state.json
@@ -214438,7 +215253,7 @@ index 3f057bd..9322b6f 100644
        "fixed_schedule": "固定计划",
        "schedule": {
 diff --git a/packages/i18n/src/locales/zh-CN/common.json b/packages/i18n/src/locales/zh-CN/common.json
-index dd67d92..1fa6652 100644
+index dd67d92..e574156 100644
 --- a/packages/i18n/src/locales/zh-CN/common.json
 +++ b/packages/i18n/src/locales/zh-CN/common.json
 @@ -820,7 +820,7 @@
@@ -214450,7 +215265,7 @@ index dd67d92..1fa6652 100644
      "choose_view_logs_from_setup_sh_and_docker_logs_to_be_sure": "请选择“查看日志”来查看 setup.sh 和 Docker 日志，以确认问题。"
    },
    "customize_navigation": "自定义导航",
-@@ -867,5 +867,435 @@
+@@ -867,5 +867,448 @@
        "description": "将工作项导出为 JSON 文件。",
        "short_description": "导出为 JSON"
      }
@@ -214883,7 +215698,20 @@ index dd67d92..1fa6652 100644
 +    "toolbar_format": "格式",
 +    "toolbar_emoji": "表情符号",
 +    "toolbar_mention": "提及某人",
-+    "send": "发送"
++    "send": "发送",
++    "toolbar_attach": "附件",
++    "attach_file": "上传文件",
++    "link_document": "链接文档",
++    "search_documents": "搜索文档…",
++    "no_documents": "未找到文档。",
++    "section_wiki": "Wiki",
++    "section_documents": "文档",
++    "section_project_pages": "项目页面",
++    "section_project_documents": "项目文档",
++    "remove_attachment": "移除",
++    "attachment_error": "上传失败",
++    "attachment_failed": "无法上传 {name}",
++    "attachment_too_large": "{name} 超出大小限制"
    }
  }
 diff --git a/packages/i18n/src/locales/zh-CN/empty-state.json b/packages/i18n/src/locales/zh-CN/empty-state.json
@@ -215491,7 +216319,7 @@ index 27b9a4b..c71e752 100644
        "fixed_schedule": "固定排程",
        "schedule": {
 diff --git a/packages/i18n/src/locales/zh-TW/common.json b/packages/i18n/src/locales/zh-TW/common.json
-index 834a2d9..3455e62 100644
+index 834a2d9..ecdb10e 100644
 --- a/packages/i18n/src/locales/zh-TW/common.json
 +++ b/packages/i18n/src/locales/zh-TW/common.json
 @@ -244,7 +244,7 @@
@@ -215512,7 +216340,7 @@ index 834a2d9..3455e62 100644
      "choose_view_logs_from_setup_sh_and_docker_logs_to_be_sure": "從 setup.sh 和 Docker 日誌中選擇 View Logs 來確認。"
    },
    "customize_navigation": "自訂導覽",
-@@ -867,5 +867,435 @@
+@@ -867,5 +867,448 @@
        "description": "將工作事項匯出為 JSON 檔案。",
        "short_description": "匯出為 JSON"
      }
@@ -215945,7 +216773,20 @@ index 834a2d9..3455e62 100644
 +    "toolbar_format": "格式",
 +    "toolbar_emoji": "表情符號",
 +    "toolbar_mention": "提及某人",
-+    "send": "傳送"
++    "send": "傳送",
++    "toolbar_attach": "附件",
++    "attach_file": "上傳檔案",
++    "link_document": "連結文件",
++    "search_documents": "搜尋文件…",
++    "no_documents": "找不到文件。",
++    "section_wiki": "Wiki",
++    "section_documents": "文件",
++    "section_project_pages": "專案頁面",
++    "section_project_documents": "專案文件",
++    "remove_attachment": "移除",
++    "attachment_error": "上傳失敗",
++    "attachment_failed": "無法上傳 {name}",
++    "attachment_too_large": "{name} 超出大小限制"
    }
  }
 diff --git a/packages/i18n/src/locales/zh-TW/empty-state.json b/packages/i18n/src/locales/zh-TW/empty-state.json
