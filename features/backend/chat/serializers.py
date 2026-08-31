@@ -11,6 +11,14 @@ class ChannelSerializer(serializers.ModelSerializer):
     unread_count = serializers.IntegerField(read_only=True, required=False)
     last_message_at = serializers.DateTimeField(read_only=True, required=False)
     is_muted = serializers.BooleanField(read_only=True, required=False)
+    member_ids = serializers.SerializerMethodField()
+
+    def get_member_ids(self, obj):
+        # Only explicit rosters matter (private/DM); public membership is
+        # implicit and would be the whole workspace.
+        if not obj.is_direct and obj.access != 1:
+            return None
+        return [str(u) for u in obj.members.values_list("member_id", flat=True)]
 
     class Meta:
         model = Channel
@@ -22,6 +30,8 @@ class ChannelSerializer(serializers.ModelSerializer):
             "description",
             "is_general",
             "access",
+            "is_direct",
+            "member_ids",
             "archived_at",
             "unread_count",
             "last_message_at",
@@ -36,6 +46,7 @@ class ChannelSerializer(serializers.ModelSerializer):
             "project",
             "is_general",
             "access",
+            "is_direct",
             "created_by",
             "created_at",
             "updated_at",
@@ -63,6 +74,8 @@ class MessageSerializer(serializers.ModelSerializer):
             "message_stripped",
             "edited_at",
             "is_removed",
+            "pinned_at",
+            "pinned_by",
             "reactions",
             "work_item_links",
             "reply_count",

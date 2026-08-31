@@ -6,9 +6,9 @@ producto de chat aparte** (Mattermost rebrandeado para reventa, repos `chat-*`
 en Sintergica-AI): esto es una feature interna de Tequio; a mediano plazo
 sustituye a Mattermost para uso interno de Sintérgica.
 
-Estado: F1 (backend REST) desplegada y verificada 32/32 (`verify10.py`).
-F2 (frontend con polling) y F3 (tiempo real vía servidor live) — código
-completo; despliegue documentado abajo.
+Estado: F1-F4 + v2 desplegadas y verificadas (verify10 32/32, verify11 9/9,
+verify12 26/26, E2E WS con cliente Hocuspocus real). Migraciones: chat.0001 y
+chat.0002 (ambas generadas dentro de la imagen, dependencia fijada a db.0122).
 
 ## Alcance v1
 
@@ -18,7 +18,50 @@ completo; despliegue documentado abajo.
 - Reacciones emoji (código decimal `128077`, patrón `CommentReaction`)
 - Vincular work items a mensajes (chips) y crear work item desde un mensaje
 - Tiempo real por websocket con **fallback a polling** transparente
-- Fuera de v1: DMs, adjuntos, canales privados (campo `access` reservado)
+- Silenciar canales (F4): `is_muted` por usuario; suprime el badge, no el conteo
+- Notificación de mención renderizada (F4): card propio — el NotificationItem
+  de fábrica devuelve `<></>` para cualquier notificación sin
+  `data.issue_activity.field`, así que sin el branch `entity_name ===
+  "chat_message"` las menciones de chat se crean pero JAMÁS se ven
+- Badges en vivo (F4): documento workspace-wide `chat:workspace:<workspace_id>`
+  — Django emite `channel.activity` (ligero, sin cuerpo) en cada mensaje raíz;
+  el live lo autoriza con la sonda barata `GET /chat/me/` (membresía de
+  workspace, no de canal). El punto del sidebar usa el único polling fuera del
+  chat: unreads cada 60 s vía `useChatUnreadIndicator`
+
+## v2 (misma ronda, 30 Ago 2026)
+
+- **DMs** (1:1 y grupales hasta 9): `is_direct` + `dm_key` (sha256 de los ids
+  ordenados, único por workspace) — reabrir con la misma gente devuelve el
+  mismo canal. Sin nombre; el cliente pinta los nombres de los demás. Roster
+  inmutable, sin PATCH/DELETE del canal.
+- **Canales privados**: `access=1`; las filas de `ChannelMember` pasan a ser
+  LA autorización (en públicos siguen siendo solo estado). `channel_queryset`
+  ahora une públicos-visibles + member_of, con `distinct()` — y por ese join
+  los `Count` de mensajes llevan `distinct=True` o se multiplican por
+  miembro. Roster: GET/POST/DELETE `channels/<id>/members/`; cualquier
+  miembro invita; salir = borrarse a sí mismo. Las menciones a no-miembros de
+  un privado NO notifican (no filtrar sería filtrar la conversación).
+- **Pins**: `pinned_at`/`pinned_by` en el mensaje; POST/DELETE `…/pin/`,
+  GET `channels/<id>/pins/`; difunde `message.updated`.
+- **Búsqueda**: GET `/chat/search/?q=` (icontains sobre `message_stripped`,
+  máx 50, siempre a través de `channel_queryset` — la privacidad de búsqueda
+  se verifica en verify12).
+- **Adjuntos**: flujo presign del drive con `entity_type="CHAT"` y
+  `attributes.channel_id`; el editor sube vía `uploadFile` del composer y el
+  asset id viaja DENTRO del `message_html` (image-component). El GET genérico
+  `/api/assets/v2/workspaces/<slug>/<id>/` los sirve (solo valida workspace +
+  proyecto — los privados quedan protegidos por UUID + membresía de
+  workspace, mismo compromiso que Slack). Límite 25MB.
+- **Presencia**: `onlineUsers` del awareness en el header de la sala (punto
+  verde + tooltip).
+- **Línea "mensajes nuevos"**: `lastSeenAt` se captura ANTES de `markRead`
+  (GET membership en `fetchInitialMessages`) y ancla el divisor + botón de
+  salto.
+- **Gestión de canal en UI**: modal de ajustes (renombrar/descripción/
+  archivar/eliminar con confirmación); #general protegido (server y UI).
+- Fuera de v2: hilos de búsqueda con salto al mensaje exacto, notificaciones
+  de escritorio, GIFs/link previews.
 
 ## Arquitectura
 
@@ -107,7 +150,9 @@ typing/presencia por awareness con TTL de 5 s. Polling (10 s canal activo,
 ## Live (`features/live/`)
 
 `patch_live_features.py` añade: documentType `"channel"`, early-returns en
-`database.ts` (fetch = gate de autorización + `Uint8Array(0)`; store = no-op),
+`database.ts` (fetch = gate de autorización y devuelve `null` — un
+`Uint8Array(0)` NO es un update Yjs válido: lib0 lanza "Unexpected end of
+array" y el cliente cae con un permission-denied engañoso; store = no-op),
 guard en `title-sync.ts`, y registra `chat.controller.ts`
 (`POST /broadcast`, protegido con `live-server-secret-key`, fan-out por la
 extensión Redis con fallback local). Los patches **encadenan sobre las cadenas

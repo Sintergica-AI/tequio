@@ -100,12 +100,42 @@ def _parse_cursor(raw):
         return None
 
 
+def _valid_channel_invitees(slug, project_id, member_ids):
+    """User ids from member_ids that may actually join: active workspace
+    members, and for a project channel, active members of that project."""
+    from plane.db.models import WorkspaceMember
+
+    qs = WorkspaceMember.objects.filter(
+        workspace__slug=slug, member_id__in=member_ids, is_active=True
+    ).values_list("member_id", flat=True)
+    allowed = set(str(u) for u in qs)
+    if project_id:
+        in_project = set(
+            str(u)
+            for u in ProjectMember.objects.filter(
+                project_id=project_id, member_id__in=allowed, is_active=True
+            ).values_list("member_id", flat=True)
+        )
+        allowed &= in_project
+    return allowed
+
+
 def _can_manage_channel(request, slug, channel):
     if is_workspace_admin(request.user, slug):
         return True
     if channel.project_id and is_project_admin(request.user, channel.project_id):
         return True
     return channel.created_by_id == request.user.id
+
+
+class ChatMeEndpoint(BaseAPIView):
+    """Cheap 200-if-member probe. The live server calls it with the user's
+    cookie to authorize the workspace-wide badge document (chat:workspace:*),
+    where per-channel membership does not apply."""
+
+    @allow_chat
+    def get(self, request, slug):
+        return Response({}, status=status.HTTP_200_OK)
 
 
 class ChatChannelsEndpoint(BaseAPIView):
@@ -150,6 +180,7 @@ class ChatChannelsEndpoint(BaseAPIView):
             .annotate(
                 unread_count=Count(
                     "messages",
+                    distinct=True,  # the members join can duplicate rows
                     filter=live_root
                     & ~Q(messages__actor=request.user)
                     & (
@@ -204,6 +235,8 @@ class ChatChannelsEndpoint(BaseAPIView):
                     status=status.HTTP_403_FORBIDDEN,
                 )
 
+        access = 1 if request.data.get("access") in (1, "1", True) else 0
+
         workspace = get_workspace(slug)
         duplicate = Channel.objects.filter(
             workspace=workspace, project_id=project_id, name__iexact=name
@@ -216,9 +249,31 @@ class ChatChannelsEndpoint(BaseAPIView):
                 project_id=project_id,
                 name=name,
                 description=(request.data.get("description") or "").strip(),
+                access=access,
             )
         except IntegrityError:
             return _bad_request("A channel with that name already exists.")
+        if access == 1:
+            # The creator plus any valid invitees become the member set — for a
+            # private channel those rows ARE the authorization.
+            member_ids = {str(request.user.id)}
+            for mid in request.data.get("member_ids") or []:
+                member_ids.add(str(mid))
+            valid = set(
+                str(u)
+                for u in _valid_channel_invitees(slug, project_id, member_ids)
+            )
+            ChannelMember.objects.bulk_create(
+                [
+                    ChannelMember(
+                        channel=channel,
+                        member_id=mid,
+                        workspace_id=channel.workspace_id,
+                        created_by=request.user,
+                    )
+                    for mid in valid | {str(request.user.id)}
+                ]
+            )
         return Response(
             ChannelSerializer(channel).data, status=status.HTTP_201_CREATED
         )
@@ -237,6 +292,8 @@ class ChatChannelDetailEndpoint(BaseAPIView):
         channel = _get_channel(request, slug, channel_id)
         if channel is None:
             return _not_found()
+        if channel.is_direct:
+            return _bad_request("Direct messages cannot be edited.")
         if not _can_manage_channel(request, slug, channel):
             return Response(
                 {"error": "You cannot manage this channel."},
@@ -281,6 +338,8 @@ class ChatChannelDetailEndpoint(BaseAPIView):
         channel = _get_channel(request, slug, channel_id)
         if channel is None:
             return _not_found()
+        if channel.is_direct:
+            return _bad_request("Direct messages cannot be deleted.")
         if not _can_manage_channel(request, slug, channel):
             return Response(
                 {"error": "You cannot manage this channel."},
@@ -677,10 +736,14 @@ class ChatUnreadsEndpoint(BaseAPIView):
         qs = (
             channel_queryset(request.user, slug)
             .filter(archived_at__isnull=True)
-            .annotate(last_read=Subquery(member_rows.values("last_read_at")[:1]))
+            .annotate(
+                last_read=Subquery(member_rows.values("last_read_at")[:1]),
+                is_muted=Subquery(member_rows.values("is_muted")[:1]),
+            )
             .annotate(
                 unread_count=Count(
                     "messages",
+                    distinct=True,  # the members join can duplicate rows
                     filter=live_root
                     & ~Q(messages__actor=request.user)
                     & (
@@ -692,7 +755,7 @@ class ChatUnreadsEndpoint(BaseAPIView):
                     "messages__created_at", filter=Q(messages__deleted_at__isnull=True)
                 ),
             )
-            .values("id", "unread_count", "last_message_at")
+            .values("id", "unread_count", "last_message_at", "is_muted")
         )
         return Response(
             [
@@ -700,6 +763,7 @@ class ChatUnreadsEndpoint(BaseAPIView):
                     "channel_id": str(row["id"]),
                     "unread_count": row["unread_count"],
                     "last_message_at": row["last_message_at"],
+                    "is_muted": bool(row["is_muted"]),
                 }
                 for row in qs
             ],
@@ -749,3 +813,226 @@ class ChatWorkItemLinksEndpoint(BaseAPIView):
             return _not_found()
         link.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class ChatDMsEndpoint(BaseAPIView):
+    """Direct messages. POST opens (or reuses) the conversation with the given
+    member set — the sha256 dm_key of the sorted ids makes it canonical."""
+
+    use_read_replica = False
+
+    @allow_chat
+    def post(self, request, slug):
+        import hashlib
+
+        raw_ids = request.data.get("member_ids") or []
+        member_ids = {str(m) for m in raw_ids} | {str(request.user.id)}
+        if len(member_ids) < 2:
+            return _bad_request("Pick at least one other person.")
+        if len(member_ids) > 9:
+            return _bad_request("Direct messages support up to 9 people.")
+        valid = _valid_channel_invitees(slug, None, member_ids)
+        # Every requested person must be a real workspace member — a DM with
+        # silently-dropped participants would be worse than an error.
+        if valid | {str(request.user.id)} != member_ids:
+            return _bad_request("Some of those people are not workspace members.")
+
+        dm_key = hashlib.sha256("-".join(sorted(member_ids)).encode()).hexdigest()
+        workspace = get_workspace(slug)
+        channel = Channel.objects.filter(workspace=workspace, dm_key=dm_key).first()
+        if channel is None:
+            try:
+                channel = Channel.objects.create(
+                    workspace=workspace,
+                    project=None,
+                    name="",
+                    access=1,
+                    is_direct=True,
+                    dm_key=dm_key,
+                )
+                ChannelMember.objects.bulk_create(
+                    [
+                        ChannelMember(
+                            channel=channel,
+                            member_id=mid,
+                            workspace_id=channel.workspace_id,
+                            created_by=request.user,
+                        )
+                        for mid in member_ids
+                    ]
+                )
+            except IntegrityError:
+                channel = Channel.objects.filter(workspace=workspace, dm_key=dm_key).first()
+                if channel is None:
+                    raise
+        return Response(ChannelSerializer(channel).data, status=status.HTTP_201_CREATED)
+
+
+class ChatChannelMembersEndpoint(BaseAPIView):
+    """Explicit member roster — meaningful for private channels and DMs.
+    Any current member can invite; DM rosters are immutable."""
+
+    use_read_replica = False
+
+    @allow_chat
+    def get(self, request, slug, channel_id):
+        channel = _get_channel(request, slug, channel_id)
+        if channel is None:
+            return _not_found()
+        rows = (
+            ChannelMember.objects.filter(channel=channel)
+            .select_related("member")
+            .order_by("created_at")
+        )
+        from plane.app.serializers.user import UserLiteSerializer
+
+        return Response(
+            [
+                {
+                    "member": UserLiteSerializer(row.member).data,
+                    "joined_at": row.created_at,
+                }
+                for row in rows
+            ],
+            status=status.HTTP_200_OK,
+        )
+
+    @allow_chat
+    def post(self, request, slug, channel_id):
+        channel = _get_channel(request, slug, channel_id)
+        if channel is None:
+            return _not_found()
+        if channel.is_direct:
+            return _bad_request("The people in a direct message cannot change.")
+        if channel.access != 1:
+            return _bad_request("Public channels have no explicit member list.")
+        member_ids = {str(m) for m in request.data.get("member_ids") or []}
+        valid = _valid_channel_invitees(slug, channel.project_id, member_ids)
+        existing = set(
+            str(u)
+            for u in ChannelMember.objects.filter(
+                channel=channel, member_id__in=valid
+            ).values_list("member_id", flat=True)
+        )
+        ChannelMember.objects.bulk_create(
+            [
+                ChannelMember(
+                    channel=channel,
+                    member_id=mid,
+                    workspace_id=channel.workspace_id,
+                    created_by=request.user,
+                )
+                for mid in valid - existing
+            ]
+        )
+        return Response({"added": sorted(valid - existing)}, status=status.HTTP_200_OK)
+
+    @allow_chat
+    def delete(self, request, slug, channel_id, member_id):
+        channel = _get_channel(request, slug, channel_id)
+        if channel is None:
+            return _not_found()
+        if channel.is_direct:
+            return _bad_request("You cannot leave a direct message.")
+        if channel.access != 1:
+            return _bad_request("Public channels have no explicit member list.")
+        is_self = str(member_id) == str(request.user.id)
+        if not is_self and not _can_manage_channel(request, slug, channel):
+            return Response(
+                {"error": "You cannot remove other people."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        row = ChannelMember.objects.filter(channel=channel, member_id=member_id).first()
+        if row is None:
+            return _not_found()
+        row.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class ChatPinEndpoint(BaseAPIView):
+    use_read_replica = False
+
+    @allow_chat
+    def post(self, request, slug, channel_id, message_id):
+        channel = _get_channel(request, slug, channel_id)
+        if channel is None:
+            return _not_found()
+        message = ChatMessage.objects.filter(channel=channel, pk=message_id).first()
+        if message is None or message.is_removed:
+            return _not_found()
+        message.pinned_at = timezone.now()
+        message.pinned_by = request.user
+        message.save()
+        chat_event_task.delay(
+            {"event": "message.updated", "channel_id": str(channel.id), "message_id": str(message.id)}
+        )
+        row = _annotate_thread_meta(_live_messages(channel)).filter(pk=message.pk).first()
+        return Response(MessageSerializer(row).data, status=status.HTTP_200_OK)
+
+    @allow_chat
+    def delete(self, request, slug, channel_id, message_id):
+        channel = _get_channel(request, slug, channel_id)
+        if channel is None:
+            return _not_found()
+        message = ChatMessage.objects.filter(channel=channel, pk=message_id).first()
+        if message is None:
+            return _not_found()
+        message.pinned_at = None
+        message.pinned_by = None
+        message.save()
+        chat_event_task.delay(
+            {"event": "message.updated", "channel_id": str(channel.id), "message_id": str(message.id)}
+        )
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class ChatPinsEndpoint(BaseAPIView):
+    @allow_chat
+    def get(self, request, slug, channel_id):
+        channel = _get_channel(request, slug, channel_id)
+        if channel is None:
+            return _not_found()
+        rows = (
+            _annotate_thread_meta(_live_messages(channel))
+            .filter(pinned_at__isnull=False)
+            .order_by("-pinned_at")[:100]
+        )
+        return Response(MessageSerializer(rows, many=True).data, status=status.HTTP_200_OK)
+
+
+class ChatSearchEndpoint(BaseAPIView):
+    @allow_chat
+    def get(self, request, slug):
+        query = (request.GET.get("q") or "").strip()
+        if len(query) < 2:
+            return _bad_request("Query too short.")
+        visible = channel_queryset(request.user, slug)
+        channel_id = request.GET.get("channel_id")
+        if channel_id:
+            visible = visible.filter(pk=channel_id)
+        rows = (
+            ChatMessage.objects.filter(
+                channel__in=visible,
+                message_stripped__icontains=query,
+                is_removed=False,
+            )
+            .select_related("actor", "channel")
+            .order_by("-created_at")[:50]
+        )
+        return Response(
+            [
+                {
+                    "id": str(m.id),
+                    "channel_id": str(m.channel_id),
+                    "channel_name": m.channel.name,
+                    "channel_is_direct": m.channel.is_direct,
+                    "project_id": str(m.project_id) if m.project_id else None,
+                    "parent_id": str(m.parent_id) if m.parent_id else None,
+                    "actor_display_name": m.actor.display_name,
+                    "snippet": (m.message_stripped or "")[:200],
+                    "created_at": m.created_at,
+                }
+                for m in rows
+            ],
+            status=status.HTTP_200_OK,
+        )

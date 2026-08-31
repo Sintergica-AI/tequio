@@ -57,22 +57,30 @@ def is_project_admin(user, project_id):
     ).exists()
 
 
-def visible_channels_q(project_ids):
-    """Q for channels the user can see given their accessible projects."""
+def visible_channels_q(user, project_ids):
+    """Q for channels the user can see: public workspace channels, public
+    channels of accessible projects, and any private/DM channel where the
+    user has an explicit ChannelMember row (the row IS the authorization
+    there — unlike public channels, where rows are only per-user state)."""
     from django.db.models import Q
 
-    return Q(project__isnull=True) | Q(project_id__in=project_ids)
+    public = Q(access=0, is_direct=False) & (
+        Q(project__isnull=True) | Q(project_id__in=project_ids)
+    )
+    member_of = Q(members__member=user, members__deleted_at__isnull=True)
+    return public | member_of
 
 
 def channel_queryset(user, slug):
-    """Channels the user can see in this workspace: every workspace-level
-    channel plus the channels of projects within reach. Filtering through this
+    """Channels the user can see in this workspace. Filtering through this
     everywhere means an inaccessible channel 404s instead of 403ing — no
-    existence leak."""
+    existence leak. distinct(): the members join can duplicate rows."""
     from plane.chat.models import Channel
 
-    return Channel.objects.filter(workspace__slug=slug).filter(
-        visible_channels_q(accessible_project_ids(user, slug))
+    return (
+        Channel.objects.filter(workspace__slug=slug)
+        .filter(visible_channels_q(user, accessible_project_ids(user, slug)))
+        .distinct()
     )
 
 

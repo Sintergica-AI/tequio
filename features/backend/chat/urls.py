@@ -3,8 +3,15 @@
 
 from django.urls import path
 
+from plane.chat.assets import ChatAssetDetailEndpoint, ChatAssetsEndpoint
 from plane.chat.views import (
+    ChatChannelMembersEndpoint,
+    ChatDMsEndpoint,
+    ChatPinEndpoint,
+    ChatPinsEndpoint,
+    ChatSearchEndpoint,
     ChatChannelDetailEndpoint,
+    ChatMeEndpoint,
     ChatChannelMembershipEndpoint,
     ChatChannelsEndpoint,
     ChatMessageDetailEndpoint,
@@ -18,9 +25,54 @@ from plane.chat.views import (
 
 urlpatterns = [
     path(
+        "workspaces/<str:slug>/chat/me/",
+        ChatMeEndpoint.as_view(),
+        name="chat-me",
+    ),
+    path(
         "workspaces/<str:slug>/chat/channels/",
         ChatChannelsEndpoint.as_view(),
         name="chat-channels",
+    ),
+    path(
+        "workspaces/<str:slug>/chat/dms/",
+        ChatDMsEndpoint.as_view(),
+        name="chat-dms",
+    ),
+    path(
+        "workspaces/<str:slug>/chat/search/",
+        ChatSearchEndpoint.as_view(),
+        name="chat-search",
+    ),
+    path(
+        "workspaces/<str:slug>/chat/channels/<uuid:channel_id>/members/",
+        ChatChannelMembersEndpoint.as_view(),
+        name="chat-channel-members",
+    ),
+    path(
+        "workspaces/<str:slug>/chat/channels/<uuid:channel_id>/members/<uuid:member_id>/",
+        ChatChannelMembersEndpoint.as_view(),
+        name="chat-channel-member-detail",
+    ),
+    path(
+        "workspaces/<str:slug>/chat/channels/<uuid:channel_id>/pins/",
+        ChatPinsEndpoint.as_view(),
+        name="chat-channel-pins",
+    ),
+    path(
+        "workspaces/<str:slug>/chat/channels/<uuid:channel_id>/messages/<uuid:message_id>/pin/",
+        ChatPinEndpoint.as_view(),
+        name="chat-message-pin",
+    ),
+    path(
+        "workspaces/<str:slug>/chat/channels/<uuid:channel_id>/assets/",
+        ChatAssetsEndpoint.as_view(),
+        name="chat-channel-assets",
+    ),
+    path(
+        "workspaces/<str:slug>/chat/channels/<uuid:channel_id>/assets/<uuid:asset_id>/",
+        ChatAssetDetailEndpoint.as_view(),
+        name="chat-channel-asset-detail",
     ),
     path(
         "workspaces/<str:slug>/chat/unreads/",

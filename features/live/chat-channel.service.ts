@@ -37,6 +37,10 @@ class ChatChannelService extends APIService {
       { headers: this.getHeader() }
     );
   }
+
+  async assertWorkspaceMember(workspaceSlug: string): Promise<void> {
+    await this.get(`/api/workspaces/${workspaceSlug}/chat/me/`, {}, { headers: this.getHeader() });
+  }
 }
 
 type TChannelContext = {
@@ -51,6 +55,13 @@ export const assertChannelAccess = async (context: TChannelContext, documentName
   if (!context.cookie) throw new AppError("Cookie is required.");
   if (!context.workspaceSlug) throw new AppError("workspaceSlug is required.");
   const service = new ChatChannelService(context.cookie);
+  // The workspace-wide badge document ("chat:workspace:<id>") has no single
+  // channel to check — any active workspace member may subscribe, probed via
+  // the cheap /chat/me/ endpoint. Per-channel docs check real membership.
+  if (channelId.startsWith("workspace:")) {
+    await service.assertWorkspaceMember(context.workspaceSlug);
+    return;
+  }
   // AppError from the interceptor bubbles up and closes the connection.
   await service.assertMembership(context.workspaceSlug, channelId);
 };

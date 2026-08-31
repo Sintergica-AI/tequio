@@ -37,8 +37,7 @@ def new_mentions(new_html, old_html):
 def chat_message_notify_task(message_id, old_html):
     """Notify people newly mentioned in a chat message. old_html is None on
     create; on edit it holds the previous HTML so only fresh mentions fire."""
-    from plane.chat.models import ChatMessage
-    from plane.chat.permissions import visible_channels_q
+    from plane.chat.models import ChannelMember, ChatMessage
     from plane.db.models import ProjectMember, WorkspaceMember
 
     message = (
@@ -73,6 +72,15 @@ def chat_message_notify_task(message_id, old_html):
                 project_id=channel.project_id,
                 member_id__in=mention_ids,
                 is_active=True,
+            ).values_list("member_id", flat=True)
+        )
+    if channel.is_direct or channel.access == 1:
+        # Private rosters ARE the authorization: mentioning an outsider must
+        # not leak the conversation via a notification.
+        allowed &= set(
+            str(u)
+            for u in ChannelMember.objects.filter(
+                channel=channel, member_id__in=mention_ids
             ).values_list("member_id", flat=True)
         )
 
@@ -145,3 +153,23 @@ def chat_event_task(event):
     if kind in ("reaction.added", "reaction.removed"):
         payload["reaction"] = event.get("reaction")
     broadcast_channel_event(str(channel_id), payload)
+
+    # Light fan-out for unread badges: root messages only, no body.
+    if kind == "message.new" and payload.get("parent_id") is None:
+        from plane.chat.models import Channel
+        from plane.chat.realtime import broadcast_channel_event as _push
+
+        workspace_id = (
+            Channel.objects.filter(pk=channel_id).values_list("workspace_id", flat=True).first()
+        )
+        if workspace_id:
+            # broadcast_channel_event antepone "chat:" -> doc "chat:workspace:<id>"
+            _push(
+                f"workspace:{workspace_id}",
+                {
+                    "event": "channel.activity",
+                    "channel_id": str(channel_id),
+                    "actor_id": payload.get("actor_id"),
+                    "ts": payload["ts"],
+                },
+            )

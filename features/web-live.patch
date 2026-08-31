@@ -33513,10 +33513,10 @@ index c86b749..8807143 100644
        // in the yjs binary
 diff --git a/apps/live/src/services/chat-channel.service.ts b/apps/live/src/services/chat-channel.service.ts
 new file mode 100644
-index 0000000..d20fd5a
+index 0000000..05dc073
 --- /dev/null
 +++ b/apps/live/src/services/chat-channel.service.ts
-@@ -0,0 +1,56 @@
+@@ -0,0 +1,67 @@
 +/**
 + * Sintergica CE extension: chat-channel authorization for the live server.
 + *
@@ -33556,6 +33556,10 @@ index 0000000..d20fd5a
 +      { headers: this.getHeader() }
 +    );
 +  }
++
++  async assertWorkspaceMember(workspaceSlug: string): Promise<void> {
++    await this.get(`/api/workspaces/${workspaceSlug}/chat/me/`, {}, { headers: this.getHeader() });
++  }
 +}
 +
 +type TChannelContext = {
@@ -33570,6 +33574,13 @@ index 0000000..d20fd5a
 +  if (!context.cookie) throw new AppError("Cookie is required.");
 +  if (!context.workspaceSlug) throw new AppError("workspaceSlug is required.");
 +  const service = new ChatChannelService(context.cookie);
++  // The workspace-wide badge document ("chat:workspace:<id>") has no single
++  // channel to check — any active workspace member may subscribe, probed via
++  // the cheap /chat/me/ endpoint. Per-channel docs check real membership.
++  if (channelId.startsWith("workspace:")) {
++    await service.assertWorkspaceMember(context.workspaceSlug);
++    return;
++  }
 +  // AppError from the interceptor bubbles up and closes the connection.
 +  await service.assertMembership(context.workspaceSlug, channelId);
 +};
@@ -100860,10 +100871,10 @@ index b386030..df8c387 100644
            </div>
 diff --git a/apps/web/core/components/chat/channel-list.tsx b/apps/web/core/components/chat/channel-list.tsx
 new file mode 100644
-index 0000000..74fbb4f
+index 0000000..1539e8b
 --- /dev/null
 +++ b/apps/web/core/components/chat/channel-list.tsx
-@@ -0,0 +1,157 @@
+@@ -0,0 +1,236 @@
 +/**
 + * Sintergica CE extension: channel sidebar (workspace + project sections)
 + * with unread badges and the create-channel modal.
@@ -100871,16 +100882,21 @@ index 0000000..74fbb4f
 + */
 +
 +import { useState } from "react";
-+import { Hash, Plus } from "lucide-react";
++import { BellOff, Hash, Lock, MessageCircle, MoreHorizontal, Plus } from "lucide-react";
 +import { observer } from "mobx-react";
 +// plane imports
 +import { useTranslation } from "@plane/i18n";
 +import { Button } from "@plane/propel/button";
 +import { TOAST_TYPE, setToast } from "@plane/propel/toast";
-+import { EModalPosition, EModalWidth, Input, ModalCore } from "@plane/ui";
++import { CustomMenu, EModalPosition, EModalWidth, Input, ModalCore } from "@plane/ui";
 +import { cn } from "@plane/utils";
 +// hooks
 +import { useChat } from "@/hooks/store/use-chat";
++import { useMember } from "@/hooks/store/use-member";
++import { useUser } from "@/hooks/store/user";
++// local imports
++import { NewDMModal } from "./new-dm-modal";
++import { ChatMemberMultiSelect } from "./member-multi-select";
 +// services
 +import type { TChatChannel } from "@/services/chat.service";
 +
@@ -100895,11 +100911,22 @@ index 0000000..74fbb4f
 +  const { workspaceSlug, projectId, activeChannelId, onSelect } = props;
 +  // states
 +  const [isCreateOpen, setIsCreateOpen] = useState(false);
++  const [isDMOpen, setIsDMOpen] = useState(false);
 +  const [name, setName] = useState("");
++  const [isPrivate, setIsPrivate] = useState(false);
++  const [inviteIds, setInviteIds] = useState<string[]>([]);
 +  const [isSubmitting, setIsSubmitting] = useState(false);
 +  // store hooks
 +  const chat = useChat();
++  const { getUserDetails } = useMember();
++  const { data: currentUser } = useUser();
 +  const { t } = useTranslation();
++
++  const dmDisplayName = (memberIds: string[] | null) => {
++    const others = (memberIds ?? []).filter((id) => id !== currentUser?.id);
++    const names = others.map((id) => getUserDetails(id)?.display_name ?? "?");
++    return names.length ? names.join(", ") : t("chat.direct_message");
++  };
 +  // derived values: in project view only that project's channels; in the
 +  // workspace view, workspace channels first, then per-project ones we know.
 +  const workspaceChannels = projectId ? [] : chat.channelsForWorkspace(workspaceSlug);
@@ -100917,9 +100944,12 @@ index 0000000..74fbb4f
 +      const channel = await chat.createChannel(workspaceSlug, {
 +        name: trimmed,
 +        project_id: projectId,
++        ...(isPrivate ? { access: 1, member_ids: inviteIds } : {}),
 +      });
 +      setIsCreateOpen(false);
 +      setName("");
++      setIsPrivate(false);
++      setInviteIds([]);
 +      onSelect(channel);
 +    } catch (error: unknown) {
 +      setToast({
@@ -100933,27 +100963,56 @@ index 0000000..74fbb4f
 +  };
 +
 +  const renderChannel = (channel: TChatChannel) => {
-+    const unread = chat.unreads[channel.id] ?? 0;
++    const isMuted = !!channel.is_muted;
++    const unread = isMuted ? 0 : (chat.unreads[channel.id] ?? 0);
 +    const isActive = channel.id === activeChannelId;
 +    return (
-+      <button
++      // div, not button: the row hosts the CustomMenu trigger (a button) and
++      // nesting buttons is invalid HTML.
++      <div
 +        key={channel.id}
-+        type="button"
++        role="button"
++        tabIndex={0}
 +        onClick={() => onSelect(channel)}
++        onKeyDown={(e) => e.key === "Enter" && onSelect(channel)}
 +        className={cn(
-+          "flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm",
++          "group/row flex w-full cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-sm",
 +          isActive ? "bg-layer-1 font-medium" : "text-secondary hover:bg-surface-2",
-+          unread > 0 && !isActive && "font-semibold text-primary"
++          unread > 0 && !isActive && "font-semibold text-primary",
++          isMuted && "opacity-60"
 +        )}
 +      >
-+        <Hash className="size-3.5 shrink-0 text-tertiary" />
-+        <span className="min-w-0 flex-1 truncate text-left">{channel.name}</span>
++        {channel.access === 1 && !channel.is_direct ? (
++          <Lock className="size-3.5 shrink-0 text-tertiary" />
++        ) : channel.is_direct ? (
++          <MessageCircle className="size-3.5 shrink-0 text-tertiary" />
++        ) : (
++          <Hash className="size-3.5 shrink-0 text-tertiary" />
++        )}
++        <span className="min-w-0 flex-1 truncate text-left">
++          {channel.is_direct ? dmDisplayName(channel.member_ids) : channel.name}
++        </span>
++        {isMuted && <BellOff className="size-3 shrink-0 text-tertiary" />}
 +        {unread > 0 && !isActive && (
 +          <span className="grid min-w-5 place-items-center rounded-full bg-accent-primary px-1 text-[10px] font-semibold text-white">
 +            {unread > 99 ? "99+" : unread}
 +          </span>
 +        )}
-+      </button>
++        <span className="hidden group-hover/row:block" onClick={(e) => e.stopPropagation()}>
++          <CustomMenu
++            customButton={<MoreHorizontal className="size-3.5 text-tertiary" />}
++            placement="bottom-end"
++            closeOnSelect
++          >
++            <CustomMenu.MenuItem onClick={() => void chat.toggleMute(workspaceSlug, channel.id)}>
++              <span className="flex items-center gap-2">
++                <BellOff className="size-3.5" />
++                {isMuted ? t("chat.unmute") : t("chat.mute")}
++              </span>
++            </CustomMenu.MenuItem>
++          </CustomMenu>
++        </span>
++      </div>
 +    );
 +  };
 +
@@ -100970,6 +101029,24 @@ index 0000000..74fbb4f
 +        </button>
 +      </div>
 +      <div className="flex-1 space-y-4 overflow-y-auto px-2 pb-4">
++        {!projectId && (
++          <div>
++            <div className="flex items-center justify-between px-2 pb-1">
++              <p className="text-[11px] font-medium uppercase text-tertiary">{t("chat.dms_section")}</p>
++              <button
++                type="button"
++                className="rounded p-0.5 text-tertiary hover:bg-layer-1 hover:text-primary"
++                onClick={() => setIsDMOpen(true)}
++              >
++                <Plus className="size-3.5" />
++              </button>
++            </div>
++            {chat.dmChannels().map(renderChannel)}
++            {chat.dmChannels().length === 0 && (
++              <p className="px-2 text-xs text-tertiary">{t("chat.no_dms")}</p>
++            )}
++          </div>
++        )}
 +        {!projectId && workspaceChannels.length > 0 && (
 +          <div>
 +            <p className="px-2 pb-1 text-[11px] font-medium uppercase text-tertiary">{t("chat.workspace_section")}</p>
@@ -101008,6 +101085,12 @@ index 0000000..74fbb4f
 +            className="w-full"
 +            autoFocus
 +          />
++          <label className="flex cursor-pointer items-center gap-2 text-sm">
++            <input type="checkbox" checked={isPrivate} onChange={(e) => setIsPrivate(e.target.checked)} />
++            <Lock className="size-3.5 text-tertiary" />
++            {t("chat.private_channel")}
++          </label>
++          {isPrivate && <ChatMemberMultiSelect selected={inviteIds} onChange={setInviteIds} />}
 +          <div className="flex justify-end gap-2">
 +            <Button variant="secondary" size="sm" type="button" onClick={() => setIsCreateOpen(false)}>
 +              {t("cancel")}
@@ -101018,15 +101101,407 @@ index 0000000..74fbb4f
 +          </div>
 +        </form>
 +      </ModalCore>
++
++      <NewDMModal
++        workspaceSlug={workspaceSlug}
++        isOpen={isDMOpen}
++        onClose={() => setIsDMOpen(false)}
++        onCreated={(channel) => onSelect(channel)}
++      />
 +    </div>
++  );
++});
+diff --git a/apps/web/core/components/chat/channel-members-modal.tsx b/apps/web/core/components/chat/channel-members-modal.tsx
+new file mode 100644
+index 0000000..099432e
+--- /dev/null
++++ b/apps/web/core/components/chat/channel-members-modal.tsx
+@@ -0,0 +1,137 @@
++/**
++ * Sintergica CE extension: roster of a private channel or DM — list, invite,
++ * remove/leave. DM rosters are immutable (server-enforced too).
++ * Derived from Plane CE code (AGPL-3.0-only).
++ */
++
++import { useEffect, useState } from "react";
++import { UserMinus, UserPlus } from "lucide-react";
++import { observer } from "mobx-react";
++// plane imports
++import { Button } from "@plane/propel/button";
++import { TOAST_TYPE, setToast } from "@plane/propel/toast";
++import { useTranslation } from "@plane/i18n";
++import { Avatar, EModalPosition, EModalWidth, ModalCore } from "@plane/ui";
++import { getFileURL } from "@plane/utils";
++// hooks
++import { useChat } from "@/hooks/store/use-chat";
++import { useUser } from "@/hooks/store/user";
++// services
++import type { TChatChannel, TChatChannelMember } from "@/services/chat.service";
++// local imports
++import { ChatMemberMultiSelect } from "./member-multi-select";
++
++type TProps = {
++  workspaceSlug: string;
++  channel: TChatChannel;
++  isOpen: boolean;
++  onClose: () => void;
++};
++
++export const ChannelMembersModal = observer(function ChannelMembersModal(props: TProps) {
++  const { workspaceSlug, channel, isOpen, onClose } = props;
++  // states
++  const [members, setMembers] = useState<TChatChannelMember[]>([]);
++  const [isInviting, setIsInviting] = useState(false);
++  const [selected, setSelected] = useState<string[]>([]);
++  // store hooks
++  const chat = useChat();
++  const { data: currentUser } = useUser();
++  const { t } = useTranslation();
++
++  const canEdit = !channel.is_direct && channel.access === 1;
++
++  const refresh = () => {
++    void chat
++      .fetchChannelMembers(workspaceSlug, channel.id)
++      .then(setMembers)
++      .catch(() => setMembers([]));
++  };
++
++  useEffect(() => {
++    if (isOpen) refresh();
++    // eslint-disable-next-line react-hooks/exhaustive-deps
++  }, [isOpen, channel.id]);
++
++  const invite = async () => {
++    if (selected.length === 0) return;
++    try {
++      await chat.addChannelMembers(workspaceSlug, channel.id, selected);
++      setSelected([]);
++      setIsInviting(false);
++      refresh();
++    } catch (error: unknown) {
++      setToast({
++        type: TOAST_TYPE.ERROR,
++        title: t("chat.invite_failed"),
++        message: (error as { error?: string })?.error ?? undefined,
++      });
++    }
++  };
++
++  const remove = async (memberId: string) => {
++    try {
++      await chat.removeChannelMember(workspaceSlug, channel.id, memberId);
++      if (memberId === currentUser?.id) onClose();
++      else refresh();
++    } catch (error: unknown) {
++      setToast({
++        type: TOAST_TYPE.ERROR,
++        title: t("chat.remove_member_failed"),
++        message: (error as { error?: string })?.error ?? undefined,
++      });
++    }
++  };
++
++  return (
++    <ModalCore isOpen={isOpen} handleClose={onClose} position={EModalPosition.CENTER} width={EModalWidth.LG}>
++      <div className="space-y-4 p-5">
++        <div className="flex items-center justify-between">
++          <h3 className="text-lg font-medium">{t("chat.members")}</h3>
++          {canEdit && !isInviting && (
++            <Button variant="secondary" size="sm" onClick={() => setIsInviting(true)}>
++              <UserPlus className="size-3.5" /> {t("chat.invite")}
++            </Button>
++          )}
++        </div>
++        {isInviting ? (
++          <div className="space-y-3">
++            <ChatMemberMultiSelect
++              selected={selected}
++              onChange={setSelected}
++              excludeIds={members.map((m) => m.member.id)}
++            />
++            <div className="flex justify-end gap-2">
++              <Button variant="secondary" size="sm" onClick={() => setIsInviting(false)}>
++                {t("cancel")}
++              </Button>
++              <Button variant="primary" size="sm" onClick={() => void invite()} disabled={selected.length === 0}>
++                {t("chat.invite")}
++              </Button>
++            </div>
++          </div>
++        ) : (
++          <div className="max-h-72 space-y-1 overflow-y-auto">
++            {members.map((row) => (
++              <div key={row.member.id} className="group flex items-center gap-2 rounded px-2 py-1.5">
++                <Avatar name={row.member.display_name} src={getFileURL(row.member.avatar_url ?? "")} />
++                <span className="min-w-0 flex-1 truncate text-sm">{row.member.display_name}</span>
++                {canEdit && (
++                  <button
++                    type="button"
++                    className="hidden rounded p-1 text-tertiary hover:bg-surface-2 hover:text-red-500 group-hover:block"
++                    onClick={() => void remove(row.member.id)}
++                    title={row.member.id === currentUser?.id ? t("chat.leave_channel") : t("chat.remove_member")}
++                  >
++                    <UserMinus className="size-3.5" />
++                  </button>
++                )}
++              </div>
++            ))}
++            {members.length === 0 && <p className="px-2 py-3 text-xs text-tertiary">{t("chat.no_people_found")}</p>}
++          </div>
++        )}
++      </div>
++    </ModalCore>
++  );
++});
+diff --git a/apps/web/core/components/chat/channel-settings-modal.tsx b/apps/web/core/components/chat/channel-settings-modal.tsx
+new file mode 100644
+index 0000000..38bcb8c
+--- /dev/null
++++ b/apps/web/core/components/chat/channel-settings-modal.tsx
+@@ -0,0 +1,135 @@
++/**
++ * Sintergica CE extension: channel management — rename, description, archive,
++ * delete. The backend already guards #general and permissions; this is the UI.
++ * Derived from Plane CE code (AGPL-3.0-only).
++ */
++
++import { useEffect, useState } from "react";
++import { observer } from "mobx-react";
++// plane imports
++import { Button } from "@plane/propel/button";
++import { TOAST_TYPE, setToast } from "@plane/propel/toast";
++import { useTranslation } from "@plane/i18n";
++import { EModalPosition, EModalWidth, Input, ModalCore } from "@plane/ui";
++// hooks
++import { useChat } from "@/hooks/store/use-chat";
++// services
++import type { TChatChannel } from "@/services/chat.service";
++
++type TProps = {
++  workspaceSlug: string;
++  channel: TChatChannel;
++  isOpen: boolean;
++  onClose: () => void;
++  onDeleted: () => void;
++};
++
++export const ChannelSettingsModal = observer(function ChannelSettingsModal(props: TProps) {
++  const { workspaceSlug, channel, isOpen, onClose, onDeleted } = props;
++  // states
++  const [name, setName] = useState(channel.name);
++  const [description, setDescription] = useState(channel.description);
++  const [isSubmitting, setIsSubmitting] = useState(false);
++  const [confirmDelete, setConfirmDelete] = useState(false);
++  // store hooks
++  const chat = useChat();
++  const { t } = useTranslation();
++
++  useEffect(() => {
++    if (isOpen) {
++      setName(channel.name);
++      setDescription(channel.description);
++      setConfirmDelete(false);
++    }
++  }, [isOpen, channel.id, channel.name, channel.description]);
++
++  const fail = (title: string, error: unknown) =>
++    setToast({ type: TOAST_TYPE.ERROR, title, message: (error as { error?: string })?.error ?? undefined });
++
++  const save = async () => {
++    if (isSubmitting) return;
++    setIsSubmitting(true);
++    try {
++      await chat.updateChannel(workspaceSlug, channel.id, {
++        ...(channel.is_general ? {} : { name: name.trim() }),
++        description: description.trim(),
++      });
++      onClose();
++    } catch (error) {
++      fail(t("chat.update_channel_failed"), error);
++    } finally {
++      setIsSubmitting(false);
++    }
++  };
++
++  const archive = async () => {
++    try {
++      await chat.updateChannel(workspaceSlug, channel.id, { archived_at: new Date().toISOString() });
++      onClose();
++      onDeleted(); // archived channels leave the list too
++    } catch (error) {
++      fail(t("chat.update_channel_failed"), error);
++    }
++  };
++
++  const destroy = async () => {
++    try {
++      await chat.deleteChannel(workspaceSlug, channel.id);
++      onClose();
++      onDeleted();
++    } catch (error) {
++      fail(t("chat.delete_channel_failed"), error);
++    }
++  };
++
++  return (
++    <ModalCore isOpen={isOpen} handleClose={onClose} position={EModalPosition.CENTER} width={EModalWidth.LG}>
++      <div className="space-y-4 p-5">
++        <h3 className="text-lg font-medium">{t("chat.channel_settings")}</h3>
++        {!channel.is_general && (
++          <div>
++            <label className="mb-1 block text-xs font-medium text-tertiary">{t("chat.channel_name")}</label>
++            <Input value={name} onChange={(e) => setName(e.target.value)} className="w-full" />
++          </div>
++        )}
++        <div>
++          <label className="mb-1 block text-xs font-medium text-tertiary">{t("chat.channel_description")}</label>
++          <Input
++            value={description}
++            onChange={(e) => setDescription(e.target.value)}
++            placeholder={t("chat.channel_description_placeholder")}
++            className="w-full"
++          />
++        </div>
++        <div className="flex items-center justify-between border-t border-subtle pt-4">
++          {!channel.is_general ? (
++            <div className="flex gap-2">
++              <Button variant="secondary" size="sm" onClick={() => void archive()}>
++                {t("chat.archive_channel")}
++              </Button>
++              {confirmDelete ? (
++                <Button variant="error-fill" size="sm" onClick={() => void destroy()}>
++                  {t("chat.confirm_delete_channel")}
++                </Button>
++              ) : (
++                <Button variant="error-outline" size="sm" onClick={() => setConfirmDelete(true)}>
++                  {t("delete")}
++                </Button>
++              )}
++            </div>
++          ) : (
++            <span className="text-xs text-tertiary">{t("chat.general_protected")}</span>
++          )}
++          <div className="flex gap-2">
++            <Button variant="secondary" size="sm" onClick={onClose}>
++              {t("cancel")}
++            </Button>
++            <Button variant="primary" size="sm" onClick={() => void save()} loading={isSubmitting}>
++              {t("save")}
++            </Button>
++          </div>
++        </div>
++      </div>
++    </ModalCore>
++  );
++});
+diff --git a/apps/web/core/components/chat/chat-notification-item.tsx b/apps/web/core/components/chat/chat-notification-item.tsx
+new file mode 100644
+index 0000000..89f6f6b
+--- /dev/null
++++ b/apps/web/core/components/chat/chat-notification-item.tsx
+@@ -0,0 +1,95 @@
++/**
++ * Sintergica CE extension: notification card for chat mentions.
++ *
++ * The stock NotificationItem renders nothing for notifications without
++ * data.issue_activity.field, so entity_name "chat_message" gets its own card:
++ * "X te mencionó en #canal" + snippet, click navigates to the channel and
++ * marks the notification read.
++ *
++ * Derived from Plane CE code (AGPL-3.0-only).
++ */
++
++import { observer } from "mobx-react";
++import { Hash } from "lucide-react";
++// plane imports
++import { useTranslation } from "@plane/i18n";
++import { Avatar, Row } from "@plane/ui";
++import { calculateTimeAgo, cn, getFileURL } from "@plane/utils";
++// hooks
++import { useNotification } from "@/hooks/store/notifications/use-notification";
++import { useAppRouter } from "@/hooks/use-app-router";
++
++type TProps = {
++  workspaceSlug: string;
++  notificationId: string;
++};
++
++export const ChatNotificationItem = observer(function ChatNotificationItem(props: TProps) {
++  const { workspaceSlug, notificationId } = props;
++  // hooks
++  const { asJson: notification, markNotificationAsRead } = useNotification(notificationId);
++  const router = useAppRouter();
++  const { t } = useTranslation();
++  // derived values
++  const data = notification?.data as
++    | {
++        channel?: { id?: string; name?: string; project_id?: string | null };
++        message?: { id?: string; parent_id?: string | null; snippet?: string };
++      }
++    | undefined;
++  const channel = data?.channel;
++  const triggeredBy = notification?.triggered_by_details;
++
++  if (!notification?.id || !channel?.id) return <></>;
++
++  const handleClick = async () => {
++    if (notification.read_at === null) {
++      try {
++        await markNotificationAsRead(workspaceSlug);
++      } catch (error) {
++        console.error(error);
++      }
++    }
++    const href = channel.project_id
++      ? `/${workspaceSlug}/projects/${channel.project_id}/channels/${channel.id}`
++      : `/${workspaceSlug}/channels/${channel.id}`;
++    router.push(href);
++  };
++
++  return (
++    <Row
++      className={cn(
++        "group relative flex cursor-pointer items-center gap-2 border-b border-subtle py-4 transition-all",
++        { "bg-accent-primary/5": notification.read_at === null }
++      )}
++      onClick={() => void handleClick()}
++    >
++      {notification.read_at === null && (
++        <div className="absolute top-[50%] left-2 h-1.5 w-1.5 flex-shrink-0 rounded-full bg-accent-primary" />
++      )}
++      <div className="relative flex w-full gap-2">
++        <div className="relative flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-full bg-layer-1">
++          <Avatar
++            name={triggeredBy?.display_name || triggeredBy?.first_name}
++            src={getFileURL(triggeredBy?.avatar_url ?? "")}
++            size={44}
++          />
++        </div>
++        <div className="min-w-0 flex-1">
++          <p className="text-sm">
++            <span className="font-medium">{triggeredBy?.display_name}</span>{" "}
++            {t("chat.mentioned_you")}{" "}
++            <span className="inline-flex items-center gap-0.5 font-medium">
++              <Hash className="size-3" />
++              {channel.name}
++            </span>
++          </p>
++          {data?.message?.snippet && (
++            <p className="mt-0.5 truncate text-xs text-tertiary">{data.message.snippet}</p>
++          )}
++          <p className="mt-1 text-xs text-tertiary">{calculateTimeAgo(notification.created_at ?? null)}</p>
++        </div>
++      </div>
++    </Row>
 +  );
 +});
 diff --git a/apps/web/core/components/chat/chat-view.tsx b/apps/web/core/components/chat/chat-view.tsx
 new file mode 100644
-index 0000000..8374f37
+index 0000000..fc5fc5e
 --- /dev/null
 +++ b/apps/web/core/components/chat/chat-view.tsx
-@@ -0,0 +1,216 @@
+@@ -0,0 +1,337 @@
 +/**
 + * Sintergica CE extension: chat root view (channel sidebar + room + thread).
 + *
@@ -101039,7 +101514,7 @@ index 0000000..8374f37
 + */
 +
 +import { useCallback, useEffect, useState } from "react";
-+import { Hash } from "lucide-react";
++import { Hash, Lock, MessageCircle, Pin, Search, Settings, Users } from "lucide-react";
 +import { observer } from "mobx-react";
 +// plane imports
 +import { useTranslation } from "@plane/i18n";
@@ -101050,13 +101525,21 @@ index 0000000..8374f37
 +// hooks
 +import { useChat } from "@/hooks/store/use-chat";
 +import { useAppRouter } from "@/hooks/use-app-router";
-+import { useChannelConnection } from "@/hooks/use-channel-connection";
++import { useChannelConnection, useWorkspaceChatConnection } from "@/hooks/use-channel-connection";
++import { useWorkspace } from "@/hooks/store/use-workspace";
 +// services
 +import type { TChatMessage } from "@/services/chat.service";
++// hooks (people)
++import { useMember } from "@/hooks/store/use-member";
++import { useUser } from "@/hooks/store/user";
 +// local imports
++import { ChannelMembersModal } from "./channel-members-modal";
++import { ChannelSettingsModal } from "./channel-settings-modal";
 +import { ChatChannelList } from "./channel-list";
 +import { ChatComposer } from "./composer";
 +import { ChatMessageList } from "./message-list";
++import { ChatPinsPanel } from "./pins-panel";
++import { ChatSearchPanel } from "./search-panel";
 +import { ChatThreadPanel } from "./thread-panel";
 +
 +const ACTIVE_POLL_MS = 10_000;
@@ -101073,12 +101556,20 @@ index 0000000..8374f37
 +  // states
 +  const [linkTargetId, setLinkTargetId] = useState<string | null>(null);
 +  const [createSource, setCreateSource] = useState<TChatMessage | null>(null);
++  const [sidePanel, setSidePanel] = useState<"pins" | "search" | null>(null);
++  const [isMembersOpen, setIsMembersOpen] = useState(false);
++  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
 +  // store hooks
 +  const chat = useChat();
 +  const router = useAppRouter();
++  const { getUserDetails } = useMember();
++  const { data: currentUser } = useUser();
 +  const { t } = useTranslation();
++  const workspaceStore = useWorkspace();
 +  // realtime: websocket over the live server; polling stays as fallback
-+  const { isLive, typingUsers, setTyping } = useChannelConnection({ workspaceSlug, channelId });
++  const { isLive, typingUsers, onlineUsers, setTyping } = useChannelConnection({ workspaceSlug, channelId });
++  // badges en vivo de TODOS los canales visibles mientras el chat está abierto
++  useWorkspaceChatConnection({ workspaceSlug, workspaceId: workspaceStore.getWorkspaceBySlug(workspaceSlug)?.id });
 +  // derived values
 +  const channel = channelId ? chat.channels[channelId] : undefined;
 +  const basePath = projectId
@@ -101161,14 +101652,85 @@ index 0000000..8374f37
 +      {channelId && channel ? (
 +        <div className="flex min-w-0 flex-1 flex-col">
 +          <div className="flex items-center gap-2 border-b border-subtle px-4 py-2.5">
-+            <Hash className="size-4 text-tertiary" />
-+            <h2 className="text-sm font-semibold">{channel.name}</h2>
-+            {channel.description && <span className="truncate text-xs text-tertiary">{channel.description}</span>}
++            {channel.is_direct ? (
++              <MessageCircle className="size-4 text-tertiary" />
++            ) : channel.access === 1 ? (
++              <Lock className="size-4 text-tertiary" />
++            ) : (
++              <Hash className="size-4 text-tertiary" />
++            )}
++            <h2 className="text-sm font-semibold">
++              {channel.is_direct
++                ? (channel.member_ids ?? [])
++                    .filter((id) => id !== currentUser?.id)
++                    .map((id) => getUserDetails(id)?.display_name ?? "?")
++                    .join(", ") || t("chat.direct_message")
++                : channel.name}
++            </h2>
++            {channel.description && !channel.is_direct && (
++              <span className="truncate text-xs text-tertiary">{channel.description}</span>
++            )}
++            <div className="ml-auto flex items-center gap-1">
++              {onlineUsers.length > 0 && (
++                <span
++                  className="mr-1 flex items-center gap-1 text-xs text-tertiary"
++                  title={onlineUsers.map((u) => u.name).join(", ")}
++                >
++                  <span className="size-2 rounded-full bg-green-500" />
++                  {onlineUsers.length}
++                </span>
++              )}
++              <button
++                type="button"
++                title={t("chat.search_messages")}
++                className="rounded p-1.5 text-tertiary hover:bg-layer-1 hover:text-primary"
++                onClick={() => {
++                  chat.setActiveThread(null);
++                  setSidePanel(sidePanel === "search" ? null : "search");
++                }}
++              >
++                <Search className="size-4" />
++              </button>
++              <button
++                type="button"
++                title={t("chat.pinned_messages")}
++                className="rounded p-1.5 text-tertiary hover:bg-layer-1 hover:text-primary"
++                onClick={() => {
++                  chat.setActiveThread(null);
++                  setSidePanel(sidePanel === "pins" ? null : "pins");
++                }}
++              >
++                <Pin className="size-4" />
++              </button>
++              {(channel.is_direct || channel.access === 1) && (
++                <button
++                  type="button"
++                  title={t("chat.members")}
++                  className="rounded p-1.5 text-tertiary hover:bg-layer-1 hover:text-primary"
++                  onClick={() => setIsMembersOpen(true)}
++                >
++                  <Users className="size-4" />
++                </button>
++              )}
++              {!channel.is_direct && (
++                <button
++                  type="button"
++                  title={t("chat.channel_settings")}
++                  className="rounded p-1.5 text-tertiary hover:bg-layer-1 hover:text-primary"
++                  onClick={() => setIsSettingsOpen(true)}
++                >
++                  <Settings className="size-4" />
++                </button>
++              )}
++            </div>
 +          </div>
 +          <ChatMessageList
 +            workspaceSlug={workspaceSlug}
 +            channelId={channelId}
-+            onOpenThread={(rootId) => chat.setActiveThread(rootId)}
++            onOpenThread={(rootId) => {
++              setSidePanel(null);
++              chat.setActiveThread(rootId);
++            }}
 +            onLinkWorkItem={(messageId) => setLinkTargetId(messageId)}
 +            onCreateWorkItem={(message) => setCreateSource(message)}
 +          />
@@ -101201,6 +101763,40 @@ index 0000000..8374f37
 +          onClose={() => chat.setActiveThread(null)}
 +          onLinkWorkItem={(messageId) => setLinkTargetId(messageId)}
 +          onCreateWorkItem={(message) => setCreateSource(message)}
++        />
++      )}
++      {channelId && sidePanel === "pins" && (
++        <ChatPinsPanel workspaceSlug={workspaceSlug} channelId={channelId} onClose={() => setSidePanel(null)} />
++      )}
++      {sidePanel === "search" && (
++        <ChatSearchPanel
++          workspaceSlug={workspaceSlug}
++          channelId={channelId}
++          onClose={() => setSidePanel(null)}
++          onOpenResult={(result) => {
++            setSidePanel(null);
++            const href = result.project_id
++              ? `/${workspaceSlug}/projects/${result.project_id}/channels/${result.channel_id}`
++              : `/${workspaceSlug}/channels/${result.channel_id}`;
++            router.push(href);
++          }}
++        />
++      )}
++      {channelId && channel && (
++        <ChannelMembersModal
++          workspaceSlug={workspaceSlug}
++          channel={channel}
++          isOpen={isMembersOpen}
++          onClose={() => setIsMembersOpen(false)}
++        />
++      )}
++      {channelId && channel && (
++        <ChannelSettingsModal
++          workspaceSlug={workspaceSlug}
++          channel={channel}
++          isOpen={isSettingsOpen}
++          onClose={() => setIsSettingsOpen(false)}
++          onDeleted={() => router.push(basePath)}
 +        />
 +      )}
 +
@@ -101245,10 +101841,10 @@ index 0000000..8374f37
 +});
 diff --git a/apps/web/core/components/chat/composer.tsx b/apps/web/core/components/chat/composer.tsx
 new file mode 100644
-index 0000000..64873cc
+index 0000000..0ea6d94
 --- /dev/null
 +++ b/apps/web/core/components/chat/composer.tsx
-@@ -0,0 +1,97 @@
+@@ -0,0 +1,102 @@
 +/**
 + * Sintergica CE extension: chat message composer.
 + *
@@ -101269,18 +101865,24 @@ index 0000000..64873cc
 +import { LiteTextEditor } from "@/components/editor/lite-text";
 +// hooks
 +import { useWorkspace } from "@/hooks/store/use-workspace";
++// services
++import { ChatService } from "@/services/chat.service";
++
++const chatService = new ChatService();
 +
 +type TProps = {
 +  workspaceSlug: string;
 +  projectId?: string;
 +  channelId: string;
++  /** real channel id for asset uploads (channelId may carry a -thread suffix) */
++  assetChannelId?: string;
 +  placeholder?: string;
 +  onSend: (data: { message_html: string; message_json: object | null }) => Promise<void>;
 +  onTyping?: (isTyping: boolean) => void;
 +};
 +
 +export const ChatComposer = observer(function ChatComposer(props: TProps) {
-+  const { workspaceSlug, projectId, channelId, placeholder, onSend, onTyping } = props;
++  const { workspaceSlug, projectId, channelId, assetChannelId, placeholder, onSend, onTyping } = props;
 +  // states
 +  const [html, setHtml] = useState("<p></p>");
 +  const [json, setJson] = useState<object | null>(null);
@@ -101335,12 +101937,11 @@ index 0000000..64873cc
 +        isSubmitting={isSubmitting}
 +        showToolbarInitially={false}
 +        containerClassName="min-h-min"
-+        disabledExtensions={["image"]}
-+        uploadFile={async () => {
-+          throw new Error("Attachments are not available in chat yet.");
-+        }}
++        uploadFile={async (_blockId, file) =>
++          await chatService.uploadChannelAsset(workspaceSlug, assetChannelId ?? channelId, file)
++        }
 +        duplicateFile={async () => {
-+          throw new Error("Attachments are not available in chat yet.");
++          throw new Error("Duplicating attachments is not supported in chat.");
 +        }}
 +      />
 +    </div>
@@ -101348,10 +101949,10 @@ index 0000000..64873cc
 +});
 diff --git a/apps/web/core/components/chat/index.ts b/apps/web/core/components/chat/index.ts
 new file mode 100644
-index 0000000..2c67f33
+index 0000000..a63b2d9
 --- /dev/null
 +++ b/apps/web/core/components/chat/index.ts
-@@ -0,0 +1,14 @@
+@@ -0,0 +1,21 @@
 +/**
 + * Sintergica CE extension: chat channels (Tequio canales) barrel.
 + * Not to be confused with the standalone Mattermost-based chat product —
@@ -101359,6 +101960,7 @@ index 0000000..2c67f33
 + * Derived from Plane CE code (AGPL-3.0-only).
 + */
 +
++export * from "./chat-notification-item";
 +export * from "./chat-view";
 +export * from "./channel-list";
 +export * from "./composer";
@@ -101366,12 +101968,106 @@ index 0000000..2c67f33
 +export * from "./message-card";
 +export * from "./thread-panel";
 +export * from "./work-item-chip";
++export * from "./member-multi-select";
++export * from "./new-dm-modal";
++export * from "./channel-members-modal";
++export * from "./channel-settings-modal";
++export * from "./pins-panel";
++export * from "./search-panel";
+diff --git a/apps/web/core/components/chat/member-multi-select.tsx b/apps/web/core/components/chat/member-multi-select.tsx
+new file mode 100644
+index 0000000..94b022b
+--- /dev/null
++++ b/apps/web/core/components/chat/member-multi-select.tsx
+@@ -0,0 +1,82 @@
++/**
++ * Sintergica CE extension: workspace member multi-select for chat (DMs,
++ * private channel invitations). Checkbox list with a text filter — no
++ * dropdown gymnastics.
++ * Derived from Plane CE code (AGPL-3.0-only).
++ */
++
++import { useState } from "react";
++import { Check, Search } from "lucide-react";
++import { observer } from "mobx-react";
++// plane imports
++import { useTranslation } from "@plane/i18n";
++import { Avatar } from "@plane/ui";
++import { cn, getFileURL } from "@plane/utils";
++// hooks
++import { useMember } from "@/hooks/store/use-member";
++import { useUser } from "@/hooks/store/user";
++
++type TProps = {
++  selected: string[];
++  onChange: (memberIds: string[]) => void;
++  excludeIds?: string[];
++};
++
++export const ChatMemberMultiSelect = observer(function ChatMemberMultiSelect(props: TProps) {
++  const { selected, onChange, excludeIds = [] } = props;
++  // states
++  const [query, setQuery] = useState("");
++  // store hooks
++  const {
++    workspace: { workspaceMemberIds },
++    getUserDetails,
++  } = useMember();
++  const { data: currentUser } = useUser();
++  const { t } = useTranslation();
++
++  const candidates = (workspaceMemberIds ?? [])
++    .filter((id) => id !== currentUser?.id && !excludeIds.includes(id))
++    .map((id) => getUserDetails(id))
++    .filter((u): u is NonNullable<typeof u> => !!u)
++    .filter((u) => !query || u.display_name?.toLowerCase().includes(query.toLowerCase()))
++    .sort((a, b) => (a.display_name ?? "").localeCompare(b.display_name ?? ""));
++
++  const toggle = (id: string) => {
++    onChange(selected.includes(id) ? selected.filter((m) => m !== id) : [...selected, id]);
++  };
++
++  return (
++    <div>
++      <div className="flex items-center gap-2 rounded border border-subtle px-2 py-1.5">
++        <Search className="size-3.5 text-tertiary" />
++        <input
++          value={query}
++          onChange={(e) => setQuery(e.target.value)}
++          placeholder={t("chat.search_people")}
++          className="w-full bg-transparent text-sm outline-none placeholder:text-tertiary"
++        />
++      </div>
++      <div className="mt-2 max-h-56 space-y-0.5 overflow-y-auto">
++        {candidates.length === 0 && <p className="px-2 py-3 text-xs text-tertiary">{t("chat.no_people_found")}</p>}
++        {candidates.map((user) => {
++          const isSelected = selected.includes(user.id);
++          return (
++            <button
++              key={user.id}
++              type="button"
++              onClick={() => toggle(user.id)}
++              className={cn(
++                "flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm hover:bg-surface-2",
++                isSelected && "bg-layer-1"
++              )}
++            >
++              <Avatar name={user.display_name} src={getFileURL(user.avatar_url ?? "")} />
++              <span className="min-w-0 flex-1 truncate text-left">{user.display_name}</span>
++              {isSelected && <Check className="size-4 text-accent-primary" />}
++            </button>
++          );
++        })}
++      </div>
++    </div>
++  );
++});
 diff --git a/apps/web/core/components/chat/message-card.tsx b/apps/web/core/components/chat/message-card.tsx
 new file mode 100644
-index 0000000..c0f4e22
+index 0000000..652fecd
 --- /dev/null
 +++ b/apps/web/core/components/chat/message-card.tsx
-@@ -0,0 +1,271 @@
+@@ -0,0 +1,279 @@
 +/**
 + * Sintergica CE extension: one chat message bubble.
 + *
@@ -101383,7 +102079,7 @@ index 0000000..c0f4e22
 + */
 +
 +import { useState } from "react";
-+import { MessageSquareText, Pencil, Trash2, Link2, SquarePlus, SmilePlus } from "lucide-react";
++import { MessageSquareText, Pencil, Pin, Trash2, Link2, SquarePlus, SmilePlus } from "lucide-react";
 +import { observer } from "mobx-react";
 +// plane imports
 +import type { EditorRefApi } from "@plane/editor";
@@ -101498,6 +102194,7 @@ index 0000000..c0f4e22
 +              <span className="text-xs text-tertiary">{renderFormattedTime(message.created_at)}</span>
 +            </Tooltip>
 +            {message.edited_at && <span className="text-[10px] text-tertiary">({t("chat.edited")})</span>}
++            {message.pinned_at && <Pin className="size-3 text-amber-500" />}
 +          </div>
 +        )}
 +        {isEditing ? (
@@ -101616,6 +102313,13 @@ index 0000000..c0f4e22
 +                <SquarePlus className="size-3.5" /> {t("chat.create_work_item")}
 +              </span>
 +            </CustomMenu.MenuItem>
++            <CustomMenu.MenuItem
++              onClick={() => void chat.togglePin(workspaceSlug, message.channel, message.id)}
++            >
++              <span className="flex items-center gap-2">
++                <Pin className="size-3.5" /> {message.pinned_at ? t("chat.unpin_message") : t("chat.pin_message")}
++              </span>
++            </CustomMenu.MenuItem>
 +            {isMine && (
 +              <CustomMenu.MenuItem
 +                onClick={() => {
@@ -101645,10 +102349,10 @@ index 0000000..c0f4e22
 +});
 diff --git a/apps/web/core/components/chat/message-list.tsx b/apps/web/core/components/chat/message-list.tsx
 new file mode 100644
-index 0000000..510cc65
+index 0000000..b8e66c4
 --- /dev/null
 +++ b/apps/web/core/components/chat/message-list.tsx
-@@ -0,0 +1,135 @@
+@@ -0,0 +1,160 @@
 +/**
 + * Sintergica CE extension: chat message list.
 + *
@@ -101660,6 +102364,7 @@ index 0000000..510cc65
 + */
 +
 +import { useEffect, useLayoutEffect, useRef } from "react";
++import { ArrowUp } from "lucide-react";
 +import { observer } from "mobx-react";
 +// plane imports
 +import { useTranslation } from "@plane/i18n";
@@ -101695,6 +102400,9 @@ index 0000000..510cc65
 +  const messages = chat.channelMessages(channelId);
 +  const hasMore = chat.hasMoreByChannel[channelId] ?? false;
 +  const lastId = messages.length ? messages[messages.length - 1].id : null;
++  // First message of this visit that arrived after the previous read marker.
++  const lastSeen = chat.lastSeenAt[channelId];
++  const firstNewId = lastSeen ? messages.find((m) => m.created_at > lastSeen && !m.id.startsWith("temp-"))?.id : undefined;
 +
 +  // Pin to bottom on new messages unless the user scrolled up to read.
 +  useLayoutEffect(() => {
@@ -101737,8 +102445,22 @@ index 0000000..510cc65
 +    );
 +  }
 +
++  const jumpToNew = () => {
++    const el = document.getElementById(`chat-new-divider-${channelId}`);
++    el?.scrollIntoView({ block: "center" });
++  };
++
 +  return (
-+    <div ref={scrollRef} onScroll={() => void handleScroll()} className="flex-1 overflow-y-auto pb-3">
++    <div ref={scrollRef} onScroll={() => void handleScroll()} className="relative flex-1 overflow-y-auto pb-3">
++      {firstNewId && (
++        <button
++          type="button"
++          onClick={jumpToNew}
++          className="sticky top-2 left-1/2 z-[2] mx-auto flex items-center gap-1.5 rounded-full bg-accent-primary px-3 py-1 text-xs font-medium text-white shadow-sm"
++        >
++          <ArrowUp className="size-3" /> {t("chat.jump_to_new")}
++        </button>
++      )}
 +      {!hasMore && messages.length > 0 && (
 +        <p className="px-4 pt-4 text-xs text-tertiary">{t("chat.beginning_of_channel")}</p>
 +      )}
@@ -101763,6 +102485,13 @@ index 0000000..510cc65
 +          new Date(message.created_at).getTime() - new Date(previous.created_at).getTime() < GROUP_WINDOW_MS;
 +        return (
 +          <div key={message.id}>
++            {message.id === firstNewId && (
++              <div id={`chat-new-divider-${channelId}`} className="my-2 flex items-center gap-3 px-4">
++                <div className="h-px flex-1 bg-accent-primary/40" />
++                <span className="text-xs font-semibold text-accent-primary">{t("chat.new_messages")}</span>
++                <div className="h-px flex-1 bg-accent-primary/40" />
++              </div>
++            )}
 +            {newDay && (
 +              <div className="my-3 flex items-center gap-3 px-4">
 +                <div className="h-px flex-1 bg-layer-1" />
@@ -101784,12 +102513,289 @@ index 0000000..510cc65
 +    </div>
 +  );
 +});
+diff --git a/apps/web/core/components/chat/new-dm-modal.tsx b/apps/web/core/components/chat/new-dm-modal.tsx
+new file mode 100644
+index 0000000..7d53408
+--- /dev/null
++++ b/apps/web/core/components/chat/new-dm-modal.tsx
+@@ -0,0 +1,75 @@
++/**
++ * Sintergica CE extension: start (or reopen) a direct message.
++ * Derived from Plane CE code (AGPL-3.0-only).
++ */
++
++import { useState } from "react";
++import { observer } from "mobx-react";
++// plane imports
++import { Button } from "@plane/propel/button";
++import { TOAST_TYPE, setToast } from "@plane/propel/toast";
++import { useTranslation } from "@plane/i18n";
++import { EModalPosition, EModalWidth, ModalCore } from "@plane/ui";
++// hooks
++import { useChat } from "@/hooks/store/use-chat";
++// services
++import type { TChatChannel } from "@/services/chat.service";
++// local imports
++import { ChatMemberMultiSelect } from "./member-multi-select";
++
++type TProps = {
++  workspaceSlug: string;
++  isOpen: boolean;
++  onClose: () => void;
++  onCreated: (channel: TChatChannel) => void;
++};
++
++export const NewDMModal = observer(function NewDMModal(props: TProps) {
++  const { workspaceSlug, isOpen, onClose, onCreated } = props;
++  // states
++  const [selected, setSelected] = useState<string[]>([]);
++  const [isSubmitting, setIsSubmitting] = useState(false);
++  // store hooks
++  const chat = useChat();
++  const { t } = useTranslation();
++
++  const close = () => {
++    setSelected([]);
++    onClose();
++  };
++
++  const create = async () => {
++    if (selected.length === 0 || isSubmitting) return;
++    setIsSubmitting(true);
++    try {
++      const channel = await chat.createDM(workspaceSlug, selected);
++      close();
++      onCreated(channel);
++    } catch (error: unknown) {
++      setToast({
++        type: TOAST_TYPE.ERROR,
++        title: t("chat.create_dm_failed"),
++        message: (error as { error?: string })?.error ?? undefined,
++      });
++    } finally {
++      setIsSubmitting(false);
++    }
++  };
++
++  return (
++    <ModalCore isOpen={isOpen} handleClose={close} position={EModalPosition.CENTER} width={EModalWidth.LG}>
++      <div className="space-y-4 p-5">
++        <h3 className="text-lg font-medium">{t("chat.new_dm")}</h3>
++        <ChatMemberMultiSelect selected={selected} onChange={setSelected} />
++        <div className="flex justify-end gap-2">
++          <Button variant="secondary" size="sm" type="button" onClick={close}>
++            {t("cancel")}
++          </Button>
++          <Button variant="primary" size="sm" onClick={() => void create()} loading={isSubmitting} disabled={selected.length === 0}>
++            {t("chat.start_dm")}
++          </Button>
++        </div>
++      </div>
++    </ModalCore>
++  );
++});
+diff --git a/apps/web/core/components/chat/pins-panel.tsx b/apps/web/core/components/chat/pins-panel.tsx
+new file mode 100644
+index 0000000..56637f8
+--- /dev/null
++++ b/apps/web/core/components/chat/pins-panel.tsx
+@@ -0,0 +1,66 @@
++/**
++ * Sintergica CE extension: pinned messages side panel.
++ * Derived from Plane CE code (AGPL-3.0-only).
++ */
++
++import { useEffect, useState } from "react";
++import { Pin, X } from "lucide-react";
++import { observer } from "mobx-react";
++// plane imports
++import { useTranslation } from "@plane/i18n";
++// hooks
++import { useChat } from "@/hooks/store/use-chat";
++// services
++import { ChatService, type TChatMessage } from "@/services/chat.service";
++// local imports
++import { ChatMessageCard } from "./message-card";
++
++const chatService = new ChatService();
++
++type TProps = {
++  workspaceSlug: string;
++  channelId: string;
++  onClose: () => void;
++};
++
++export const ChatPinsPanel = observer(function ChatPinsPanel(props: TProps) {
++  const { workspaceSlug, channelId, onClose } = props;
++  // states
++  const [pins, setPins] = useState<TChatMessage[]>([]);
++  // store hooks — pinned rows live in the store too, so unpinning from the
++  // card refreshes here through messageMap.
++  const chat = useChat();
++  const { t } = useTranslation();
++
++  useEffect(() => {
++    void chatService
++      .fetchPins(workspaceSlug, channelId)
++      .then((rows) => {
++        setPins(rows);
++        for (const row of rows) if (!chat.messageMap[row.id]) chat.messageMap[row.id] = row;
++      })
++      .catch(() => setPins([]));
++    // eslint-disable-next-line react-hooks/exhaustive-deps
++  }, [workspaceSlug, channelId]);
++
++  const visible = pins.map((p) => chat.messageMap[p.id] ?? p).filter((p) => p.pinned_at);
++
++  return (
++    <div className="flex w-96 shrink-0 flex-col border-l border-subtle bg-surface-1">
++      <div className="flex items-center justify-between border-b border-subtle px-4 py-2.5">
++        <h3 className="flex items-center gap-1.5 text-sm font-semibold">
++          <Pin className="size-3.5" /> {t("chat.pinned_messages")}
++        </h3>
++        <button type="button" className="rounded p-1 text-tertiary hover:bg-layer-1" onClick={onClose}>
++          <X className="size-4" />
++        </button>
++      </div>
++      <div className="flex-1 overflow-y-auto py-2">
++        {visible.length === 0 && <p className="px-4 py-6 text-center text-xs text-tertiary">{t("chat.no_pins")}</p>}
++        {visible.map((message) => (
++          <ChatMessageCard key={message.id} workspaceSlug={workspaceSlug} message={message} inThread />
++        ))}
++      </div>
++    </div>
++  );
++});
+diff --git a/apps/web/core/components/chat/search-panel.tsx b/apps/web/core/components/chat/search-panel.tsx
+new file mode 100644
+index 0000000..5f6893d
+--- /dev/null
++++ b/apps/web/core/components/chat/search-panel.tsx
+@@ -0,0 +1,118 @@
++/**
++ * Sintergica CE extension: message search side panel. Searches the current
++ * channel or the whole workspace; a result navigates to its channel.
++ * Derived from Plane CE code (AGPL-3.0-only).
++ */
++
++import { useEffect, useRef, useState } from "react";
++import { Hash, Search, X } from "lucide-react";
++import { observer } from "mobx-react";
++// plane imports
++import { useTranslation } from "@plane/i18n";
++import { calculateTimeAgo, cn } from "@plane/utils";
++// services
++import { ChatService, type TChatSearchResult } from "@/services/chat.service";
++
++const chatService = new ChatService();
++
++type TProps = {
++  workspaceSlug: string;
++  channelId?: string;
++  onClose: () => void;
++  onOpenResult: (result: TChatSearchResult) => void;
++};
++
++export const ChatSearchPanel = observer(function ChatSearchPanel(props: TProps) {
++  const { workspaceSlug, channelId, onClose, onOpenResult } = props;
++  // states
++  const [query, setQuery] = useState("");
++  const [scope, setScope] = useState<"channel" | "workspace">(channelId ? "channel" : "workspace");
++  const [results, setResults] = useState<TChatSearchResult[]>([]);
++  const [isSearching, setIsSearching] = useState(false);
++  // refs
++  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
++  const { t } = useTranslation();
++
++  useEffect(() => {
++    if (debounceRef.current) clearTimeout(debounceRef.current);
++    if (query.trim().length < 2) {
++      setResults([]);
++      return;
++    }
++    debounceRef.current = setTimeout(() => {
++      setIsSearching(true);
++      void chatService
++        .searchMessages(workspaceSlug, query.trim(), scope === "channel" ? channelId : undefined)
++        .then(setResults)
++        .catch(() => setResults([]))
++        .finally(() => setIsSearching(false));
++    }, 350);
++    return () => {
++      if (debounceRef.current) clearTimeout(debounceRef.current);
++    };
++  }, [query, scope, workspaceSlug, channelId]);
++
++  return (
++    <div className="flex w-96 shrink-0 flex-col border-l border-subtle bg-surface-1">
++      <div className="space-y-2 border-b border-subtle px-4 py-2.5">
++        <div className="flex items-center justify-between">
++          <h3 className="text-sm font-semibold">{t("chat.search_messages")}</h3>
++          <button type="button" className="rounded p-1 text-tertiary hover:bg-layer-1" onClick={onClose}>
++            <X className="size-4" />
++          </button>
++        </div>
++        <div className="flex items-center gap-2 rounded border border-subtle px-2 py-1.5">
++          <Search className="size-3.5 text-tertiary" />
++          <input
++            autoFocus
++            value={query}
++            onChange={(e) => setQuery(e.target.value)}
++            placeholder={t("chat.search_placeholder")}
++            className="w-full bg-transparent text-sm outline-none placeholder:text-tertiary"
++          />
++        </div>
++        {channelId && (
++          <div className="flex gap-1 text-xs">
++            {(["channel", "workspace"] as const).map((s) => (
++              <button
++                key={s}
++                type="button"
++                onClick={() => setScope(s)}
++                className={cn(
++                  "rounded px-2 py-0.5",
++                  scope === s ? "bg-layer-1 font-medium" : "text-tertiary hover:bg-surface-2"
++                )}
++              >
++                {s === "channel" ? t("chat.this_channel") : t("chat.whole_workspace")}
++              </button>
++            ))}
++          </div>
++        )}
++      </div>
++      <div className="flex-1 overflow-y-auto">
++        {isSearching && <p className="px-4 py-3 text-xs text-tertiary">…</p>}
++        {!isSearching && query.trim().length >= 2 && results.length === 0 && (
++          <p className="px-4 py-6 text-center text-xs text-tertiary">{t("chat.no_results")}</p>
++        )}
++        {results.map((result) => (
++          <button
++            key={result.id}
++            type="button"
++            onClick={() => onOpenResult(result)}
++            className="block w-full border-b border-subtle px-4 py-2.5 text-left hover:bg-surface-2"
++          >
++            <div className="flex items-center gap-1.5 text-xs text-tertiary">
++              <Hash className="size-3" />
++              <span className="truncate">{result.channel_is_direct ? t("chat.direct_message") : result.channel_name}</span>
++              <span className="ml-auto shrink-0">{calculateTimeAgo(result.created_at)}</span>
++            </div>
++            <p className="mt-0.5 text-sm">
++              <span className="font-medium">{result.actor_display_name}: </span>
++              <span className="text-secondary">{result.snippet}</span>
++            </p>
++          </button>
++        ))}
++      </div>
++    </div>
++  );
++});
 diff --git a/apps/web/core/components/chat/thread-panel.tsx b/apps/web/core/components/chat/thread-panel.tsx
 new file mode 100644
-index 0000000..683fddd
+index 0000000..f57e972
 --- /dev/null
 +++ b/apps/web/core/components/chat/thread-panel.tsx
-@@ -0,0 +1,95 @@
+@@ -0,0 +1,96 @@
 +/**
 + * Sintergica CE extension: chat thread side panel (root + replies + composer).
 + * Derived from Plane CE code (AGPL-3.0-only).
@@ -101877,6 +102883,7 @@ index 0000000..683fddd
 +        workspaceSlug={workspaceSlug}
 +        projectId={channel?.project ?? undefined}
 +        channelId={`${channelId}-thread-${rootId}`}
++        assetChannelId={channelId}
 +        placeholder={t("chat.reply_placeholder")}
 +        onSend={async (data) => {
 +          await chat.sendMessage(workspaceSlug, channelId, { ...data, parent_id: rootId });
@@ -109038,6 +110045,30 @@ index 064270b..e564e9e 100644
                              ) : activityItem.actor_detail.is_bot ? (
                                <span className="text-gray font-medium">{activityItem.actor_detail.first_name} Bot</span>
                              ) : (
+diff --git a/apps/web/core/components/workspace-notifications/sidebar/notification-card/item.tsx b/apps/web/core/components/workspace-notifications/sidebar/notification-card/item.tsx
+index 859070c..7e7ee60 100644
+--- a/apps/web/core/components/workspace-notifications/sidebar/notification-card/item.tsx
++++ b/apps/web/core/components/workspace-notifications/sidebar/notification-card/item.tsx
+@@ -15,6 +15,8 @@ import { useWorkspaceNotifications } from "@/hooks/store/notifications";
+ import { useNotification } from "@/hooks/store/notifications/use-notification";
+ import { useIssueDetail } from "@/hooks/store/use-issue-detail";
+ import { useWorkspace } from "@/hooks/store/use-workspace";
++// Sintergica CE extension: chat mentions render their own card
++import { ChatNotificationItem } from "@/components/chat/chat-notification-item";
+ // local imports
+ import { NotificationContent } from "./content";
+ import { NotificationOption } from "./options";
+@@ -65,6 +67,10 @@ export const NotificationItem = observer(function NotificationItem(props: TNotif
+     }
+   };
+ 
++  // Sintergica CE extension: chat mentions have no issue_activity — own card.
++  if (notification?.entity_name === "chat_message")
++    return <ChatNotificationItem workspaceSlug={workspaceSlug} notificationId={notificationId} />;
++
+   if (!workspaceSlug || !notificationId || !notification?.id || !notificationField || !workspace?.id || !projectId)
+     return <></>;
+ 
 diff --git a/apps/web/core/components/workspace/content-wrapper.tsx b/apps/web/core/components/workspace/content-wrapper.tsx
 index 3d605d6..c085247 100644
 --- a/apps/web/core/components/workspace/content-wrapper.tsx
@@ -109340,18 +110371,19 @@ index 3582215..389e6fa 100644
  
    // memoized navigation items and adding additional navigation items
 diff --git a/apps/web/core/components/workspace/sidebar/sidebar-item.tsx b/apps/web/core/components/workspace/sidebar/sidebar-item.tsx
-index 03d3015..dbc7403 100644
+index 03d3015..e252abb 100644
 --- a/apps/web/core/components/workspace/sidebar/sidebar-item.tsx
 +++ b/apps/web/core/components/workspace/sidebar/sidebar-item.tsx
-@@ -17,6 +17,7 @@ import { joinUrlPath } from "@plane/utils";
+@@ -17,6 +17,8 @@ import { joinUrlPath } from "@plane/utils";
  import { SidebarNavItem } from "@/components/sidebar/sidebar-navigation";
  // hooks
  import { useAppTheme } from "@/hooks/store/use-app-theme";
++import { useChatUnreadIndicator } from "@/hooks/store/use-chat";
 +import { useFinanceAccess } from "@/hooks/store/use-finance";
  import { useUser, useUserPermissions } from "@/hooks/store/user";
  import { useWorkspaceNavigationPreferences } from "@/hooks/use-navigation-preferences";
  // plane web imports
-@@ -51,6 +52,10 @@ export const SidebarItemBase = observer(function SidebarItemBase({
+@@ -51,6 +53,10 @@ export const SidebarItemBase = observer(function SidebarItemBase({
      "home",
      "pi_chat",
      "projects",
@@ -109362,18 +110394,30 @@ index 03d3015..dbc7403 100644
      "your_work",
      "stickies",
      "drafts",
-@@ -58,6 +63,11 @@ export const SidebarItemBase = observer(function SidebarItemBase({
+@@ -58,6 +64,13 @@ export const SidebarItemBase = observer(function SidebarItemBase({
    ];
    const slug = workspaceSlug?.toString() || "";
  
 +  // Sintergica: finance is gated by a per-user allowlist, not just by role.
 +  // Hidden until the access check confirms (undefined while loading).
 +  const financeAccess = useFinanceAccess(item.key === "finance" ? slug : undefined);
++  // Sintergica: unread dot on the Channels item (non-muted channels only).
++  const hasChatUnreads = useChatUnreadIndicator(item.key === "channels" ? slug : undefined);
 +  if (item.key === "finance" && !financeAccess?.has_access && !financeAccess?.has_collections) return null;
 +
    if (!allowPermissions(item.access, EUserPermissionsLevel.WORKSPACE, slug)) return null;
  
    const isPinned = isWorkspaceItemPinned(item.key);
+@@ -73,6 +86,9 @@ export const SidebarItemBase = observer(function SidebarItemBase({
+         <div className="flex items-center gap-1.5 py-[1px]">
+           {icon}
+           <p className="text-13 leading-5 font-medium">{t(item.labelTranslationKey)}</p>
++          {item.key === "channels" && hasChatUnreads && (
++            <span className="size-2 flex-shrink-0 rounded-full bg-accent-primary" />
++          )}
+         </div>
+         {additionalRender?.(item.key, slug)}
+       </SidebarNavItem>
 diff --git a/apps/web/core/hooks/store/use-assistant.ts b/apps/web/core/hooks/store/use-assistant.ts
 new file mode 100644
 index 0000000..da3f822
@@ -109398,16 +110442,17 @@ index 0000000..da3f822
 +};
 diff --git a/apps/web/core/hooks/store/use-chat.ts b/apps/web/core/hooks/store/use-chat.ts
 new file mode 100644
-index 0000000..716d8a4
+index 0000000..5fcb6c0
 --- /dev/null
 +++ b/apps/web/core/hooks/store/use-chat.ts
-@@ -0,0 +1,16 @@
+@@ -0,0 +1,34 @@
 +/**
 + * Sintergica CE extension: chat channels store hook.
 + * Derived from Plane CE code (AGPL-3.0-only).
 + */
 +
 +import { useContext } from "react";
++import useSWR from "swr";
 +// context
 +import { StoreContext } from "@/lib/store-context";
 +// mobx store
@@ -109417,6 +110462,23 @@ index 0000000..716d8a4
 +  const context = useContext(StoreContext);
 +  if (context === undefined) throw new Error("useChat must be used within StoreProvider");
 +  return context.chat;
++};
++
++
++/**
++ * Sintergica CE extension: unread dot for the sidebar "Channels" item.
++ * Polls the aggregated unreads endpoint once a minute — the only polling the
++ * chat does outside its own view. Returns true when any non-muted channel has
++ * unread root messages.
++ */
++export const useChatUnreadIndicator = (workspaceSlug?: string): boolean => {
++  const chat = useChat();
++  useSWR(
++    workspaceSlug ? `CHAT_UNREADS_${workspaceSlug}` : null,
++    workspaceSlug ? () => chat.fetchUnreads(workspaceSlug) : null,
++    { refreshInterval: 60000, revalidateIfStale: false }
++  );
++  return workspaceSlug ? chat.hasUnread : false;
 +};
 diff --git a/apps/web/core/hooks/store/use-drive.ts b/apps/web/core/hooks/store/use-drive.ts
 new file mode 100644
@@ -109571,10 +110633,10 @@ index 0000000..393a6e7
 +};
 diff --git a/apps/web/core/hooks/use-channel-connection.ts b/apps/web/core/hooks/use-channel-connection.ts
 new file mode 100644
-index 0000000..f8277cd
+index 0000000..6ba82b4
 --- /dev/null
 +++ b/apps/web/core/hooks/use-channel-connection.ts
-@@ -0,0 +1,127 @@
+@@ -0,0 +1,192 @@
 +/**
 + * Sintergica CE extension: websocket connection for a chat channel.
 + *
@@ -109605,6 +110667,7 @@ index 0000000..f8277cd
 +export type TChannelConnection = {
 +  isLive: boolean;
 +  typingUsers: string[]; // display names, excluding self
++  onlineUsers: { id: string; name: string }[]; // connected to this channel, self included
 +  setTyping: (isTyping: boolean) => void;
 +};
 +
@@ -109614,6 +110677,7 @@ index 0000000..f8277cd
 +  // states
 +  const [isLive, setIsLive] = useState(false);
 +  const [typingUsers, setTypingUsers] = useState<string[]>([]);
++  const [onlineUsers, setOnlineUsers] = useState<{ id: string; name: string }[]>([]);
 +  // store hooks
 +  const chat = useChat();
 +  const { data: currentUser } = useUser();
@@ -109662,13 +110726,19 @@ index 0000000..f8277cd
 +        },
 +        onAwarenessUpdate: ({ states }) => {
 +          const names: string[] = [];
++          const online = new Map<string, string>();
 +          for (const state of states) {
 +            const user = state as { user?: { id?: string; name?: string }; typing?: boolean };
++            if (user.user?.id && user.user.name) online.set(user.user.id, user.user.name);
 +            if (user.typing && user.user?.id && user.user.id !== currentUser.id && user.user.name) {
 +              names.push(user.user.name);
 +            }
 +          }
 +          setTypingUsers((prev) => (prev.join("|") === names.join("|") ? prev : names));
++          const next = [...online.entries()].map(([id, name]) => ({ id, name }));
++          setOnlineUsers((prev) =>
++            prev.map((u) => u.id).join("|") === next.map((u) => u.id).join("|") ? prev : next
++          );
 +        },
 +      });
 +      provider.setAwarenessField("user", { id: currentUser.id, name: currentUser.display_name });
@@ -109681,6 +110751,7 @@ index 0000000..f8277cd
 +      providerRef.current = null;
 +      setIsLive(false);
 +      setTypingUsers([]);
++      setOnlineUsers([]);
 +      if (typingResetRef.current) clearTimeout(typingResetRef.current);
 +      provider?.destroy();
 +    };
@@ -109700,7 +110771,63 @@ index 0000000..f8277cd
 +    }
 +  }, []);
 +
-+  return { isLive, typingUsers, setTyping };
++  return { isLive, typingUsers, onlineUsers, setTyping };
++};
++
++
++/**
++ * Workspace-wide badge connection: subscribes to "chat:workspace:<id>" and
++ * feeds light channel.activity events into the store so unread counters move
++ * in realtime for every visible channel, not just the open one. Authorized
++ * server-side by workspace membership (chat/me/ probe).
++ */
++export const useWorkspaceChatConnection = ({
++  workspaceSlug,
++  workspaceId,
++  enabled = true,
++}: {
++  workspaceSlug: string;
++  workspaceId: string | undefined;
++  enabled?: boolean;
++}): void => {
++  // store hooks
++  const chat = useChat();
++  const { data: currentUser } = useUser();
++
++  useEffect(() => {
++    if (!enabled || !workspaceId || !currentUser?.id || typeof window === "undefined") return;
++
++    let provider: HocuspocusProvider | null = null;
++    try {
++      const base = LIVE_BASE_URL?.trim() || window.location.origin;
++      const url = new URL(base);
++      url.protocol = window.location.protocol === "https:" ? "wss" : "ws";
++      url.pathname = `${LIVE_BASE_PATH}/collaboration`;
++      url.searchParams.set("documentType", "channel");
++      url.searchParams.set("workspaceSlug", workspaceSlug);
++
++      provider = new HocuspocusProvider({
++        name: `chat:workspace:${workspaceId}`,
++        url: url.toString(),
++        token: JSON.stringify({ id: currentUser.id }),
++        onStateless: ({ payload }) => {
++          try {
++            const event = JSON.parse(payload);
++            if (event?.event === "channel.activity") chat.applyIncomingEvent(event);
++          } catch {
++            // ignore non-chat payloads
++          }
++        },
++      });
++    } catch (error) {
++      console.error("chat: error creating workspace connection", error);
++    }
++
++    return () => {
++      provider?.destroy();
++    };
++    // eslint-disable-next-line react-hooks/exhaustive-deps
++  }, [workspaceSlug, workspaceId, enabled, currentUser?.id]);
 +};
 diff --git a/apps/web/core/layouts/auth-layout/workspace-wrapper.tsx b/apps/web/core/layouts/auth-layout/workspace-wrapper.tsx
 index e74dfd5..d582cb9 100644
@@ -109982,10 +111109,10 @@ index 0000000..3c9e1d1
 +}
 diff --git a/apps/web/core/services/chat.service.ts b/apps/web/core/services/chat.service.ts
 new file mode 100644
-index 0000000..c1a517d
+index 0000000..0726e85
 --- /dev/null
 +++ b/apps/web/core/services/chat.service.ts
-@@ -0,0 +1,271 @@
+@@ -0,0 +1,403 @@
 +/**
 + * Sintergica CE extension: chat channels (ClickUp-style) service.
 + *
@@ -109997,8 +111124,12 @@ index 0000000..c1a517d
 + */
 +
 +import { API_BASE_URL } from "@plane/constants";
-+import type { IUserLite } from "@plane/types";
++import { generateFileUploadPayload } from "@plane/services";
++import type { IUserLite, TFileSignedURLResponse } from "@plane/types";
 +import { APIService } from "@/services/api.service";
++import { FileUploadService } from "@/services/file-upload.service";
++
++const fileUploadService = new FileUploadService();
 +
 +export type TChatChannel = {
 +  id: string;
@@ -110008,6 +111139,8 @@ index 0000000..c1a517d
 +  description: string;
 +  is_general: boolean;
 +  access: number;
++  is_direct: boolean;
++  member_ids: string[] | null;
 +  archived_at: string | null;
 +  unread_count?: number | null;
 +  last_message_at?: string | null;
@@ -110042,6 +111175,8 @@ index 0000000..c1a517d
 +  message_stripped: string | null;
 +  edited_at: string | null;
 +  is_removed: boolean;
++  pinned_at: string | null;
++  pinned_by: string | null;
 +  reactions: TChatReaction[];
 +  work_item_links: TChatWorkItemLink[];
 +  reply_count: number;
@@ -110056,10 +111191,28 @@ index 0000000..c1a517d
 +  next_cursor?: string | null;
 +};
 +
++export type TChatSearchResult = {
++  id: string;
++  channel_id: string;
++  channel_name: string;
++  channel_is_direct: boolean;
++  project_id: string | null;
++  parent_id: string | null;
++  actor_display_name: string;
++  snippet: string;
++  created_at: string;
++};
++
++export type TChatChannelMember = {
++  member: IUserLite;
++  joined_at: string;
++};
++
 +export type TChatUnread = {
 +  channel_id: string;
 +  unread_count: number;
 +  last_message_at: string | null;
++  is_muted: boolean;
 +};
 +
 +export class ChatService extends APIService {
@@ -110209,6 +111362,18 @@ index 0000000..c1a517d
 +      });
 +  }
 +
++  async updateMembership(
++    workspaceSlug: string,
++    channelId: string,
++    data: { is_muted: boolean }
++  ): Promise<{ last_read_at: string | null; is_muted: boolean }> {
++    return this.post(`${this.base(workspaceSlug)}/channels/${channelId}/membership/`, data)
++      .then((res) => res?.data)
++      .catch((error) => {
++        throw error?.response?.data;
++      });
++  }
++
 +  async markRead(workspaceSlug: string, channelId: string, lastReadAt?: string): Promise<{ last_read_at: string }> {
 +    return this.post(`${this.base(workspaceSlug)}/channels/${channelId}/read/`, {
 +      last_read_at: lastReadAt,
@@ -110255,6 +111420,100 @@ index 0000000..c1a517d
 +      .catch((error) => {
 +        throw error?.response?.data;
 +      });
++  }
++
++  async createDM(workspaceSlug: string, memberIds: string[]): Promise<TChatChannel> {
++    return this.post(`${this.base(workspaceSlug)}/dms/`, { member_ids: memberIds })
++      .then((res) => res?.data)
++      .catch((error) => {
++        throw error?.response?.data;
++      });
++  }
++
++  async searchMessages(workspaceSlug: string, q: string, channelId?: string): Promise<TChatSearchResult[]> {
++    const search = new URLSearchParams({ q });
++    if (channelId) search.set("channel_id", channelId);
++    return this.get(`${this.base(workspaceSlug)}/search/?${search.toString()}`)
++      .then((res) => res?.data)
++      .catch((error) => {
++        throw error?.response?.data;
++      });
++  }
++
++  async fetchChannelMembers(workspaceSlug: string, channelId: string): Promise<TChatChannelMember[]> {
++    return this.get(`${this.base(workspaceSlug)}/channels/${channelId}/members/`)
++      .then((res) => res?.data)
++      .catch((error) => {
++        throw error?.response?.data;
++      });
++  }
++
++  async addChannelMembers(workspaceSlug: string, channelId: string, memberIds: string[]): Promise<void> {
++    return this.post(`${this.base(workspaceSlug)}/channels/${channelId}/members/`, { member_ids: memberIds })
++      .then((res) => res?.data)
++      .catch((error) => {
++        throw error?.response?.data;
++      });
++  }
++
++  async removeChannelMember(workspaceSlug: string, channelId: string, memberId: string): Promise<void> {
++    return this.delete(`${this.base(workspaceSlug)}/channels/${channelId}/members/${memberId}/`)
++      .then((res) => res?.data)
++      .catch((error) => {
++        throw error?.response?.data;
++      });
++  }
++
++  async pinMessage(workspaceSlug: string, channelId: string, messageId: string): Promise<TChatMessage> {
++    return this.post(`${this.base(workspaceSlug)}/channels/${channelId}/messages/${messageId}/pin/`, {})
++      .then((res) => res?.data)
++      .catch((error) => {
++        throw error?.response?.data;
++      });
++  }
++
++  async unpinMessage(workspaceSlug: string, channelId: string, messageId: string): Promise<void> {
++    return this.delete(`${this.base(workspaceSlug)}/channels/${channelId}/messages/${messageId}/pin/`)
++      .then((res) => res?.data)
++      .catch((error) => {
++        throw error?.response?.data;
++      });
++  }
++
++  async fetchPins(workspaceSlug: string, channelId: string): Promise<TChatMessage[]> {
++    return this.get(`${this.base(workspaceSlug)}/channels/${channelId}/pins/`)
++      .then((res) => res?.data)
++      .catch((error) => {
++        throw error?.response?.data;
++      });
++  }
++
++  async fetchMembership(
++    workspaceSlug: string,
++    channelId: string
++  ): Promise<{ last_read_at: string | null; is_muted: boolean }> {
++    return this.get(`${this.base(workspaceSlug)}/channels/${channelId}/membership/`)
++      .then((res) => res?.data)
++      .catch((error) => {
++        throw error?.response?.data;
++      });
++  }
++
++  /** Full attachment flow: presign → S3 upload → confirm. Returns asset id. */
++  async uploadChannelAsset(workspaceSlug: string, channelId: string, file: File): Promise<string> {
++    const presign = await this.post(`${this.base(workspaceSlug)}/channels/${channelId}/assets/`, {
++      name: file.name,
++      type: file.type,
++      size: file.size,
++    })
++      .then((res) => res?.data)
++      .catch((error) => {
++        throw error?.response?.data;
++      });
++    const payload = generateFileUploadPayload(presign as TFileSignedURLResponse, file);
++    await fileUploadService.uploadFile(presign.upload_data.url, payload);
++    await this.patch(`${this.base(workspaceSlug)}/channels/${channelId}/assets/${presign.asset_id}/`, {});
++    return presign.asset_id as string;
 +  }
 +}
 diff --git a/apps/web/core/services/drive.service.ts b/apps/web/core/services/drive.service.ts
@@ -111761,10 +113020,10 @@ index 0000000..1bc5194
 +}
 diff --git a/apps/web/core/store/chat.store.ts b/apps/web/core/store/chat.store.ts
 new file mode 100644
-index 0000000..74242fa
+index 0000000..f8ff7df
 --- /dev/null
 +++ b/apps/web/core/store/chat.store.ts
-@@ -0,0 +1,561 @@
+@@ -0,0 +1,693 @@
 +/**
 + * Sintergica CE extension: chat channels store.
 + *
@@ -111782,6 +113041,7 @@ index 0000000..74242fa
 +import {
 +  ChatService,
 +  type TChatChannel,
++  type TChatChannelMember,
 +  type TChatMessage,
 +  type TChatUnread,
 +} from "@/services/chat.service";
@@ -111796,7 +113056,8 @@ index 0000000..74242fa
 +      message_id: string;
 +      actor_id: string;
 +      reaction: string;
-+    };
++    }
++  | { event: "channel.activity"; channel_id: string; actor_id: string | null; ts: string };
 +
 +export interface IChatStore {
 +  // observables
@@ -111806,6 +113067,7 @@ index 0000000..74242fa
 +  messageIdsByChannel: Record<string, string[]>;
 +  threadIds: Record<string, string[]>;
 +  unreads: Record<string, number>;
++  hasUnread: boolean;
 +  activeChannelId: string | null;
 +  activeThreadRootId: string | null;
 +  hasMoreByChannel: Record<string, boolean>;
@@ -111814,6 +113076,7 @@ index 0000000..74242fa
 +  // helpers
 +  channelsForWorkspace: (workspaceSlug: string) => TChatChannel[];
 +  channelsForProject: (projectId: string) => TChatChannel[];
++  dmChannels: () => TChatChannel[];
 +  channelMessages: (channelId: string) => TChatMessage[];
 +  threadReplies: (rootId: string) => TChatMessage[];
 +  latestMessageAt: (channelId: string) => string | undefined;
@@ -111855,6 +113118,13 @@ index 0000000..74242fa
 +  toggleReaction: (workspaceSlug: string, channelId: string, messageId: string, reaction: string) => Promise<void>;
 +  linkWorkItem: (workspaceSlug: string, channelId: string, messageId: string, issueId: string) => Promise<void>;
 +  unlinkWorkItem: (workspaceSlug: string, channelId: string, messageId: string, issueId: string) => Promise<void>;
++  toggleMute: (workspaceSlug: string, channelId: string) => Promise<void>;
++  createDM: (workspaceSlug: string, memberIds: string[]) => Promise<TChatChannel>;
++  fetchChannelMembers: (workspaceSlug: string, channelId: string) => Promise<TChatChannelMember[]>;
++  addChannelMembers: (workspaceSlug: string, channelId: string, memberIds: string[]) => Promise<void>;
++  removeChannelMember: (workspaceSlug: string, channelId: string, memberId: string) => Promise<void>;
++  togglePin: (workspaceSlug: string, channelId: string, messageId: string) => Promise<void>;
++  lastSeenAt: Record<string, string | null>;
 +  markRead: (workspaceSlug: string, channelId: string) => Promise<void>;
 +  fetchUnreads: (workspaceSlug: string) => Promise<void>;
 +  applyIncomingEvent: (event: TChatEvent) => void;
@@ -111868,6 +113138,8 @@ index 0000000..74242fa
 +  messageIdsByChannel: Record<string, string[]> = {};
 +  threadIds: Record<string, string[]> = {};
 +  unreads: Record<string, number> = {};
++  hasUnread = false;
++  lastSeenAt: Record<string, string | null> = {};
 +  activeChannelId: string | null = null;
 +  activeThreadRootId: string | null = null;
 +  hasMoreByChannel: Record<string, boolean> = {};
@@ -111885,6 +113157,8 @@ index 0000000..74242fa
 +      messageIdsByChannel: observable,
 +      threadIds: observable,
 +      unreads: observable,
++      hasUnread: observable,
++      lastSeenAt: observable,
 +      activeChannelId: observable,
 +      activeThreadRootId: observable,
 +      hasMoreByChannel: observable,
@@ -111906,6 +113180,11 @@ index 0000000..74242fa
 +      toggleReaction: action,
 +      linkWorkItem: action,
 +      unlinkWorkItem: action,
++      toggleMute: action,
++      createDM: action,
++      addChannelMembers: action,
++      removeChannelMember: action,
++      togglePin: action,
 +      markRead: action,
 +      fetchUnreads: action,
 +      applyIncomingEvent: action,
@@ -111923,9 +113202,14 @@ index 0000000..74242fa
 +  channelsForWorkspace = (workspaceSlug: string): TChatChannel[] => {
 +    void workspaceSlug; // channels are already scoped by the fetch
 +    return Object.values(this.channels)
-+      .filter((c) => c.project === null && !c.archived_at)
++      .filter((c) => c.project === null && !c.archived_at && !c.is_direct)
 +      .sort((a, b) => a.name.localeCompare(b.name));
 +  };
++
++  dmChannels = (): TChatChannel[] =>
++    Object.values(this.channels)
++      .filter((c) => c.is_direct && !c.archived_at)
++      .sort((a, b) => (b.last_message_at ?? b.created_at).localeCompare(a.last_message_at ?? a.created_at));
 +
 +  channelsForProject = (projectId: string): TChatChannel[] =>
 +    Object.values(this.channels)
@@ -112067,6 +113351,16 @@ index 0000000..74242fa
 +  // ------------------------------------------------------------------ messages
 +
 +  fetchInitialMessages = async (workspaceSlug: string, channelId: string) => {
++    // Snapshot the read marker BEFORE markRead moves it: it anchors the
++    // "new messages" divider for this visit.
++    void this.service
++      .fetchMembership(workspaceSlug, channelId)
++      .then((row) => {
++        runInAction(() => {
++          this.lastSeenAt[channelId] = row.last_read_at;
++        });
++      })
++      .catch(() => undefined);
 +    const page = await this.service.fetchMessages(workspaceSlug, channelId, { limit: 50 });
 +    runInAction(() => {
 +      this.messageIdsByChannel[channelId] = [];
@@ -112142,6 +113436,8 @@ index 0000000..74242fa
 +      message_stripped: null,
 +      edited_at: null,
 +      is_removed: false,
++      pinned_at: null,
++      pinned_by: null,
 +      reactions: [],
 +      work_item_links: [],
 +      reply_count: 0,
@@ -112249,6 +113545,82 @@ index 0000000..74242fa
 +    });
 +  };
 +
++  toggleMute = async (workspaceSlug: string, channelId: string) => {
++    const channel = this.channels[channelId];
++    if (!channel) return;
++    const next = !channel.is_muted;
++    runInAction(() => {
++      this.channels[channelId] = { ...channel, is_muted: next };
++    });
++    try {
++      await this.service.updateMembership(workspaceSlug, channelId, { is_muted: next });
++    } catch (error) {
++      runInAction(() => {
++        this.channels[channelId] = channel;
++      });
++      throw error;
++    }
++  };
++
++  createDM = async (workspaceSlug: string, memberIds: string[]) => {
++    const row = await this.service.createDM(workspaceSlug, memberIds);
++    runInAction(() => {
++      this.channels[row.id] = row;
++    });
++    return row;
++  };
++
++  fetchChannelMembers = async (workspaceSlug: string, channelId: string) =>
++    this.service.fetchChannelMembers(workspaceSlug, channelId);
++
++  addChannelMembers = async (workspaceSlug: string, channelId: string, memberIds: string[]) => {
++    await this.service.addChannelMembers(workspaceSlug, channelId, memberIds);
++    const channel = this.channels[channelId];
++    if (channel?.member_ids) {
++      runInAction(() => {
++        this.channels[channelId] = {
++          ...channel,
++          member_ids: [...new Set([...(channel.member_ids ?? []), ...memberIds])],
++        };
++      });
++    }
++  };
++
++  removeChannelMember = async (workspaceSlug: string, channelId: string, memberId: string) => {
++    await this.service.removeChannelMember(workspaceSlug, channelId, memberId);
++    const channel = this.channels[channelId];
++    runInAction(() => {
++      if (channel?.member_ids) {
++        this.channels[channelId] = {
++          ...channel,
++          member_ids: (channel.member_ids ?? []).filter((m) => m !== memberId),
++        };
++      }
++      // Leaving a private channel removes it from my sidebar.
++      if (memberId === this.currentUserId && channel?.access === 1) {
++        delete this.channels[channelId];
++        delete this.unreads[channelId];
++        if (this.activeChannelId === channelId) this.activeChannelId = null;
++      }
++    });
++  };
++
++  togglePin = async (workspaceSlug: string, channelId: string, messageId: string) => {
++    const message = this.messageMap[messageId];
++    if (!message) return;
++    if (message.pinned_at) {
++      await this.service.unpinMessage(workspaceSlug, channelId, messageId);
++      runInAction(() => {
++        this.messageMap[messageId] = { ...message, pinned_at: null, pinned_by: null };
++      });
++    } else {
++      const row = await this.service.pinMessage(workspaceSlug, channelId, messageId);
++      runInAction(() => {
++        this.messageMap[messageId] = { ...this.messageMap[messageId], ...row };
++      });
++    }
++  };
++
 +  markRead = async (workspaceSlug: string, channelId: string) => {
 +    runInAction(() => {
 +      this.unreads[channelId] = 0;
@@ -112259,12 +113631,21 @@ index 0000000..74242fa
 +  fetchUnreads = async (workspaceSlug: string) => {
 +    const rows: TChatUnread[] = await this.service.fetchUnreads(workspaceSlug);
 +    runInAction(() => {
++      let any = false;
 +      for (const row of rows) {
 +        // The open channel is being read right now; keep it at zero.
 +        this.unreads[row.channel_id] = row.channel_id === this.activeChannelId ? 0 : row.unread_count;
++        if (this.unreads[row.channel_id] > 0 && !row.is_muted) any = true;
 +        const channel = this.channels[row.channel_id];
-+        if (channel) this.channels[row.channel_id] = { ...channel, last_message_at: row.last_message_at };
++        if (channel) {
++          this.channels[row.channel_id] = {
++            ...channel,
++            last_message_at: row.last_message_at,
++            is_muted: row.is_muted,
++          };
++        }
 +      }
++      this.hasUnread = any;
 +    });
 +  };
 +
@@ -112300,6 +113681,16 @@ index 0000000..74242fa
 +        } else {
 +          this.dropMessage(event.message_id, event.channel_id, event.parent_id);
 +        }
++        break;
++      }
++      case "channel.activity": {
++        // Light workspace-wide ping: bump the badge without the message body.
++        if (event.channel_id === this.activeChannelId || event.actor_id === this.currentUserId) return;
++        const channel = this.channels[event.channel_id];
++        if (!channel) return; // channel outside reach (or chat never opened)
++        this.unreads[event.channel_id] = (this.unreads[event.channel_id] ?? 0) + 1;
++        if (!channel.is_muted) this.hasUnread = true;
++        this.channels[event.channel_id] = { ...channel, last_message_at: event.ts };
 +        break;
 +      }
 +      case "reaction.added":
@@ -180623,7 +182014,7 @@ index 5aa7d2f..32afb6d 100644
        "fixed_schedule": "Pevný rozvrh",
        "schedule": {
 diff --git a/packages/i18n/src/locales/cs/common.json b/packages/i18n/src/locales/cs/common.json
-index c1e9372..bcf4775 100644
+index c1e9372..ede714e 100644
 --- a/packages/i18n/src/locales/cs/common.json
 +++ b/packages/i18n/src/locales/cs/common.json
 @@ -244,7 +244,7 @@
@@ -180653,7 +182044,7 @@ index c1e9372..bcf4775 100644
    "in_app": "V aplikaci",
    "forms": "Formuláře",
    "milestones": "Milníky",
-@@ -867,5 +867,379 @@
+@@ -867,5 +867,417 @@
        "description": "Exportujte položky do JSON.",
        "short_description": "Exportovat jako JSON"
      }
@@ -181030,7 +182421,45 @@ index c1e9372..bcf4775 100644
 +    "empty_description": "Napište do tohoto kanálu jako první.",
 +    "beginning_of_channel": "Toto je začátek kanálu.",
 +    "select_channel": "Vyberte kanál.",
-+    "typing": "{names} píše…"
++    "typing": "{names} píše…",
++    "mute": "Ztlumit kanál",
++    "unmute": "Zrušit ztlumení",
++    "mentioned_you": "vás zmínil v",
++    "dms_section": "Přímé zprávy",
++    "no_dms": "Zatím žádné přímé zprávy.",
++    "new_dm": "Nová přímá zpráva",
++    "start_dm": "Zahájit konverzaci",
++    "create_dm_failed": "Konverzaci se nepodařilo zahájit",
++    "direct_message": "Přímá zpráva",
++    "private_channel": "Soukromý kanál (jen na pozvání)",
++    "members": "Členové",
++    "invite": "Pozvat",
++    "invite_failed": "Pozvání se nezdařilo",
++    "remove_member": "Odebrat",
++    "remove_member_failed": "Odebrání se nezdařilo",
++    "leave_channel": "Opustit kanál",
++    "channel_settings": "Nastavení kanálu",
++    "channel_name": "Název",
++    "channel_description": "Popis",
++    "channel_description_placeholder": "O čem je tento kanál?",
++    "archive_channel": "Archivovat",
++    "confirm_delete_channel": "Smazat navždy?",
++    "update_channel_failed": "Kanál se nepodařilo upravit",
++    "delete_channel_failed": "Kanál se nepodařilo smazat",
++    "general_protected": "Kanál general nelze přejmenovat ani smazat.",
++    "pin_message": "Připnout zprávu",
++    "unpin_message": "Odepnout",
++    "pinned_messages": "Připnuté zprávy",
++    "no_pins": "Žádné připnuté zprávy.",
++    "search_messages": "Hledat zprávy",
++    "search_placeholder": "Hledat…",
++    "this_channel": "Tento kanál",
++    "whole_workspace": "Celý workspace",
++    "no_results": "Žádné výsledky.",
++    "search_people": "Hledat lidi…",
++    "no_people_found": "Nikdo nenalezen.",
++    "new_messages": "Nové zprávy",
++    "jump_to_new": "Přejít na nové zprávy"
    }
  }
 diff --git a/packages/i18n/src/locales/cs/empty-state.json b/packages/i18n/src/locales/cs/empty-state.json
@@ -181738,7 +183167,7 @@ index 66379d4..2c778e6 100644
        "fixed_schedule": "Fester Zeitplan",
        "schedule": {
 diff --git a/packages/i18n/src/locales/de/common.json b/packages/i18n/src/locales/de/common.json
-index 1e18d4e..3ab2414 100644
+index 1e18d4e..8864870 100644
 --- a/packages/i18n/src/locales/de/common.json
 +++ b/packages/i18n/src/locales/de/common.json
 @@ -244,7 +244,7 @@
@@ -181759,7 +183188,7 @@ index 1e18d4e..3ab2414 100644
      "choose_view_logs_from_setup_sh_and_docker_logs_to_be_sure": "Wählen Sie View Logs aus setup.sh und Docker-Logs, um sicherzugehen."
    },
    "customize_navigation": "Navigation anpassen",
-@@ -867,5 +867,379 @@
+@@ -867,5 +867,417 @@
        "description": "Arbeitselemente in JSON exportieren.",
        "short_description": "Als JSON exportieren"
      }
@@ -182136,7 +183565,45 @@ index 1e18d4e..3ab2414 100644
 +    "empty_description": "Schreibe als Erste:r in diesem Kanal.",
 +    "beginning_of_channel": "Das ist der Anfang des Kanals.",
 +    "select_channel": "Wähle einen Kanal aus.",
-+    "typing": "{names} schreibt…"
++    "typing": "{names} schreibt…",
++    "mute": "Kanal stummschalten",
++    "unmute": "Stummschaltung aufheben",
++    "mentioned_you": "hat dich erwähnt in",
++    "dms_section": "Direktnachrichten",
++    "no_dms": "Noch keine Direktnachrichten.",
++    "new_dm": "Neue Direktnachricht",
++    "start_dm": "Unterhaltung starten",
++    "create_dm_failed": "Unterhaltung konnte nicht gestartet werden",
++    "direct_message": "Direktnachricht",
++    "private_channel": "Privater Kanal (nur auf Einladung)",
++    "members": "Mitglieder",
++    "invite": "Einladen",
++    "invite_failed": "Einladung fehlgeschlagen",
++    "remove_member": "Entfernen",
++    "remove_member_failed": "Entfernen fehlgeschlagen",
++    "leave_channel": "Kanal verlassen",
++    "channel_settings": "Kanaleinstellungen",
++    "channel_name": "Name",
++    "channel_description": "Beschreibung",
++    "channel_description_placeholder": "Worum geht es in diesem Kanal?",
++    "archive_channel": "Archivieren",
++    "confirm_delete_channel": "Endgültig löschen?",
++    "update_channel_failed": "Kanal konnte nicht aktualisiert werden",
++    "delete_channel_failed": "Kanal konnte nicht gelöscht werden",
++    "general_protected": "Der general-Kanal kann nicht umbenannt oder gelöscht werden.",
++    "pin_message": "Nachricht anheften",
++    "unpin_message": "Anheften aufheben",
++    "pinned_messages": "Angeheftete Nachrichten",
++    "no_pins": "Keine angehefteten Nachrichten.",
++    "search_messages": "Nachrichten durchsuchen",
++    "search_placeholder": "Suchen…",
++    "this_channel": "Dieser Kanal",
++    "whole_workspace": "Gesamter Workspace",
++    "no_results": "Keine Ergebnisse.",
++    "search_people": "Personen suchen…",
++    "no_people_found": "Niemand gefunden.",
++    "new_messages": "Neue Nachrichten",
++    "jump_to_new": "Zu neuen Nachrichten"
    }
  }
 diff --git a/packages/i18n/src/locales/de/empty-state.json b/packages/i18n/src/locales/de/empty-state.json
@@ -182829,7 +184296,7 @@ index 64779c7..c549990 100644
        "fixed_schedule": "Fixed schedule",
        "schedule": {
 diff --git a/packages/i18n/src/locales/en/common.json b/packages/i18n/src/locales/en/common.json
-index a138304..fe8fdf1 100644
+index a138304..3cab14f 100644
 --- a/packages/i18n/src/locales/en/common.json
 +++ b/packages/i18n/src/locales/en/common.json
 @@ -244,7 +244,7 @@
@@ -182859,7 +184326,7 @@ index a138304..fe8fdf1 100644
    "in_app": "In-app",
    "forms": "Forms",
    "milestones": "Milestones",
-@@ -867,5 +867,379 @@
+@@ -867,5 +867,417 @@
        "description": "Export work items to a JSON file.",
        "short_description": "Export as json"
      }
@@ -183236,7 +184703,45 @@ index a138304..fe8fdf1 100644
 +    "empty_description": "Be the first to write in this channel.",
 +    "beginning_of_channel": "This is the beginning of the channel.",
 +    "select_channel": "Select a channel to start.",
-+    "typing": "{names} is typing…"
++    "typing": "{names} is typing…",
++    "mute": "Mute channel",
++    "unmute": "Unmute channel",
++    "mentioned_you": "mentioned you in",
++    "dms_section": "Direct messages",
++    "no_dms": "No direct messages yet.",
++    "new_dm": "New direct message",
++    "start_dm": "Start conversation",
++    "create_dm_failed": "Could not start the conversation",
++    "direct_message": "Direct message",
++    "private_channel": "Private channel (invite only)",
++    "members": "Members",
++    "invite": "Invite",
++    "invite_failed": "Could not invite",
++    "remove_member": "Remove",
++    "remove_member_failed": "Could not remove",
++    "leave_channel": "Leave channel",
++    "channel_settings": "Channel settings",
++    "channel_name": "Name",
++    "channel_description": "Description",
++    "channel_description_placeholder": "What is this channel about?",
++    "archive_channel": "Archive",
++    "confirm_delete_channel": "Delete forever?",
++    "update_channel_failed": "Could not update the channel",
++    "delete_channel_failed": "Could not delete the channel",
++    "general_protected": "The general channel cannot be renamed or deleted.",
++    "pin_message": "Pin message",
++    "unpin_message": "Unpin message",
++    "pinned_messages": "Pinned messages",
++    "no_pins": "No pinned messages.",
++    "search_messages": "Search messages",
++    "search_placeholder": "Search…",
++    "this_channel": "This channel",
++    "whole_workspace": "Whole workspace",
++    "no_results": "No results.",
++    "search_people": "Search people…",
++    "no_people_found": "No people found.",
++    "new_messages": "New messages",
++    "jump_to_new": "Jump to new messages"
    }
  }
 diff --git a/packages/i18n/src/locales/en/empty-state.json b/packages/i18n/src/locales/en/empty-state.json
@@ -184003,7 +185508,7 @@ index f49d529..b042251 100644
        "fixed_schedule": "Horario fijo",
        "schedule": {
 diff --git a/packages/i18n/src/locales/es/common.json b/packages/i18n/src/locales/es/common.json
-index 64440c9..6316696 100644
+index 64440c9..3db65d5 100644
 --- a/packages/i18n/src/locales/es/common.json
 +++ b/packages/i18n/src/locales/es/common.json
 @@ -145,7 +145,7 @@
@@ -184042,7 +185547,7 @@ index 64440c9..6316696 100644
    "in_app": "En la aplicación",
    "forms": "Formularios",
    "milestones": "Hitos",
-@@ -867,5 +867,379 @@
+@@ -867,5 +867,417 @@
        "description": "Exporta elementos de trabajo a un archivo JSON.",
        "short_description": "Exportar como json"
      }
@@ -184419,7 +185924,45 @@ index 64440c9..6316696 100644
 +    "empty_description": "Sé la primera persona en escribir en este canal.",
 +    "beginning_of_channel": "Este es el comienzo del canal.",
 +    "select_channel": "Selecciona un canal para empezar.",
-+    "typing": "{names} está escribiendo…"
++    "typing": "{names} está escribiendo…",
++    "mute": "Silenciar canal",
++    "unmute": "Activar notificaciones",
++    "mentioned_you": "te mencionó en",
++    "dms_section": "Mensajes directos",
++    "no_dms": "Aún no hay mensajes directos.",
++    "new_dm": "Nuevo mensaje directo",
++    "start_dm": "Iniciar conversación",
++    "create_dm_failed": "No se pudo iniciar la conversación",
++    "direct_message": "Mensaje directo",
++    "private_channel": "Canal privado (solo por invitación)",
++    "members": "Miembros",
++    "invite": "Invitar",
++    "invite_failed": "No se pudo invitar",
++    "remove_member": "Quitar",
++    "remove_member_failed": "No se pudo quitar",
++    "leave_channel": "Salir del canal",
++    "channel_settings": "Ajustes del canal",
++    "channel_name": "Nombre",
++    "channel_description": "Descripción",
++    "channel_description_placeholder": "¿De qué trata este canal?",
++    "archive_channel": "Archivar",
++    "confirm_delete_channel": "¿Eliminar para siempre?",
++    "update_channel_failed": "No se pudo actualizar el canal",
++    "delete_channel_failed": "No se pudo eliminar el canal",
++    "general_protected": "El canal general no se puede renombrar ni eliminar.",
++    "pin_message": "Fijar mensaje",
++    "unpin_message": "Desfijar mensaje",
++    "pinned_messages": "Mensajes fijados",
++    "no_pins": "No hay mensajes fijados.",
++    "search_messages": "Buscar mensajes",
++    "search_placeholder": "Buscar…",
++    "this_channel": "Este canal",
++    "whole_workspace": "Todo el workspace",
++    "no_results": "Sin resultados.",
++    "search_people": "Buscar personas…",
++    "no_people_found": "No se encontró a nadie.",
++    "new_messages": "Mensajes nuevos",
++    "jump_to_new": "Ir a los mensajes nuevos"
    }
  }
 diff --git a/packages/i18n/src/locales/es/empty-state.json b/packages/i18n/src/locales/es/empty-state.json
@@ -185177,7 +186720,7 @@ index 5343f12..1a31636 100644
        "fixed_schedule": "Horaire fixe",
        "schedule": {
 diff --git a/packages/i18n/src/locales/fr/common.json b/packages/i18n/src/locales/fr/common.json
-index a94ab8a..7693eb0 100644
+index a94ab8a..26373a1 100644
 --- a/packages/i18n/src/locales/fr/common.json
 +++ b/packages/i18n/src/locales/fr/common.json
 @@ -244,7 +244,7 @@
@@ -185207,7 +186750,7 @@ index a94ab8a..7693eb0 100644
    "in_app": "Dans l'application",
    "forms": "Formulaires",
    "milestones": "Jalons",
-@@ -867,5 +867,379 @@
+@@ -867,5 +867,417 @@
        "description": "Exportez les éléments de travail vers un fichier JSON.",
        "short_description": "Exporter en json"
      }
@@ -185584,7 +187127,45 @@ index a94ab8a..7693eb0 100644
 +    "empty_description": "Soyez le premier à écrire dans ce canal.",
 +    "beginning_of_channel": "C'est le début du canal.",
 +    "select_channel": "Sélectionnez un canal pour commencer.",
-+    "typing": "{names} est en train d'écrire…"
++    "typing": "{names} est en train d'écrire…",
++    "mute": "Mettre le canal en sourdine",
++    "unmute": "Réactiver les notifications",
++    "mentioned_you": "vous a mentionné dans",
++    "dms_section": "Messages directs",
++    "no_dms": "Pas encore de messages directs.",
++    "new_dm": "Nouveau message direct",
++    "start_dm": "Démarrer la conversation",
++    "create_dm_failed": "Impossible de démarrer la conversation",
++    "direct_message": "Message direct",
++    "private_channel": "Canal privé (sur invitation)",
++    "members": "Membres",
++    "invite": "Inviter",
++    "invite_failed": "Invitation impossible",
++    "remove_member": "Retirer",
++    "remove_member_failed": "Retrait impossible",
++    "leave_channel": "Quitter le canal",
++    "channel_settings": "Paramètres du canal",
++    "channel_name": "Nom",
++    "channel_description": "Description",
++    "channel_description_placeholder": "De quoi parle ce canal ?",
++    "archive_channel": "Archiver",
++    "confirm_delete_channel": "Supprimer définitivement ?",
++    "update_channel_failed": "Impossible de mettre à jour le canal",
++    "delete_channel_failed": "Impossible de supprimer le canal",
++    "general_protected": "Le canal general ne peut être ni renommé ni supprimé.",
++    "pin_message": "Épingler le message",
++    "unpin_message": "Désépingler",
++    "pinned_messages": "Messages épinglés",
++    "no_pins": "Aucun message épinglé.",
++    "search_messages": "Rechercher des messages",
++    "search_placeholder": "Rechercher…",
++    "this_channel": "Ce canal",
++    "whole_workspace": "Tout l'espace",
++    "no_results": "Aucun résultat.",
++    "search_people": "Rechercher des personnes…",
++    "no_people_found": "Personne trouvée.",
++    "new_messages": "Nouveaux messages",
++    "jump_to_new": "Aller aux nouveaux messages"
    }
  }
 diff --git a/packages/i18n/src/locales/fr/empty-state.json b/packages/i18n/src/locales/fr/empty-state.json
@@ -186340,7 +187921,7 @@ index 2fd8636..c6ce762 100644
        "fixed_schedule": "Jadwal tetap",
        "schedule": {
 diff --git a/packages/i18n/src/locales/id/common.json b/packages/i18n/src/locales/id/common.json
-index 7d26685..a4c2673 100644
+index 7d26685..18f7224 100644
 --- a/packages/i18n/src/locales/id/common.json
 +++ b/packages/i18n/src/locales/id/common.json
 @@ -244,7 +244,7 @@
@@ -186361,7 +187942,7 @@ index 7d26685..a4c2673 100644
      "choose_view_logs_from_setup_sh_and_docker_logs_to_be_sure": "Pilih View Logs dari setup.sh dan log Docker untuk memastikan."
    },
    "customize_navigation": "Sesuaikan navigasi",
-@@ -867,5 +867,379 @@
+@@ -867,5 +867,417 @@
        "description": "Ekspor item kerja ke file JSON.",
        "short_description": "Ekspor sebagai json"
      }
@@ -186738,7 +188319,45 @@ index 7d26685..a4c2673 100644
 +    "empty_description": "Jadilah yang pertama menulis di saluran ini.",
 +    "beginning_of_channel": "Ini adalah awal saluran.",
 +    "select_channel": "Pilih saluran untuk memulai.",
-+    "typing": "{names} sedang mengetik…"
++    "typing": "{names} sedang mengetik…",
++    "mute": "Bisukan saluran",
++    "unmute": "Aktifkan notifikasi",
++    "mentioned_you": "menyebut Anda di",
++    "dms_section": "Pesan langsung",
++    "no_dms": "Belum ada pesan langsung.",
++    "new_dm": "Pesan langsung baru",
++    "start_dm": "Mulai percakapan",
++    "create_dm_failed": "Tidak dapat memulai percakapan",
++    "direct_message": "Pesan langsung",
++    "private_channel": "Saluran privat (hanya undangan)",
++    "members": "Anggota",
++    "invite": "Undang",
++    "invite_failed": "Tidak dapat mengundang",
++    "remove_member": "Hapus",
++    "remove_member_failed": "Tidak dapat menghapus",
++    "leave_channel": "Keluar dari saluran",
++    "channel_settings": "Pengaturan saluran",
++    "channel_name": "Nama",
++    "channel_description": "Deskripsi",
++    "channel_description_placeholder": "Tentang apa saluran ini?",
++    "archive_channel": "Arsipkan",
++    "confirm_delete_channel": "Hapus selamanya?",
++    "update_channel_failed": "Tidak dapat memperbarui saluran",
++    "delete_channel_failed": "Tidak dapat menghapus saluran",
++    "general_protected": "Saluran general tidak dapat diganti nama atau dihapus.",
++    "pin_message": "Sematkan pesan",
++    "unpin_message": "Lepas sematan",
++    "pinned_messages": "Pesan tersemat",
++    "no_pins": "Tidak ada pesan tersemat.",
++    "search_messages": "Cari pesan",
++    "search_placeholder": "Cari…",
++    "this_channel": "Saluran ini",
++    "whole_workspace": "Seluruh ruang kerja",
++    "no_results": "Tidak ada hasil.",
++    "search_people": "Cari orang…",
++    "no_people_found": "Tidak ditemukan.",
++    "new_messages": "Pesan baru",
++    "jump_to_new": "Lompat ke pesan baru"
    }
  }
 diff --git a/packages/i18n/src/locales/id/empty-state.json b/packages/i18n/src/locales/id/empty-state.json
@@ -187495,7 +189114,7 @@ index f279366..b302f18 100644
        "fixed_schedule": "Pianificazione fissa",
        "schedule": {
 diff --git a/packages/i18n/src/locales/it/common.json b/packages/i18n/src/locales/it/common.json
-index 6fda1b0..e8d26cc 100644
+index 6fda1b0..896d9a5 100644
 --- a/packages/i18n/src/locales/it/common.json
 +++ b/packages/i18n/src/locales/it/common.json
 @@ -244,7 +244,7 @@
@@ -187525,7 +189144,7 @@ index 6fda1b0..e8d26cc 100644
    "in_app": "In-app",
    "forms": "Moduli",
    "milestones": "Milestone",
-@@ -867,5 +867,379 @@
+@@ -867,5 +867,417 @@
        "description": "Esporta elementi di lavoro in un file JSON.",
        "short_description": "Esporta come JSON"
      }
@@ -187902,7 +189521,45 @@ index 6fda1b0..e8d26cc 100644
 +    "empty_description": "Scrivi per primo in questo canale.",
 +    "beginning_of_channel": "Questo è l'inizio del canale.",
 +    "select_channel": "Seleziona un canale per iniziare.",
-+    "typing": "{names} sta scrivendo…"
++    "typing": "{names} sta scrivendo…",
++    "mute": "Silenzia canale",
++    "unmute": "Riattiva notifiche",
++    "mentioned_you": "ti ha menzionato in",
++    "dms_section": "Messaggi diretti",
++    "no_dms": "Ancora nessun messaggio diretto.",
++    "new_dm": "Nuovo messaggio diretto",
++    "start_dm": "Avvia conversazione",
++    "create_dm_failed": "Impossibile avviare la conversazione",
++    "direct_message": "Messaggio diretto",
++    "private_channel": "Canale privato (solo su invito)",
++    "members": "Membri",
++    "invite": "Invita",
++    "invite_failed": "Invito non riuscito",
++    "remove_member": "Rimuovi",
++    "remove_member_failed": "Rimozione non riuscita",
++    "leave_channel": "Lascia il canale",
++    "channel_settings": "Impostazioni canale",
++    "channel_name": "Nome",
++    "channel_description": "Descrizione",
++    "channel_description_placeholder": "Di cosa tratta questo canale?",
++    "archive_channel": "Archivia",
++    "confirm_delete_channel": "Eliminare per sempre?",
++    "update_channel_failed": "Impossibile aggiornare il canale",
++    "delete_channel_failed": "Impossibile eliminare il canale",
++    "general_protected": "Il canale general non può essere rinominato né eliminato.",
++    "pin_message": "Fissa messaggio",
++    "unpin_message": "Rimuovi dai fissati",
++    "pinned_messages": "Messaggi fissati",
++    "no_pins": "Nessun messaggio fissato.",
++    "search_messages": "Cerca messaggi",
++    "search_placeholder": "Cerca…",
++    "this_channel": "Questo canale",
++    "whole_workspace": "Tutto il workspace",
++    "no_results": "Nessun risultato.",
++    "search_people": "Cerca persone…",
++    "no_people_found": "Nessuna persona trovata.",
++    "new_messages": "Nuovi messaggi",
++    "jump_to_new": "Vai ai nuovi messaggi"
    }
  }
 diff --git a/packages/i18n/src/locales/it/empty-state.json b/packages/i18n/src/locales/it/empty-state.json
@@ -188600,7 +190257,7 @@ index d3dd8d3..0f5426b 100644
            }
          }
 diff --git a/packages/i18n/src/locales/ja/common.json b/packages/i18n/src/locales/ja/common.json
-index 4899411..ce9ceed 100644
+index 4899411..ceb91f0 100644
 --- a/packages/i18n/src/locales/ja/common.json
 +++ b/packages/i18n/src/locales/ja/common.json
 @@ -244,7 +244,7 @@
@@ -188612,7 +190269,7 @@ index 4899411..ce9ceed 100644
    "please_select_at_least_one_invitation": "少なくとも1つの招待を選択してください。",
    "please_select_at_least_one_invitation_description": "ワークスペースに参加するには少なくとも1つの招待を選択してください。",
    "we_see_that_someone_has_invited_you_to_join_a_workspace": "誰かがあなたをワークスペースに招待しています",
-@@ -867,5 +867,379 @@
+@@ -867,5 +867,417 @@
        "description": "作業項目をJSONファイルにエクスポートします。",
        "short_description": "JSONとしてエクスポート"
      }
@@ -188989,7 +190646,45 @@ index 4899411..ce9ceed 100644
 +    "empty_description": "このチャンネルに最初のメッセージを書きましょう。",
 +    "beginning_of_channel": "ここがチャンネルの始まりです。",
 +    "select_channel": "チャンネルを選択してください。",
-+    "typing": "{names}が入力中…"
++    "typing": "{names}が入力中…",
++    "mute": "チャンネルをミュート",
++    "unmute": "ミュートを解除",
++    "mentioned_you": "があなたをメンションしました:",
++    "dms_section": "ダイレクトメッセージ",
++    "no_dms": "まだダイレクトメッセージはありません。",
++    "new_dm": "新しいダイレクトメッセージ",
++    "start_dm": "会話を開始",
++    "create_dm_failed": "会話を開始できませんでした",
++    "direct_message": "ダイレクトメッセージ",
++    "private_channel": "プライベートチャンネル(招待制)",
++    "members": "メンバー",
++    "invite": "招待",
++    "invite_failed": "招待できませんでした",
++    "remove_member": "削除",
++    "remove_member_failed": "削除できませんでした",
++    "leave_channel": "チャンネルを退出",
++    "channel_settings": "チャンネル設定",
++    "channel_name": "名前",
++    "channel_description": "説明",
++    "channel_description_placeholder": "このチャンネルは何のため?",
++    "archive_channel": "アーカイブ",
++    "confirm_delete_channel": "完全に削除しますか?",
++    "update_channel_failed": "チャンネルを更新できませんでした",
++    "delete_channel_failed": "チャンネルを削除できませんでした",
++    "general_protected": "generalチャンネルは名前変更・削除できません。",
++    "pin_message": "メッセージをピン留め",
++    "unpin_message": "ピン留めを解除",
++    "pinned_messages": "ピン留めされたメッセージ",
++    "no_pins": "ピン留めはありません。",
++    "search_messages": "メッセージを検索",
++    "search_placeholder": "検索…",
++    "this_channel": "このチャンネル",
++    "whole_workspace": "ワークスペース全体",
++    "no_results": "結果がありません。",
++    "search_people": "メンバーを検索…",
++    "no_people_found": "見つかりませんでした。",
++    "new_messages": "新着メッセージ",
++    "jump_to_new": "新着メッセージへ"
    }
  }
 diff --git a/packages/i18n/src/locales/ja/integration.json b/packages/i18n/src/locales/ja/integration.json
@@ -189231,7 +190926,7 @@ index 8d77f70..279ae09 100644
        "fixed_schedule": "고정 일정",
        "schedule": {
 diff --git a/packages/i18n/src/locales/ko/common.json b/packages/i18n/src/locales/ko/common.json
-index 73eea6b..a7460ae 100644
+index 73eea6b..5dcd51f 100644
 --- a/packages/i18n/src/locales/ko/common.json
 +++ b/packages/i18n/src/locales/ko/common.json
 @@ -244,7 +244,7 @@
@@ -189252,7 +190947,7 @@ index 73eea6b..a7460ae 100644
      "choose_view_logs_from_setup_sh_and_docker_logs_to_be_sure": "확실히 하려면 setup.sh와 Docker 로그에서 View Logs를 선택하세요."
    },
    "customize_navigation": "내비게이션 사용자 지정",
-@@ -867,5 +867,379 @@
+@@ -867,5 +867,417 @@
        "description": "작업 항목을 JSON 파일로 내보냅니다.",
        "short_description": "JSON으로 내보내기"
      }
@@ -189629,7 +191324,45 @@ index 73eea6b..a7460ae 100644
 +    "empty_description": "이 채널에 첫 메시지를 남겨보세요.",
 +    "beginning_of_channel": "채널의 시작입니다.",
 +    "select_channel": "채널을 선택하세요.",
-+    "typing": "{names}님이 입력 중…"
++    "typing": "{names}님이 입력 중…",
++    "mute": "채널 음소거",
++    "unmute": "음소거 해제",
++    "mentioned_you": "님이 회원님을 멘션했습니다:",
++    "dms_section": "다이렉트 메시지",
++    "no_dms": "아직 다이렉트 메시지가 없습니다.",
++    "new_dm": "새 다이렉트 메시지",
++    "start_dm": "대화 시작",
++    "create_dm_failed": "대화를 시작할 수 없습니다",
++    "direct_message": "다이렉트 메시지",
++    "private_channel": "비공개 채널(초대 전용)",
++    "members": "멤버",
++    "invite": "초대",
++    "invite_failed": "초대할 수 없습니다",
++    "remove_member": "제거",
++    "remove_member_failed": "제거할 수 없습니다",
++    "leave_channel": "채널 나가기",
++    "channel_settings": "채널 설정",
++    "channel_name": "이름",
++    "channel_description": "설명",
++    "channel_description_placeholder": "이 채널은 무엇을 위한 것인가요?",
++    "archive_channel": "보관",
++    "confirm_delete_channel": "영구 삭제할까요?",
++    "update_channel_failed": "채널을 업데이트할 수 없습니다",
++    "delete_channel_failed": "채널을 삭제할 수 없습니다",
++    "general_protected": "general 채널은 이름 변경이나 삭제가 불가능합니다.",
++    "pin_message": "메시지 고정",
++    "unpin_message": "고정 해제",
++    "pinned_messages": "고정된 메시지",
++    "no_pins": "고정된 메시지가 없습니다.",
++    "search_messages": "메시지 검색",
++    "search_placeholder": "검색…",
++    "this_channel": "이 채널",
++    "whole_workspace": "전체 워크스페이스",
++    "no_results": "결과가 없습니다.",
++    "search_people": "사람 검색…",
++    "no_people_found": "찾을 수 없습니다.",
++    "new_messages": "새 메시지",
++    "jump_to_new": "새 메시지로 이동"
    }
  }
 diff --git a/packages/i18n/src/locales/ko/empty-state.json b/packages/i18n/src/locales/ko/empty-state.json
@@ -190024,7 +191757,7 @@ index 0632d1f..6396693 100644
        "fixed_schedule": "Stały harmonogram",
        "schedule": {
 diff --git a/packages/i18n/src/locales/pl/common.json b/packages/i18n/src/locales/pl/common.json
-index 4c4850c..72ae03a 100644
+index 4c4850c..56340b0 100644
 --- a/packages/i18n/src/locales/pl/common.json
 +++ b/packages/i18n/src/locales/pl/common.json
 @@ -244,7 +244,7 @@
@@ -190045,7 +191778,7 @@ index 4c4850c..72ae03a 100644
      "choose_view_logs_from_setup_sh_and_docker_logs_to_be_sure": "Wybierz View Logs z setup.sh i logów Docker, aby mieć pewność."
    },
    "customize_navigation": "Dostosuj nawigację",
-@@ -867,5 +867,379 @@
+@@ -867,5 +867,417 @@
        "description": "Eksportuj elementy do pliku JSON.",
        "short_description": "Eksportuj jako JSON"
      }
@@ -190422,7 +192155,45 @@ index 4c4850c..72ae03a 100644
 +    "empty_description": "Napisz jako pierwszy na tym kanale.",
 +    "beginning_of_channel": "To początek kanału.",
 +    "select_channel": "Wybierz kanał, aby zacząć.",
-+    "typing": "{names} pisze…"
++    "typing": "{names} pisze…",
++    "mute": "Wycisz kanał",
++    "unmute": "Wyłącz wyciszenie",
++    "mentioned_you": "wspomniał o tobie w",
++    "dms_section": "Wiadomości bezpośrednie",
++    "no_dms": "Brak wiadomości bezpośrednich.",
++    "new_dm": "Nowa wiadomość bezpośrednia",
++    "start_dm": "Rozpocznij rozmowę",
++    "create_dm_failed": "Nie udało się rozpocząć rozmowy",
++    "direct_message": "Wiadomość bezpośrednia",
++    "private_channel": "Kanał prywatny (tylko na zaproszenie)",
++    "members": "Członkowie",
++    "invite": "Zaproś",
++    "invite_failed": "Nie udało się zaprosić",
++    "remove_member": "Usuń",
++    "remove_member_failed": "Nie udało się usunąć",
++    "leave_channel": "Opuść kanał",
++    "channel_settings": "Ustawienia kanału",
++    "channel_name": "Nazwa",
++    "channel_description": "Opis",
++    "channel_description_placeholder": "O czym jest ten kanał?",
++    "archive_channel": "Archiwizuj",
++    "confirm_delete_channel": "Usunąć na zawsze?",
++    "update_channel_failed": "Nie udało się zaktualizować kanału",
++    "delete_channel_failed": "Nie udało się usunąć kanału",
++    "general_protected": "Kanału general nie można zmienić ani usunąć.",
++    "pin_message": "Przypnij wiadomość",
++    "unpin_message": "Odepnij",
++    "pinned_messages": "Przypięte wiadomości",
++    "no_pins": "Brak przypiętych wiadomości.",
++    "search_messages": "Szukaj wiadomości",
++    "search_placeholder": "Szukaj…",
++    "this_channel": "Ten kanał",
++    "whole_workspace": "Cała przestrzeń",
++    "no_results": "Brak wyników.",
++    "search_people": "Szukaj osób…",
++    "no_people_found": "Nikogo nie znaleziono.",
++    "new_messages": "Nowe wiadomości",
++    "jump_to_new": "Przejdź do nowych"
    }
  }
 diff --git a/packages/i18n/src/locales/pl/empty-state.json b/packages/i18n/src/locales/pl/empty-state.json
@@ -191124,7 +192895,7 @@ index 3eab73f..c2c7c08 100644
        "fixed_schedule": "Agendamento fixo",
        "schedule": {
 diff --git a/packages/i18n/src/locales/pt-BR/common.json b/packages/i18n/src/locales/pt-BR/common.json
-index 565e85d..8e075c2 100644
+index 565e85d..ecda3f2 100644
 --- a/packages/i18n/src/locales/pt-BR/common.json
 +++ b/packages/i18n/src/locales/pt-BR/common.json
 @@ -244,7 +244,7 @@
@@ -191145,7 +192916,7 @@ index 565e85d..8e075c2 100644
      "choose_view_logs_from_setup_sh_and_docker_logs_to_be_sure": "Escolha View Logs do setup.sh e logs do Docker para ter certeza."
    },
    "customize_navigation": "Personalizar navegação",
-@@ -867,5 +867,379 @@
+@@ -867,5 +867,417 @@
        "description": "Exporte itens de trabalho para um arquivo JSON.",
        "short_description": "Exportar como JSON"
      }
@@ -191522,7 +193293,45 @@ index 565e85d..8e075c2 100644
 +    "empty_description": "Seja a primeira pessoa a escrever neste canal.",
 +    "beginning_of_channel": "Este é o início do canal.",
 +    "select_channel": "Selecione um canal para começar.",
-+    "typing": "{names} está digitando…"
++    "typing": "{names} está digitando…",
++    "mute": "Silenciar canal",
++    "unmute": "Reativar notificações",
++    "mentioned_you": "mencionou você em",
++    "dms_section": "Mensagens diretas",
++    "no_dms": "Ainda não há mensagens diretas.",
++    "new_dm": "Nova mensagem direta",
++    "start_dm": "Iniciar conversa",
++    "create_dm_failed": "Não foi possível iniciar a conversa",
++    "direct_message": "Mensagem direta",
++    "private_channel": "Canal privado (somente por convite)",
++    "members": "Membros",
++    "invite": "Convidar",
++    "invite_failed": "Não foi possível convidar",
++    "remove_member": "Remover",
++    "remove_member_failed": "Não foi possível remover",
++    "leave_channel": "Sair do canal",
++    "channel_settings": "Configurações do canal",
++    "channel_name": "Nome",
++    "channel_description": "Descrição",
++    "channel_description_placeholder": "Sobre o que é este canal?",
++    "archive_channel": "Arquivar",
++    "confirm_delete_channel": "Excluir para sempre?",
++    "update_channel_failed": "Não foi possível atualizar o canal",
++    "delete_channel_failed": "Não foi possível excluir o canal",
++    "general_protected": "O canal general não pode ser renomeado nem excluído.",
++    "pin_message": "Fixar mensagem",
++    "unpin_message": "Desafixar mensagem",
++    "pinned_messages": "Mensagens fixadas",
++    "no_pins": "Nenhuma mensagem fixada.",
++    "search_messages": "Pesquisar mensagens",
++    "search_placeholder": "Pesquisar…",
++    "this_channel": "Este canal",
++    "whole_workspace": "Todo o workspace",
++    "no_results": "Sem resultados.",
++    "search_people": "Pesquisar pessoas…",
++    "no_people_found": "Ninguém encontrado.",
++    "new_messages": "Novas mensagens",
++    "jump_to_new": "Ir para as novas mensagens"
    }
  }
 diff --git a/packages/i18n/src/locales/pt-BR/empty-state.json b/packages/i18n/src/locales/pt-BR/empty-state.json
@@ -192274,7 +194083,7 @@ index 509bbb1..0c56d9c 100644
        "fixed_schedule": "Program fix",
        "schedule": {
 diff --git a/packages/i18n/src/locales/ro/common.json b/packages/i18n/src/locales/ro/common.json
-index e2b44ce..0e194dd 100644
+index e2b44ce..5496dab 100644
 --- a/packages/i18n/src/locales/ro/common.json
 +++ b/packages/i18n/src/locales/ro/common.json
 @@ -244,7 +244,7 @@
@@ -192304,7 +194113,7 @@ index e2b44ce..0e194dd 100644
    "in_app": "În-app",
    "forms": "Formulare",
    "milestones": "Jaloane",
-@@ -867,5 +867,379 @@
+@@ -867,5 +867,417 @@
        "description": "Exportă activitățile într-un fișier JSON.",
        "short_description": "Exportă ca JSON"
      }
@@ -192681,7 +194490,45 @@ index e2b44ce..0e194dd 100644
 +    "empty_description": "Fii primul care scrie pe acest canal.",
 +    "beginning_of_channel": "Acesta este începutul canalului.",
 +    "select_channel": "Selectează un canal pentru a începe.",
-+    "typing": "{names} scrie…"
++    "typing": "{names} scrie…",
++    "mute": "Dezactivează notificările",
++    "unmute": "Activează notificările",
++    "mentioned_you": "te-a menționat în",
++    "dms_section": "Mesaje directe",
++    "no_dms": "Încă nu există mesaje directe.",
++    "new_dm": "Mesaj direct nou",
++    "start_dm": "Începe conversația",
++    "create_dm_failed": "Nu s-a putut începe conversația",
++    "direct_message": "Mesaj direct",
++    "private_channel": "Canal privat (doar pe bază de invitație)",
++    "members": "Membri",
++    "invite": "Invită",
++    "invite_failed": "Invitația a eșuat",
++    "remove_member": "Elimină",
++    "remove_member_failed": "Eliminarea a eșuat",
++    "leave_channel": "Părăsește canalul",
++    "channel_settings": "Setările canalului",
++    "channel_name": "Nume",
++    "channel_description": "Descriere",
++    "channel_description_placeholder": "Despre ce este acest canal?",
++    "archive_channel": "Arhivează",
++    "confirm_delete_channel": "Ștergi definitiv?",
++    "update_channel_failed": "Canalul nu a putut fi actualizat",
++    "delete_channel_failed": "Canalul nu a putut fi șters",
++    "general_protected": "Canalul general nu poate fi redenumit sau șters.",
++    "pin_message": "Fixează mesajul",
++    "unpin_message": "Anulează fixarea",
++    "pinned_messages": "Mesaje fixate",
++    "no_pins": "Niciun mesaj fixat.",
++    "search_messages": "Caută mesaje",
++    "search_placeholder": "Caută…",
++    "this_channel": "Acest canal",
++    "whole_workspace": "Tot spațiul",
++    "no_results": "Niciun rezultat.",
++    "search_people": "Caută persoane…",
++    "no_people_found": "Nicio persoană găsită.",
++    "new_messages": "Mesaje noi",
++    "jump_to_new": "Sari la mesajele noi"
    }
  }
 diff --git a/packages/i18n/src/locales/ro/empty-state.json b/packages/i18n/src/locales/ro/empty-state.json
@@ -193431,7 +195278,7 @@ index a97e9e6..7ce3fde 100644
        "fixed_schedule": "Фиксированное расписание",
        "schedule": {
 diff --git a/packages/i18n/src/locales/ru/common.json b/packages/i18n/src/locales/ru/common.json
-index c2881e5..b3e60e5 100644
+index c2881e5..b7e27bb 100644
 --- a/packages/i18n/src/locales/ru/common.json
 +++ b/packages/i18n/src/locales/ru/common.json
 @@ -244,7 +244,7 @@
@@ -193452,7 +195299,7 @@ index c2881e5..b3e60e5 100644
      "choose_view_logs_from_setup_sh_and_docker_logs_to_be_sure": "Выберите View Logs из setup.sh и логов Docker, чтобы убедиться."
    },
    "customize_navigation": "Настроить навигацию",
-@@ -867,5 +867,379 @@
+@@ -867,5 +867,417 @@
        "description": "Экспорт рабочих элементов в JSON-файл.",
        "short_description": "Экспорт в json"
      }
@@ -193829,7 +195676,45 @@ index c2881e5..b3e60e5 100644
 +    "empty_description": "Напишите первым в этом канале.",
 +    "beginning_of_channel": "Это начало канала.",
 +    "select_channel": "Выберите канал, чтобы начать.",
-+    "typing": "{names} печатает…"
++    "typing": "{names} печатает…",
++    "mute": "Отключить уведомления",
++    "unmute": "Включить уведомления",
++    "mentioned_you": "упомянул(а) вас в",
++    "dms_section": "Личные сообщения",
++    "no_dms": "Личных сообщений пока нет.",
++    "new_dm": "Новое личное сообщение",
++    "start_dm": "Начать переписку",
++    "create_dm_failed": "Не удалось начать переписку",
++    "direct_message": "Личное сообщение",
++    "private_channel": "Приватный канал (по приглашению)",
++    "members": "Участники",
++    "invite": "Пригласить",
++    "invite_failed": "Не удалось пригласить",
++    "remove_member": "Удалить",
++    "remove_member_failed": "Не удалось удалить",
++    "leave_channel": "Покинуть канал",
++    "channel_settings": "Настройки канала",
++    "channel_name": "Название",
++    "channel_description": "Описание",
++    "channel_description_placeholder": "О чём этот канал?",
++    "archive_channel": "Архивировать",
++    "confirm_delete_channel": "Удалить навсегда?",
++    "update_channel_failed": "Не удалось обновить канал",
++    "delete_channel_failed": "Не удалось удалить канал",
++    "general_protected": "Канал general нельзя переименовать или удалить.",
++    "pin_message": "Закрепить сообщение",
++    "unpin_message": "Открепить",
++    "pinned_messages": "Закреплённые сообщения",
++    "no_pins": "Нет закреплённых сообщений.",
++    "search_messages": "Поиск по сообщениям",
++    "search_placeholder": "Поиск…",
++    "this_channel": "Этот канал",
++    "whole_workspace": "Всё пространство",
++    "no_results": "Ничего не найдено.",
++    "search_people": "Поиск людей…",
++    "no_people_found": "Никого не найдено.",
++    "new_messages": "Новые сообщения",
++    "jump_to_new": "К новым сообщениям"
    }
  }
 diff --git a/packages/i18n/src/locales/ru/empty-state.json b/packages/i18n/src/locales/ru/empty-state.json
@@ -194568,7 +196453,7 @@ index 3e7dbc5..27f375f 100644
        "fixed_schedule": "Pevný rozvrh",
        "schedule": {
 diff --git a/packages/i18n/src/locales/sk/common.json b/packages/i18n/src/locales/sk/common.json
-index 4fc339c..ef44f6b 100644
+index 4fc339c..7bb22e3 100644
 --- a/packages/i18n/src/locales/sk/common.json
 +++ b/packages/i18n/src/locales/sk/common.json
 @@ -244,7 +244,7 @@
@@ -194589,7 +196474,7 @@ index 4fc339c..ef44f6b 100644
      "choose_view_logs_from_setup_sh_and_docker_logs_to_be_sure": "Vyberte View Logs z setup.sh a Docker logov, aby ste si boli istí."
    },
    "customize_navigation": "Prispôsobiť navigáciu",
-@@ -867,5 +867,379 @@
+@@ -867,5 +867,417 @@
        "description": "Exportujte položky do JSON.",
        "short_description": "Exportovať ako JSON"
      }
@@ -194966,7 +196851,45 @@ index 4fc339c..ef44f6b 100644
 +    "empty_description": "Napíšte do tohto kanála ako prvý.",
 +    "beginning_of_channel": "Toto je začiatok kanála.",
 +    "select_channel": "Vyberte kanál.",
-+    "typing": "{names} píše…"
++    "typing": "{names} píše…",
++    "mute": "Stlmiť kanál",
++    "unmute": "Zrušiť stlmenie",
++    "mentioned_you": "vás spomenul v",
++    "dms_section": "Priame správy",
++    "no_dms": "Zatiaľ žiadne priame správy.",
++    "new_dm": "Nová priama správa",
++    "start_dm": "Začať konverzáciu",
++    "create_dm_failed": "Konverzáciu sa nepodarilo začať",
++    "direct_message": "Priama správa",
++    "private_channel": "Súkromný kanál (len na pozvanie)",
++    "members": "Členovia",
++    "invite": "Pozvať",
++    "invite_failed": "Pozvanie zlyhalo",
++    "remove_member": "Odobrať",
++    "remove_member_failed": "Odobratie zlyhalo",
++    "leave_channel": "Opustiť kanál",
++    "channel_settings": "Nastavenia kanála",
++    "channel_name": "Názov",
++    "channel_description": "Popis",
++    "channel_description_placeholder": "O čom je tento kanál?",
++    "archive_channel": "Archivovať",
++    "confirm_delete_channel": "Zmazať navždy?",
++    "update_channel_failed": "Kanál sa nepodarilo upraviť",
++    "delete_channel_failed": "Kanál sa nepodarilo zmazať",
++    "general_protected": "Kanál general nemožno premenovať ani zmazať.",
++    "pin_message": "Pripnúť správu",
++    "unpin_message": "Odopnúť",
++    "pinned_messages": "Pripnuté správy",
++    "no_pins": "Žiadne pripnuté správy.",
++    "search_messages": "Hľadať správy",
++    "search_placeholder": "Hľadať…",
++    "this_channel": "Tento kanál",
++    "whole_workspace": "Celý workspace",
++    "no_results": "Žiadne výsledky.",
++    "search_people": "Hľadať ľudí…",
++    "no_people_found": "Nikto sa nenašiel.",
++    "new_messages": "Nové správy",
++    "jump_to_new": "Prejsť na nové správy"
    }
  }
 diff --git a/packages/i18n/src/locales/sk/empty-state.json b/packages/i18n/src/locales/sk/empty-state.json
@@ -195657,7 +197580,7 @@ index 5d44f94..bd09842 100644
        "fixed_schedule": "Sabit zamanlama",
        "schedule": {
 diff --git a/packages/i18n/src/locales/tr-TR/common.json b/packages/i18n/src/locales/tr-TR/common.json
-index 74bd5cb..7442b8c 100644
+index 74bd5cb..cac652a 100644
 --- a/packages/i18n/src/locales/tr-TR/common.json
 +++ b/packages/i18n/src/locales/tr-TR/common.json
 @@ -244,7 +244,7 @@
@@ -195687,7 +197610,7 @@ index 74bd5cb..7442b8c 100644
    "in_app": "Uygulama İçi",
    "forms": "Formlar",
    "milestones": "Kilometre taşları",
-@@ -867,5 +867,379 @@
+@@ -867,5 +867,417 @@
        "description": "İş öğelerini JSON dosyasına aktarın.",
        "short_description": "JSON olarak aktar"
      }
@@ -196064,7 +197987,45 @@ index 74bd5cb..7442b8c 100644
 +    "empty_description": "Bu kanala ilk yazan siz olun.",
 +    "beginning_of_channel": "Bu, kanalın başlangıcıdır.",
 +    "select_channel": "Başlamak için bir kanal seçin.",
-+    "typing": "{names} yazıyor…"
++    "typing": "{names} yazıyor…",
++    "mute": "Kanalı sessize al",
++    "unmute": "Sessizden çıkar",
++    "mentioned_you": "sizden bahsetti:",
++    "dms_section": "Direkt mesajlar",
++    "no_dms": "Henüz direkt mesaj yok.",
++    "new_dm": "Yeni direkt mesaj",
++    "start_dm": "Sohbeti başlat",
++    "create_dm_failed": "Sohbet başlatılamadı",
++    "direct_message": "Direkt mesaj",
++    "private_channel": "Özel kanal (yalnızca davetle)",
++    "members": "Üyeler",
++    "invite": "Davet et",
++    "invite_failed": "Davet edilemedi",
++    "remove_member": "Çıkar",
++    "remove_member_failed": "Çıkarılamadı",
++    "leave_channel": "Kanaldan ayrıl",
++    "channel_settings": "Kanal ayarları",
++    "channel_name": "Ad",
++    "channel_description": "Açıklama",
++    "channel_description_placeholder": "Bu kanal ne hakkında?",
++    "archive_channel": "Arşivle",
++    "confirm_delete_channel": "Kalıcı olarak silinsin mi?",
++    "update_channel_failed": "Kanal güncellenemedi",
++    "delete_channel_failed": "Kanal silinemedi",
++    "general_protected": "general kanalı yeniden adlandırılamaz veya silinemez.",
++    "pin_message": "Mesajı sabitle",
++    "unpin_message": "Sabitlemeyi kaldır",
++    "pinned_messages": "Sabitlenmiş mesajlar",
++    "no_pins": "Sabitlenmiş mesaj yok.",
++    "search_messages": "Mesajlarda ara",
++    "search_placeholder": "Ara…",
++    "this_channel": "Bu kanal",
++    "whole_workspace": "Tüm çalışma alanı",
++    "no_results": "Sonuç yok.",
++    "search_people": "Kişi ara…",
++    "no_people_found": "Kimse bulunamadı.",
++    "new_messages": "Yeni mesajlar",
++    "jump_to_new": "Yeni mesajlara git"
    }
  }
 diff --git a/packages/i18n/src/locales/tr-TR/empty-state.json b/packages/i18n/src/locales/tr-TR/empty-state.json
@@ -196787,7 +198748,7 @@ index 25a1f98..64286c8 100644
        "fixed_schedule": "Фіксований розклад",
        "schedule": {
 diff --git a/packages/i18n/src/locales/ua/common.json b/packages/i18n/src/locales/ua/common.json
-index 89bd906..0cb92cf 100644
+index 89bd906..231a507 100644
 --- a/packages/i18n/src/locales/ua/common.json
 +++ b/packages/i18n/src/locales/ua/common.json
 @@ -244,7 +244,7 @@
@@ -196808,7 +198769,7 @@ index 89bd906..0cb92cf 100644
      "choose_view_logs_from_setup_sh_and_docker_logs_to_be_sure": "Виберіть View Logs з setup.sh та логів Docker, щоб переконатися."
    },
    "customize_navigation": "Налаштувати навігацію",
-@@ -867,5 +867,379 @@
+@@ -867,5 +867,417 @@
        "description": "Експортуйте одиниці у формат JSON.",
        "short_description": "Експортувати як JSON"
      }
@@ -197185,7 +199146,45 @@ index 89bd906..0cb92cf 100644
 +    "empty_description": "Напишіть першим у цьому каналі.",
 +    "beginning_of_channel": "Це початок каналу.",
 +    "select_channel": "Оберіть канал, щоб почати.",
-+    "typing": "{names} пише…"
++    "typing": "{names} пише…",
++    "mute": "Вимкнути сповіщення",
++    "unmute": "Увімкнути сповіщення",
++    "mentioned_you": "згадав(ла) вас у",
++    "dms_section": "Особисті повідомлення",
++    "no_dms": "Особистих повідомлень поки немає.",
++    "new_dm": "Нове особисте повідомлення",
++    "start_dm": "Почати розмову",
++    "create_dm_failed": "Не вдалося почати розмову",
++    "direct_message": "Особисте повідомлення",
++    "private_channel": "Приватний канал (лише за запрошенням)",
++    "members": "Учасники",
++    "invite": "Запросити",
++    "invite_failed": "Не вдалося запросити",
++    "remove_member": "Видалити",
++    "remove_member_failed": "Не вдалося видалити",
++    "leave_channel": "Покинути канал",
++    "channel_settings": "Налаштування каналу",
++    "channel_name": "Назва",
++    "channel_description": "Опис",
++    "channel_description_placeholder": "Про що цей канал?",
++    "archive_channel": "Архівувати",
++    "confirm_delete_channel": "Видалити назавжди?",
++    "update_channel_failed": "Не вдалося оновити канал",
++    "delete_channel_failed": "Не вдалося видалити канал",
++    "general_protected": "Канал general не можна перейменувати чи видалити.",
++    "pin_message": "Закріпити повідомлення",
++    "unpin_message": "Відкріпити",
++    "pinned_messages": "Закріплені повідомлення",
++    "no_pins": "Немає закріплених повідомлень.",
++    "search_messages": "Пошук повідомлень",
++    "search_placeholder": "Пошук…",
++    "this_channel": "Цей канал",
++    "whole_workspace": "Увесь простір",
++    "no_results": "Нічого не знайдено.",
++    "search_people": "Пошук людей…",
++    "no_people_found": "Нікого не знайдено.",
++    "new_messages": "Нові повідомлення",
++    "jump_to_new": "До нових повідомлень"
    }
  }
 diff --git a/packages/i18n/src/locales/ua/empty-state.json b/packages/i18n/src/locales/ua/empty-state.json
@@ -197739,7 +199738,7 @@ index 8dec0fb..fd3adb2 100644
        "fixed_schedule": "Lịch trình cố định",
        "schedule": {
 diff --git a/packages/i18n/src/locales/vi-VN/common.json b/packages/i18n/src/locales/vi-VN/common.json
-index f9aae43..40821cb 100644
+index f9aae43..89db5dc 100644
 --- a/packages/i18n/src/locales/vi-VN/common.json
 +++ b/packages/i18n/src/locales/vi-VN/common.json
 @@ -244,7 +244,7 @@
@@ -197769,7 +199768,7 @@ index f9aae43..40821cb 100644
    "in_app": "Trong ứng dụng",
    "forms": "Biểu mẫu",
    "milestones": "Cột mốc",
-@@ -867,5 +867,379 @@
+@@ -867,5 +867,417 @@
        "description": "Xuất mục công việc thành tệp JSON.",
        "short_description": "Xuất sang JSON"
      }
@@ -198146,7 +200145,45 @@ index f9aae43..40821cb 100644
 +    "empty_description": "Hãy là người đầu tiên viết trong kênh này.",
 +    "beginning_of_channel": "Đây là điểm bắt đầu của kênh.",
 +    "select_channel": "Chọn một kênh để bắt đầu.",
-+    "typing": "{names} đang nhập…"
++    "typing": "{names} đang nhập…",
++    "mute": "Tắt tiếng kênh",
++    "unmute": "Bật thông báo",
++    "mentioned_you": "đã nhắc đến bạn trong",
++    "dms_section": "Tin nhắn trực tiếp",
++    "no_dms": "Chưa có tin nhắn trực tiếp.",
++    "new_dm": "Tin nhắn trực tiếp mới",
++    "start_dm": "Bắt đầu trò chuyện",
++    "create_dm_failed": "Không thể bắt đầu trò chuyện",
++    "direct_message": "Tin nhắn trực tiếp",
++    "private_channel": "Kênh riêng tư (chỉ theo lời mời)",
++    "members": "Thành viên",
++    "invite": "Mời",
++    "invite_failed": "Không thể mời",
++    "remove_member": "Xóa",
++    "remove_member_failed": "Không thể xóa",
++    "leave_channel": "Rời kênh",
++    "channel_settings": "Cài đặt kênh",
++    "channel_name": "Tên",
++    "channel_description": "Mô tả",
++    "channel_description_placeholder": "Kênh này nói về điều gì?",
++    "archive_channel": "Lưu trữ",
++    "confirm_delete_channel": "Xóa vĩnh viễn?",
++    "update_channel_failed": "Không thể cập nhật kênh",
++    "delete_channel_failed": "Không thể xóa kênh",
++    "general_protected": "Kênh general không thể đổi tên hoặc xóa.",
++    "pin_message": "Ghim tin nhắn",
++    "unpin_message": "Bỏ ghim",
++    "pinned_messages": "Tin nhắn đã ghim",
++    "no_pins": "Không có tin nhắn ghim.",
++    "search_messages": "Tìm tin nhắn",
++    "search_placeholder": "Tìm kiếm…",
++    "this_channel": "Kênh này",
++    "whole_workspace": "Toàn bộ không gian",
++    "no_results": "Không có kết quả.",
++    "search_people": "Tìm người…",
++    "no_people_found": "Không tìm thấy ai.",
++    "new_messages": "Tin nhắn mới",
++    "jump_to_new": "Đến tin nhắn mới"
    }
  }
 diff --git a/packages/i18n/src/locales/vi-VN/empty-state.json b/packages/i18n/src/locales/vi-VN/empty-state.json
@@ -198902,7 +200939,7 @@ index 3f057bd..9322b6f 100644
        "fixed_schedule": "固定计划",
        "schedule": {
 diff --git a/packages/i18n/src/locales/zh-CN/common.json b/packages/i18n/src/locales/zh-CN/common.json
-index dd67d92..211143b 100644
+index dd67d92..25605b3 100644
 --- a/packages/i18n/src/locales/zh-CN/common.json
 +++ b/packages/i18n/src/locales/zh-CN/common.json
 @@ -820,7 +820,7 @@
@@ -198914,7 +200951,7 @@ index dd67d92..211143b 100644
      "choose_view_logs_from_setup_sh_and_docker_logs_to_be_sure": "请选择“查看日志”来查看 setup.sh 和 Docker 日志，以确认问题。"
    },
    "customize_navigation": "自定义导航",
-@@ -867,5 +867,379 @@
+@@ -867,5 +867,417 @@
        "description": "将工作项导出为 JSON 文件。",
        "short_description": "导出为 JSON"
      }
@@ -199291,7 +201328,45 @@ index dd67d92..211143b 100644
 +    "empty_description": "来发布这个频道的第一条消息吧。",
 +    "beginning_of_channel": "这里是频道的开始。",
 +    "select_channel": "选择一个频道开始。",
-+    "typing": "{names} 正在输入…"
++    "typing": "{names} 正在输入…",
++    "mute": "静音频道",
++    "unmute": "取消静音",
++    "mentioned_you": "在以下频道提到了你:",
++    "dms_section": "私信",
++    "no_dms": "还没有私信。",
++    "new_dm": "新私信",
++    "start_dm": "开始会话",
++    "create_dm_failed": "无法开始会话",
++    "direct_message": "私信",
++    "private_channel": "私有频道(仅限邀请)",
++    "members": "成员",
++    "invite": "邀请",
++    "invite_failed": "无法邀请",
++    "remove_member": "移除",
++    "remove_member_failed": "无法移除",
++    "leave_channel": "退出频道",
++    "channel_settings": "频道设置",
++    "channel_name": "名称",
++    "channel_description": "描述",
++    "channel_description_placeholder": "这个频道是做什么的?",
++    "archive_channel": "归档",
++    "confirm_delete_channel": "永久删除?",
++    "update_channel_failed": "无法更新频道",
++    "delete_channel_failed": "无法删除频道",
++    "general_protected": "general 频道不能重命名或删除。",
++    "pin_message": "置顶消息",
++    "unpin_message": "取消置顶",
++    "pinned_messages": "置顶消息",
++    "no_pins": "没有置顶消息。",
++    "search_messages": "搜索消息",
++    "search_placeholder": "搜索…",
++    "this_channel": "本频道",
++    "whole_workspace": "整个工作区",
++    "no_results": "无结果。",
++    "search_people": "搜索成员…",
++    "no_people_found": "未找到。",
++    "new_messages": "新消息",
++    "jump_to_new": "跳到新消息"
    }
  }
 diff --git a/packages/i18n/src/locales/zh-CN/empty-state.json b/packages/i18n/src/locales/zh-CN/empty-state.json
@@ -199898,7 +201973,7 @@ index 27b9a4b..c71e752 100644
        "fixed_schedule": "固定排程",
        "schedule": {
 diff --git a/packages/i18n/src/locales/zh-TW/common.json b/packages/i18n/src/locales/zh-TW/common.json
-index 834a2d9..b492607 100644
+index 834a2d9..29c1a47 100644
 --- a/packages/i18n/src/locales/zh-TW/common.json
 +++ b/packages/i18n/src/locales/zh-TW/common.json
 @@ -244,7 +244,7 @@
@@ -199919,7 +201994,7 @@ index 834a2d9..b492607 100644
      "choose_view_logs_from_setup_sh_and_docker_logs_to_be_sure": "從 setup.sh 和 Docker 日誌中選擇 View Logs 來確認。"
    },
    "customize_navigation": "自訂導覽",
-@@ -867,5 +867,379 @@
+@@ -867,5 +867,417 @@
        "description": "將工作事項匯出為 JSON 檔案。",
        "short_description": "匯出為 JSON"
      }
@@ -200296,7 +202371,45 @@ index 834a2d9..b492607 100644
 +    "empty_description": "成為第一個在此頻道發言的人。",
 +    "beginning_of_channel": "這是頻道的開始。",
 +    "select_channel": "選擇一個頻道開始。",
-+    "typing": "{names} 正在輸入…"
++    "typing": "{names} 正在輸入…",
++    "mute": "靜音頻道",
++    "unmute": "取消靜音",
++    "mentioned_you": "在以下頻道提到了你:",
++    "dms_section": "私訊",
++    "no_dms": "還沒有私訊。",
++    "new_dm": "新私訊",
++    "start_dm": "開始對話",
++    "create_dm_failed": "無法開始對話",
++    "direct_message": "私訊",
++    "private_channel": "私人頻道(僅限邀請)",
++    "members": "成員",
++    "invite": "邀請",
++    "invite_failed": "無法邀請",
++    "remove_member": "移除",
++    "remove_member_failed": "無法移除",
++    "leave_channel": "退出頻道",
++    "channel_settings": "頻道設定",
++    "channel_name": "名稱",
++    "channel_description": "描述",
++    "channel_description_placeholder": "這個頻道是做什麼的?",
++    "archive_channel": "封存",
++    "confirm_delete_channel": "永久刪除?",
++    "update_channel_failed": "無法更新頻道",
++    "delete_channel_failed": "無法刪除頻道",
++    "general_protected": "general 頻道不能重新命名或刪除。",
++    "pin_message": "釘選訊息",
++    "unpin_message": "取消釘選",
++    "pinned_messages": "釘選的訊息",
++    "no_pins": "沒有釘選的訊息。",
++    "search_messages": "搜尋訊息",
++    "search_placeholder": "搜尋…",
++    "this_channel": "本頻道",
++    "whole_workspace": "整個工作區",
++    "no_results": "沒有結果。",
++    "search_people": "搜尋成員…",
++    "no_people_found": "找不到任何人。",
++    "new_messages": "新訊息",
++    "jump_to_new": "跳至新訊息"
    }
  }
 diff --git a/packages/i18n/src/locales/zh-TW/empty-state.json b/packages/i18n/src/locales/zh-TW/empty-state.json

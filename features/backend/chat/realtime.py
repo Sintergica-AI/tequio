@@ -34,6 +34,12 @@ def channel_document_name(channel_id):
     return f"chat:{channel_id}"
 
 
+def workspace_document_name(workspace_id):
+    """Workspace-wide badge document: every chat client subscribes to it and
+    gets light channel.activity events for unread counters."""
+    return f"chat:workspace:{workspace_id}"
+
+
 def broadcast_channel_event(channel_id, payload):
     """POST the event to the live server. Returns True if delivered to the
     broadcaster (not necessarily to any client)."""

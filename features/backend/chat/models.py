@@ -28,13 +28,19 @@ class Channel(BaseModel):
         null=True,
         blank=True,
     )
-    name = models.CharField(max_length=255)
+    name = models.CharField(max_length=255, blank=True, default="")
     description = models.TextField(blank=True, default="")
     # The auto-created #general of a project: cannot be renamed or deleted.
     is_general = models.BooleanField(default=False)
-    # 0 = public (everyone with reach). Reserved for private channels later so
-    # the schema does not move.
+    # 0 = public (everyone with reach); 1 = private (explicit ChannelMember
+    # rows are the authorization). DMs are always access=1.
     access = models.PositiveSmallIntegerField(default=0)
+    # Direct message conversation (1:1 or group). No name; the client renders
+    # the other members' names. Member set is immutable after creation.
+    is_direct = models.BooleanField(default=False)
+    # Canonical identity of a DM: sha256 of the sorted member ids, so opening
+    # a DM with the same people always lands on the same channel.
+    dm_key = models.CharField(max_length=64, null=True, blank=True)
     archived_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
@@ -66,6 +72,11 @@ class Channel(BaseModel):
                 fields=["project"],
                 condition=Q(is_general=True, deleted_at__isnull=True),
                 name="chat_channel_general_uq",
+            ),
+            models.UniqueConstraint(
+                fields=["workspace", "dm_key"],
+                condition=Q(deleted_at__isnull=True, dm_key__isnull=False),
+                name="chat_channel_dm_key_uq",
             ),
         ]
 
@@ -144,6 +155,15 @@ class ChatMessage(BaseModel):
     # A root message that had replies when its author deleted it: the content
     # is wiped and this flag set, so the thread keeps its anchor (tombstone).
     is_removed = models.BooleanField(default=False)
+    # Pinned messages (any channel member can pin/unpin).
+    pinned_at = models.DateTimeField(null=True, blank=True)
+    pinned_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        related_name="chat_pinned_messages",
+        null=True,
+        blank=True,
+    )
 
     class Meta:
         verbose_name = "Chat Message"
