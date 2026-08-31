@@ -15,7 +15,23 @@ KEY="$VPS_KEY"
 SRC="$(cd "$(dirname "$0")/../plane-src" && pwd)"
 TAG="${1:-wiki-drive}"
 
-run() { ssh -i "$KEY" -p "$PORT" -o BatchMode=yes "$VPS" "$@"; }
+#
+# Keepalives + multiplexado (incidente del 31 Ago 2026, ver sync-web.sh):
+# sin keepalives una conexion muerta NO falla, se queda colgada indefinidamente
+# (48 min parado en un solo scp, proceso vivo, log sin avanzar: indetectable).
+# Y el bucle abria DOS conexiones por fichero — un ssh para el mkdir y un scp
+# para copiarlo —, cientos de handshakes seguidos; los cortes ocurrian siempre
+# a mitad de esa rafaga, con el VPS sano. Con ControlMaster se reutiliza UNA
+# conexion. La causa de fondo no esta confirmada; esto elimina la rafaga.
+CTL="/tmp/.sync-live-ctl-$$"
+SSH_KEEPALIVE=(
+  -o ControlMaster=auto -o "ControlPath=$CTL" -o ControlPersist=600
+  -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -o ConnectTimeout=15
+)
+cleanup_ctl() { ssh -i "$KEY" -p "$PORT" -o "ControlPath=$CTL" -O exit "$VPS" 2>/dev/null || true; rm -f "$CTL"; }
+trap cleanup_ctl EXIT
+
+run() { ssh -i "$KEY" -p "$PORT" -o BatchMode=yes "${SSH_KEEPALIVE[@]}" "$VPS" "$@"; }
 
 cd "$SRC"
 git add -A -N -- 'apps/live' >/dev/null 2>&1 || true
@@ -44,7 +60,7 @@ done
 for f in ${TO_COPY[@]+"${TO_COPY[@]}"}; do
   [ -f "$SRC/$f" ] || { echo "FATAL: $f no existe en local"; exit 1; }
   run "mkdir -p '$REMOTE_SRC/$(dirname "$f")'"
-  scp -q -i "$KEY" -P "$PORT" "$SRC/$f" "$VPS:$REMOTE_SRC/$f"
+  scp -q -i "$KEY" -P "$PORT" "${SSH_KEEPALIVE[@]}" "$SRC/$f" "$VPS:$REMOTE_SRC/$f"
   echo "  copiado: $f"
 done
 

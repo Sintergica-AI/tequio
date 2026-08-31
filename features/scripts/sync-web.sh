@@ -17,7 +17,33 @@ SRC="$(cd "$(dirname "$0")/../plane-src" && pwd)"
 TAG="${1:-wiki-drive}"
 # REMOTE_SRC viene de _env.sh
 
-run() { ssh -i "$KEY" -p "$PORT" -o BatchMode=yes "$VPS" "$@"; }
+# Keepalives: sin ellos una conexion muerta no falla, se QUEDA COLGADA para
+# siempre — pasó el 31 Ago, 48 minutos parado en un solo scp mientras el proceso
+# seguía vivo, que es peor que un error porque nadie lo detecta. Con esto un
+# enlace muerto se convierte en fallo en ~45s y el reintento puede empezar.
+# (Ese día hubo TRES cortes contra este VPS; si se repite, el arreglo de fondo
+# es pasar el transporte a rsync, que además deja el destino consistente.)
+#
+# Y multiplexado (ControlMaster): el bucle abría DOS conexiones SSH nuevas por
+# fichero — un ssh para el mkdir y un scp para copiarlo —, o sea del orden de
+# mil handshakes seguidos en una copia completa. Los cuatro cortes del 31 Ago
+# ocurrieron todos a mitad de esa ráfaga, con el VPS sano (carga 0.07, 0% de
+# pérdida de paquetes, ssh suelto funcionando al instante). No se confirmó la
+# causa —no hay baneos de fail2ban ni descartes de sshd en el journal—, así que
+# esto NO es un arreglo de una causa conocida: es quitar de en medio la ráfaga,
+# que era la única anomalía del patrón. Con el master reutilizado son ~2
+# handshakes en total en vez de ~1070, y además va mucho más rápido.
+CTL="/tmp/.sync-web-ctl-$$"
+SSH_KEEPALIVE=(
+  -o ControlMaster=auto -o "ControlPath=$CTL" -o ControlPersist=600
+  -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -o ConnectTimeout=15
+)
+# Cerrar el master al salir: si queda vivo, un cambio de red posterior deja un
+# socket que apunta a una conexión muerta y el siguiente sync lo reutiliza.
+cleanup_ctl() { ssh -i "$KEY" -p "$PORT" -o "ControlPath=$CTL" -O exit "$VPS" 2>/dev/null || true; rm -f "$CTL"; }
+trap cleanup_ctl EXIT
+
+run() { ssh -i "$KEY" -p "$PORT" -o BatchMode=yes "${SSH_KEEPALIVE[@]}" "$VPS" "$@"; }
 
 cd "$SRC"
 # git status colapsa directorios enteramente nuevos a "?? dir/", lo que rompería
@@ -54,7 +80,7 @@ done
 for f in ${TO_COPY[@]+"${TO_COPY[@]}"}; do
   [ -f "$SRC/$f" ] || { echo "FATAL: $f no existe en local"; exit 1; }
   run "mkdir -p '$REMOTE_SRC/$(dirname "$f")'"
-  scp -q -i "$KEY" -P "$PORT" "$SRC/$f" "$VPS:$REMOTE_SRC/$f"
+  scp -q -i "$KEY" -P "$PORT" "${SSH_KEEPALIVE[@]}" "$SRC/$f" "$VPS:$REMOTE_SRC/$f"
   echo "  copiado: $f"
 done
 
