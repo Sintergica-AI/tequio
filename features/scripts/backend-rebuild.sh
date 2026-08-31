@@ -25,6 +25,10 @@ for app in finance assistant chat; do
   rm -rf "${BB:?}/$app"
   cp -r "$FEAT_DIR/backend/$app" "$BB/$app"
 done
+# Plantillas de correo con identidad Tequio. Se borra antes de copiar por lo
+# mismo que los .py: una plantilla renombrada aquí seguiria viva en el contexto.
+rm -rf "${BB:?}/emails"
+cp -r "$FEAT_DIR/backend/emails" "$BB/emails"
 cat > "$BB/Dockerfile" <<EOF
 FROM ${BASE_IMAGE}
 COPY workspace_page_serializers.py /code/plane/app/serializers/workspace_page_ext.py
@@ -35,6 +39,8 @@ COPY drive_urls.py                 /code/plane/app/urls/drive_ext.py
 COPY finance/                      /code/plane/finance/
 COPY assistant/                    /code/plane/assistant/
 COPY chat/                         /code/plane/chat/
+# Django fusiona el contenido: solo se pisan las plantillas que traemos.
+COPY emails/                       /code/templates/emails/
 COPY patch_ce_features.py          /tmp/patch_ce_features.py
 # pypdf: extracción de texto de estados de cuenta en PDF (finanzas)
 RUN pip install --no-cache-dir "pypdf>=5,<6"

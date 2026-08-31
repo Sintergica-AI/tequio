@@ -1,0 +1,27 @@
+{% comment %}
+Enlace en texto para cuando el botón no funciona (clientes que descartan el
+<a> con estilos, o quien lee en texto plano).
+Uso: {% include "emails/_tequio_link_fallback.html" with url=... %}
+{% endcomment %}<p
+  style="margin: 0; font-size: 13px; line-height: 1.6; color: #5f5e5e;"
+>
+  Si el botón no funciona, copia y pega este enlace en tu navegador:
+</p>
+
+<p
+  style="margin: 6px 0 0; font-size: 13px; line-height: 1.6; color: #5f5e5e;"
+>
+  <span
+    style="
+      display: inline-block;
+      font-family: 'Courier New', Courier, monospace;
+      font-size: 12px;
+      background-color: #f3f3f3;
+      padding: 4px 6px;
+      border-radius: 3px;
+      border: 1px solid #e9e9e9;
+      word-break: break-all;
+    "
+    >{{url}}</span
+  >
+</p>

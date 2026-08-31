@@ -178,6 +178,12 @@ puede escribir no se le ofrecen siquiera esas herramientas.
 backend/               → archivos python + patcher (imagen derivada de la actual del api)
 backend/assistant/     → app Django del asistente de IA (modelos, herramientas, loop SSE)
                          frontend en plane-src: core/components/assistant/, store, servicio
+backend/emails/        → las 16 plantillas de correo con identidad Tequio; pisan por COPY
+                         a las de fábrica en /code/templates/emails/
+regen-issue-updates.py → regenera backend/emails/notifications/issue-updates.html desde la
+                         plantilla de plane-src (la única que no usa la maqueta común);
+                         cada sustitución lleva aserción, así que un cambio de upstream
+                         falla en vez de dejar texto en inglés
 web-live.patch         → git diff con 58 archivos (frontend web + servidor live + i18n)
 remote-deploy.sh       → se ejecuta en el VPS: build de 3 imágenes + actualización del compose
 deploy.sh              → sube el paquete por scp y ejecuta remote-deploy.sh
@@ -186,6 +192,8 @@ sync-admin.sh          → lo mismo para apps/admin (god-mode); sync-web.sh no l
 fix-live-image.sh      → parche puntual del compose para el servicio live
 verify*.py             → pruebas funcionales que se ejecutan dentro del contenedor api
                          (verify5.py = asistente, 100 comprobaciones, sin llamar al proveedor)
+                         verify13.py = correos; es la excepción, corre EN LOCAL con Django
+                         instalado y no toca la base ni la red
 ```
 
 ## Notas de mantenimiento

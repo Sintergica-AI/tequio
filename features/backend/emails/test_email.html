@@ -1,0 +1,28 @@
+{% extends "emails/_tequio_base.html" %}
+{% comment %}
+Correo de prueba (manage.py test_email). Sirve para comprobar que la salida
+SMTP de la instancia funciona.
+{% endcomment %}
+
+{% block title %}Correo de prueba de Tequio{% endblock %}
+
+{% block preheader %}Si lees esto, la configuración de correo de la instancia funciona.{% endblock %}
+
+{% block content %}
+<h1
+  style="
+    margin: 0 0 12px;
+    font-size: 22px;
+    line-height: 1.35;
+    font-weight: 600;
+    color: #111111;
+  "
+>
+  Correo de prueba
+</h1>
+
+<p style="margin: 0 0 12px;">
+  Este mensaje se envió para comprobar la configuración de correo de esta
+  instancia de Tequio. Si te llegó, la salida SMTP funciona.
+</p>
+{% endblock %}

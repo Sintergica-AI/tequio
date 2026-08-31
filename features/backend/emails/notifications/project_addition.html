@@ -1,0 +1,36 @@
+{% extends "emails/_tequio_base.html" %}
+{% comment %}
+Aviso de que ya se te agregó a un proyecto (no es una invitación por aceptar:
+el acceso ya está dado, el botón solo lleva al proyecto).
+Contexto: inviter_first_name, project_name, workspace_name, project_url, email,
+current_site (parcheado).
+{% endcomment %}
+
+{% block title %}Ya formas parte de {{project_name}} en Tequio{% endblock %}
+
+{% block preheader %}{{inviter_first_name}} te agregó al proyecto {{project_name}} en Tequio.{% endblock %}
+
+{% block content %}
+<h1
+  style="
+    margin: 0 0 12px;
+    font-size: 22px;
+    line-height: 1.35;
+    font-weight: 600;
+    color: #111111;
+  "
+>
+  Ya formas parte de {{project_name}}
+</h1>
+
+<p style="margin: 0 0 12px;">
+  {{inviter_first_name}} te agregó al proyecto
+  <strong>{{project_name}}</strong>, de la organización
+  <strong>{{workspace_name}}</strong>. Ya tienes acceso: no hace falta aceptar
+  nada.
+</p>
+
+{% include "emails/_tequio_button.html" with url=project_url label="Ir al proyecto" %}
+{% include "emails/_tequio_link_fallback.html" with url=project_url %}
+{% include "emails/_tequio_recipient_note.html" with text="Si crees que fue un error, avisa a quien administra la organización." %}
+{% endblock %}

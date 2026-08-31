@@ -1,0 +1,238 @@
+{% comment %}
+Copyright (c) 2023-present Plane Software, Inc. and contributors
+Modificaciones (c) 2026 Sintergica AI - identidad Tequio
+SPDX-License-Identifier: AGPL-3.0-only
+
+Maqueta común de todos los correos de Tequio. Sustituye a las plantillas de
+fábrica de Plane, que además de la marca ajena enlazaban a sus sitios y redes
+(github.com/makeplane, forum.plane.so, x.com/planepowers, LinkedIn) y cargaban
+el logotipo desde media.docs.plane.so.
+
+Bloques: title, preheader, content. El pie es fijo.
+
+`current_site` es OPCIONAL: cuando el contexto no lo trae, el isotipo se omite
+y la marca sigue leyéndose porque el nombre va como TEXTO, no dentro de la
+imagen. Eso también cubre el caso normal de un cliente de correo que bloquea
+imágenes en la primera apertura.
+
+Estilos en línea y tablas a propósito: Outlook y Gmail descartan buena parte
+del CSS de <style>, que aquí solo lleva los ajustes de móvil.
+{% endcomment %}<!DOCTYPE html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>{% block title %}Tequio{% endblock %}</title>
+
+    <style>
+      /* Reinicios básicos para clientes de correo */
+      body,
+      table,
+      td,
+      p {
+        margin: 0;
+        padding: 0;
+      }
+
+      img {
+        border: 0;
+        line-height: 100%;
+        text-decoration: none;
+        -ms-interpolation-mode: bicubic;
+      }
+
+      table {
+        border-collapse: collapse;
+      }
+
+      /* Ajustes para móvil */
+      @media only screen and (max-width: 600px) {
+        .email-container {
+          width: 100% !important;
+        }
+
+        .email-content {
+          padding: 24px 20px !important;
+        }
+
+        .email-footer {
+          padding: 0 20px 16px 20px !important;
+        }
+      }
+    </style>
+  </head>
+
+  <body
+    bgcolor="#f9f9f9"
+    style="
+      margin: 0;
+      padding: 0;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI',
+        sans-serif;
+      font-weight: 400;
+      color: #474747;
+      -webkit-font-smoothing: antialiased;
+      -webkit-text-size-adjust: none;
+      background-color: #f9f9f9;
+    "
+  >
+    <!-- Preencabezado (oculto) -->
+    <span
+      class="preheader"
+      style="
+        display: none;
+        font-size: 1px;
+        color: transparent;
+        line-height: 1px;
+        max-height: 0;
+        max-width: 0;
+        opacity: 0;
+        overflow: hidden;
+        mso-hide: all;
+        visibility: hidden;
+      "
+    >
+      {% block preheader %}{% endblock %}
+    </span>
+
+    <!-- Contenedor exterior -->
+    <center
+      class="email-body"
+      style="width: 100%; background-color: #f9f9f9; padding: 40px 0;"
+    >
+      <!-- ENCABEZADO -->
+      <table role="presentation" width="100%">
+        <tr>
+          <td></td>
+
+          <td
+            class="email-container"
+            width="620"
+            style="width: 620px; max-width: 620px; margin: 0 auto;"
+          >
+            <table
+              role="presentation"
+              width="100%"
+              style="background-color: #000c19;"
+            >
+              <tr>
+                <td style="padding: 24px 40px; text-align: center;">
+                  {% if current_site %}<img
+                    src="{{current_site}}/favicon/android-chrome-192x192.png"
+                    width="36"
+                    height="36"
+                    alt=""
+                    style="
+                      height: 36px;
+                      width: 36px;
+                      display: inline-block;
+                      vertical-align: middle;
+                    "
+                  />{% endif %}
+                  <span
+                    style="
+                      display: inline-block;
+                      vertical-align: middle;
+                      padding-left: 10px;
+                      font-size: 22px;
+                      line-height: 36px;
+                      font-weight: 600;
+                      letter-spacing: 0.5px;
+                      color: #ffffff;
+                    "
+                    >Tequio</span
+                  >
+                </td>
+              </tr>
+            </table>
+          </td>
+
+          <td></td>
+        </tr>
+      </table>
+
+      <!-- CUERPO (tarjeta bajo el encabezado) -->
+      <table role="presentation" width="100%">
+        <tr>
+          <td></td>
+
+          <td
+            class="email-container"
+            width="620"
+            style="width: 620px; max-width: 620px; margin: 0 auto;"
+          >
+            <table
+              role="presentation"
+              width="100%"
+              class="email-content"
+              style="background-color: #ffffff; padding: 32px 40px 32px 40px;"
+            >
+              <tr>
+                <td
+                  style="
+                    font-size: 16px;
+                    line-height: 1.5;
+                    color: #474747;
+                    padding: 24px;
+                  "
+                >
+                  {% block content %}{% endblock %}
+                </td>
+              </tr>
+            </table>
+          </td>
+
+          <td></td>
+        </tr>
+      </table>
+
+      <!-- PIE -->
+      <table role="presentation" width="100%">
+        <tr>
+          <td></td>
+
+          <td
+            class="email-container"
+            width="620"
+            style="width: 620px; max-width: 620px; margin: 0 auto;"
+          >
+            <table
+              role="presentation"
+              width="100%"
+              class="email-footer"
+              style="background-color: #ffffff; padding: 0 40px 16px 40px;"
+            >
+              <tr>
+                <td
+                  style="
+                    border-top: 1px solid #e9e9e9;
+                    padding: 24px;
+                    font-size: 12px;
+                    line-height: 1.6;
+                    color: #979797;
+                    text-align: left;
+                  "
+                >
+                  <p style="margin: 0;">Tequio, de Sintergica AI.</p>
+                  {% if current_site %}<p style="margin: 4px 0 0;">
+                    Mensaje automático enviado desde
+                    <a
+                      href="{{current_site}}"
+                      target="_blank"
+                      style="color: #979797; text-decoration: underline;"
+                      >{{current_site}}</a
+                    >.
+                  </p>{% endif %}
+                </td>
+              </tr>
+            </table>
+          </td>
+
+          <td></td>
+        </tr>
+      </table>
+    </center>
+
+    <base target="_blank" />
+  </body>
+</html>

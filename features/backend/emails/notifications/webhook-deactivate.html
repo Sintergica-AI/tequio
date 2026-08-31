@@ -1,0 +1,36 @@
+{% extends "emails/_tequio_base.html" %}
+{% comment %}
+Aviso de webhook desactivado por fallos repetidos.
+Contexto: message, webhook_url, email, current_site (parcheado).
+`message` se redacta en Python (bgtasks/webhook_task.py) porque incluye la URL
+de destino del webhook; el parche lo traduce al español.
+{% endcomment %}
+
+{% block title %}Se desactivó un webhook en Tequio{% endblock %}
+
+{% block preheader %}Un webhook de tu organización dejó de recibir eventos.{% endblock %}
+
+{% block content %}
+<h1
+  style="
+    margin: 0 0 12px;
+    font-size: 22px;
+    line-height: 1.35;
+    font-weight: 600;
+    color: #111111;
+  "
+>
+  Se desactivó un webhook
+</h1>
+
+<p style="margin: 0 0 12px;">{{message}}</p>
+
+<p style="margin: 0 0 12px;">
+  Mientras esté desactivado no recibirá ningún evento. Revisa que el destino
+  responda correctamente y vuelve a activarlo desde su configuración.
+</p>
+
+{% include "emails/_tequio_button.html" with url=webhook_url label="Ver el webhook" %}
+{% include "emails/_tequio_link_fallback.html" with url=webhook_url %}
+{% include "emails/_tequio_recipient_note.html" with text="Lo recibes porque administras esta organización en Tequio." %}
+{% endblock %}

@@ -1,0 +1,65 @@
+{% extends "emails/_tequio_base.html" %}
+{% comment %}
+Código de un solo uso. La MISMA plantilla sirve para dos flujos (así lo hace
+Plane de fábrica y no se cambia aquí): iniciar sesión sin contraseña
+(bgtasks/magic_link_code_task.py) y confirmar un correo nuevo
+(bgtasks/user_email_update_task.py). Por eso el texto no dice "iniciar sesión":
+diría algo falso en la mitad de los envíos.
+
+Contexto: code, email, current_site (este último lo añade el parche).
+Caducidad: 600 s en provider/credentials/magic_code.py.
+{% endcomment %}
+
+{% block title %}Tu código de Tequio: {{code}}{% endblock %}
+
+{% block preheader %}Tu código de un solo uso es {{code}}. Caduca en 10 minutos.{% endblock %}
+
+{% block content %}
+<h1
+  style="
+    margin: 0 0 12px;
+    font-size: 22px;
+    line-height: 1.35;
+    font-weight: 600;
+    color: #111111;
+  "
+>
+  Tu código de verificación
+</h1>
+
+<p style="margin: 0 0 20px;">
+  Escribe este código en Tequio para continuar:
+</p>
+
+<table
+  role="presentation"
+  cellspacing="0"
+  cellpadding="0"
+  border="0"
+  style="margin: 0 0 20px;"
+>
+  <tr>
+    <td
+      style="
+        background-color: #f3f3f3;
+        border: 1px solid #e9e9e9;
+        border-radius: 6px;
+        padding: 14px 24px;
+        font-family: 'Courier New', Courier, monospace;
+        font-size: 28px;
+        font-weight: 700;
+        letter-spacing: 4px;
+        color: #111111;
+      "
+    >
+      {{code}}
+    </td>
+  </tr>
+</table>
+
+<p style="margin: 0; font-size: 13px; line-height: 1.6; color: #5f5e5e;">
+  Caduca en 10 minutos y solo se puede usar una vez.
+</p>
+
+{% include "emails/_tequio_recipient_note.html" with text="Si no lo pediste, ignora este mensaje: sin el código nadie puede entrar." %}
+{% endblock %}

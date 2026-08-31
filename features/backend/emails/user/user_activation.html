@@ -1,0 +1,32 @@
+{% extends "emails/_tequio_base.html" %}
+{% comment %}
+Aviso de cuenta reactivada.
+Contexto: email, profile_url, current_site (parcheado).
+{% endcomment %}
+
+{% block title %}Tu cuenta de Tequio se reactivó{% endblock %}
+
+{% block preheader %}Tu cuenta de Tequio vuelve a estar activa.{% endblock %}
+
+{% block content %}
+<h1
+  style="
+    margin: 0 0 12px;
+    font-size: 22px;
+    line-height: 1.35;
+    font-weight: 600;
+    color: #111111;
+  "
+>
+  Tu cuenta volvió a activarse
+</h1>
+
+<p style="margin: 0 0 12px;">
+  Ya puedes entrar a Tequio otra vez con esta dirección y retomar tu trabajo
+  donde lo dejaste.
+</p>
+
+{% include "emails/_tequio_button.html" with url=profile_url label="Ir a mi perfil" %}
+{% include "emails/_tequio_link_fallback.html" with url=profile_url %}
+{% include "emails/_tequio_recipient_note.html" with text="Si no esperabas este cambio, avisa a quien administra la instancia." %}
+{% endblock %}

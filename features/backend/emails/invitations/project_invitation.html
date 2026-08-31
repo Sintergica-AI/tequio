@@ -1,0 +1,36 @@
+{% extends "emails/_tequio_base.html" %}
+{% comment %}
+Invitación a un proyecto.
+Contexto: first_name, project_name, invitation_url, email, current_site.
+
+La plantilla de fábrica enlazaba a github.com/makeplane, forum.plane.so,
+x.com/planepowers y al LinkedIn de Plane Software, Inc., y dejaba a la vista
+dos variables que el contexto nunca define ({{ mirror }} y {{ unsubscribe }}).
+{% endcomment %}
+
+{% block title %}{{first_name}} te invitó al proyecto {{project_name}} en Tequio{% endblock %}
+
+{% block preheader %}{{first_name}} te invitó a colaborar en el proyecto {{project_name}}, en Tequio.{% endblock %}
+
+{% block content %}
+<h1
+  style="
+    margin: 0 0 12px;
+    font-size: 22px;
+    line-height: 1.35;
+    font-weight: 600;
+    color: #111111;
+  "
+>
+  Únete al proyecto {{project_name}} en Tequio
+</h1>
+
+<p style="margin: 0 0 12px;">
+  {{first_name}} te invitó a colaborar en el proyecto
+  <strong>{{project_name}}</strong> dentro de Tequio.
+</p>
+
+{% include "emails/_tequio_button.html" with url=invitation_url label="Aceptar invitación" %}
+{% include "emails/_tequio_link_fallback.html" with url=invitation_url %}
+{% include "emails/_tequio_recipient_note.html" with text="Si no esperabas esta invitación, puedes ignorarla." %}
+{% endblock %}
