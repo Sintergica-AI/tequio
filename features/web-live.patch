@@ -109910,10 +109910,10 @@ index b386030..df8c387 100644
            </div>
 diff --git a/apps/web/core/components/chat/channel-list.tsx b/apps/web/core/components/chat/channel-list.tsx
 new file mode 100644
-index 0000000..8a1fc57
+index 0000000..ab7d4af
 --- /dev/null
 +++ b/apps/web/core/components/chat/channel-list.tsx
-@@ -0,0 +1,291 @@
+@@ -0,0 +1,307 @@
 +/**
 + * Sintergica CE extension: channel sidebar (workspace + project sections)
 + * with unread badges and the create-channel modal.
@@ -109921,7 +109921,7 @@ index 0000000..8a1fc57
 + */
 +
 +import { useState } from "react";
-+import { ArrowUp, Bell, BellOff, Hash, Lock, MessageCircle, MoreHorizontal, Plus } from "lucide-react";
++import { ArrowUp, Bell, BellOff, Check, Hash, Lock, LogOut, MessageCircle, MoreHorizontal, Plus } from "lucide-react";
 +import { observer } from "mobx-react";
 +// plane imports
 +import { useTranslation } from "@plane/i18n";
@@ -110072,6 +110072,22 @@ index 0000000..8a1fc57
 +                {isMuted ? t("chat.unmute") : t("chat.mute")}
 +              </span>
 +            </CustomMenu.MenuItem>
++            {unread > 0 && (
++              <CustomMenu.MenuItem onClick={() => void chat.markRead(workspaceSlug, channel.id)}>
++                <span className="flex items-center gap-2">
++                  <Check className="size-3.5" /> {t("chat.mark_read")}
++                </span>
++              </CustomMenu.MenuItem>
++            )}
++            {channel.access === 1 && !channel.is_direct && !channel.is_general && currentUser?.id && (
++              <CustomMenu.MenuItem
++                onClick={() => void chat.removeChannelMember(workspaceSlug, channel.id, currentUser.id)}
++              >
++                <span className="flex items-center gap-2 text-red-500">
++                  <LogOut className="size-3.5" /> {t("chat.leave_channel")}
++                </span>
++              </CustomMenu.MenuItem>
++            )}
 +          </CustomMenu>
 +        </span>
 +      </div>
@@ -110491,10 +110507,10 @@ index 0000000..38bcb8c
 +});
 diff --git a/apps/web/core/components/chat/chat-notification-item.tsx b/apps/web/core/components/chat/chat-notification-item.tsx
 new file mode 100644
-index 0000000..89f6f6b
+index 0000000..86d8ed3
 --- /dev/null
 +++ b/apps/web/core/components/chat/chat-notification-item.tsx
-@@ -0,0 +1,95 @@
+@@ -0,0 +1,97 @@
 +/**
 + * Sintergica CE extension: notification card for chat mentions.
 + *
@@ -110547,10 +110563,12 @@ index 0000000..89f6f6b
 +        console.error(error);
 +      }
 +    }
-+    const href = channel.project_id
++    const base = channel.project_id
 +      ? `/${workspaceSlug}/projects/${channel.project_id}/channels/${channel.id}`
 +      : `/${workspaceSlug}/channels/${channel.id}`;
-+    router.push(href);
++    // Aterriza en el mensaje exacto de la mención, no solo en el canal.
++    const messageId = data?.message?.id;
++    router.push(messageId ? `${base}?message=${messageId}` : base);
 +  };
 +
 +  return (
@@ -110592,10 +110610,10 @@ index 0000000..89f6f6b
 +});
 diff --git a/apps/web/core/components/chat/chat-view.tsx b/apps/web/core/components/chat/chat-view.tsx
 new file mode 100644
-index 0000000..f4c2a33
+index 0000000..c80ccca
 --- /dev/null
 +++ b/apps/web/core/components/chat/chat-view.tsx
-@@ -0,0 +1,381 @@
+@@ -0,0 +1,386 @@
 +/**
 + * Sintergica CE extension: chat root view (channel sidebar + room + thread).
 + *
@@ -110608,6 +110626,7 @@ index 0000000..f4c2a33
 + */
 +
 +import { useCallback, useEffect, useState } from "react";
++import { useSearchParams } from "next/navigation";
 +import { Hash, Lock, MessageCircle, Pin, Search, Settings, Users } from "lucide-react";
 +import { observer } from "mobx-react";
 +// plane imports
@@ -110659,6 +110678,7 @@ index 0000000..f4c2a33
 +  // store hooks
 +  const chat = useChat();
 +  const router = useAppRouter();
++  const searchParams = useSearchParams();
 +  const { getUserDetails } = useMember();
 +  const { data: currentUser } = useUser();
 +  const { t } = useTranslation();
@@ -110706,7 +110726,10 @@ index 0000000..f4c2a33
 +  useEffect(() => {
 +    if (!channelId) return;
 +    chat.setActiveChannel(channelId);
-+    const jump = chat.pendingJump;
++    // Deep link: ?message=<id> (enlaces copiados y notificaciones de mención).
++    const deepLinkMessage = searchParams?.get("message");
++    const jump =
++      chat.pendingJump ?? (deepLinkMessage ? { channelId, messageId: deepLinkMessage } : null);
 +    if (jump && jump.channelId === channelId) {
 +      chat.setPendingJump(null);
 +      chat
@@ -111221,10 +111244,10 @@ index 0000000..94b022b
 +});
 diff --git a/apps/web/core/components/chat/message-card.tsx b/apps/web/core/components/chat/message-card.tsx
 new file mode 100644
-index 0000000..b1bb001
+index 0000000..d99f74d
 --- /dev/null
 +++ b/apps/web/core/components/chat/message-card.tsx
-@@ -0,0 +1,287 @@
+@@ -0,0 +1,302 @@
 +/**
 + * Sintergica CE extension: one chat message bubble.
 + *
@@ -111236,11 +111259,12 @@ index 0000000..b1bb001
 + */
 +
 +import { useState } from "react";
-+import { MessageSquareText, Pencil, Pin, Trash2, Link2, SquarePlus, SmilePlus } from "lucide-react";
++import { Link as LinkIcon, MessageSquareText, Pencil, Pin, Trash2, Link2, SquarePlus, SmilePlus } from "lucide-react";
 +import { observer } from "mobx-react";
 +// plane imports
 +import type { EditorRefApi } from "@plane/editor";
 +import { useTranslation } from "@plane/i18n";
++import { TOAST_TYPE, setToast } from "@plane/propel/toast";
 +import { stringToEmoji } from "@plane/propel/emoji-icon-picker";
 +import { EmojiReactionGroup, EmojiReactionPicker, type EmojiReactionType } from "@plane/propel/emoji-reaction";
 +import { Avatar, CustomMenu, Tooltip } from "@plane/ui";
@@ -111479,6 +111503,20 @@ index 0000000..b1bb001
 +              </span>
 +            </CustomMenu.MenuItem>
 +            <CustomMenu.MenuItem
++              onClick={() => {
++                const base = channel?.project
++                  ? `/${workspaceSlug}/projects/${channel.project}/channels/${message.channel}`
++                  : `/${workspaceSlug}/channels/${message.channel}`;
++                void navigator.clipboard
++                  .writeText(`${window.location.origin}${base}?message=${message.id}`)
++                  .then(() => setToast({ type: TOAST_TYPE.SUCCESS, title: t("chat.link_copied") }));
++              }}
++            >
++              <span className="flex items-center gap-2">
++                <LinkIcon className="size-3.5" /> {t("chat.copy_link")}
++              </span>
++            </CustomMenu.MenuItem>
++            <CustomMenu.MenuItem
 +              onClick={() => void chat.togglePin(workspaceSlug, message.channel, message.id)}
 +            >
 +              <span className="flex items-center gap-2">
@@ -111514,10 +111552,10 @@ index 0000000..b1bb001
 +});
 diff --git a/apps/web/core/components/chat/message-list.tsx b/apps/web/core/components/chat/message-list.tsx
 new file mode 100644
-index 0000000..9abc747
+index 0000000..4026b5b
 --- /dev/null
 +++ b/apps/web/core/components/chat/message-list.tsx
-@@ -0,0 +1,214 @@
+@@ -0,0 +1,229 @@
 +/**
 + * Sintergica CE extension: chat message list.
 + *
@@ -111604,10 +111642,25 @@ index 0000000..9abc747
 +    stickToBottomRef.current = true;
 +  }, [channelId]);
 +
++  const loadingNewerRef = useRef(false);
++
 +  const handleScroll = async () => {
 +    const el = scrollRef.current;
 +    if (!el) return;
 +    stickToBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
++    // History mode: nearing the bottom pulls the next page toward the present.
++    if (
++      isViewingHistory &&
++      el.scrollHeight - el.scrollTop - el.clientHeight < 120 &&
++      !loadingNewerRef.current
++    ) {
++      loadingNewerRef.current = true;
++      try {
++        await chat.fetchNewerMessages(workspaceSlug, channelId);
++      } finally {
++        loadingNewerRef.current = false;
++      }
++    }
 +    if (el.scrollTop < 80 && hasMore && !loadingOlderRef.current) {
 +      loadingOlderRef.current = true;
 +      const previousHeight = el.scrollHeight;
@@ -120421,10 +120474,10 @@ index 0000000..3c9e1d1
 +}
 diff --git a/apps/web/core/services/chat.service.ts b/apps/web/core/services/chat.service.ts
 new file mode 100644
-index 0000000..40c8351
+index 0000000..249d6cb
 --- /dev/null
 +++ b/apps/web/core/services/chat.service.ts
-@@ -0,0 +1,406 @@
+@@ -0,0 +1,414 @@
 +/**
 + * Sintergica CE extension: chat channels (ClickUp-style) service.
 + *
@@ -120581,11 +120634,19 @@ index 0000000..40c8351
 +  async fetchMessages(
 +    workspaceSlug: string,
 +    channelId: string,
-+    params?: { cursor?: string; limit?: number; created_at__gt?: string; parent_id?: string; anchor?: string }
++    params?: {
++      cursor?: string;
++      limit?: number;
++      created_at__gt?: string;
++      parent_id?: string;
++      anchor?: string;
++      after?: string;
++    }
 +  ): Promise<TChatMessagesPage> {
 +    const search = new URLSearchParams();
 +    if (params?.cursor) search.set("cursor", params.cursor);
 +    if (params?.anchor) search.set("anchor", params.anchor);
++    if (params?.after) search.set("after", params.after);
 +    if (params?.limit) search.set("limit", String(params.limit));
 +    if (params?.created_at__gt) search.set("created_at__gt", params.created_at__gt);
 +    if (params?.parent_id) search.set("parent_id", params.parent_id);
@@ -122335,10 +122396,10 @@ index 0000000..1bc5194
 +}
 diff --git a/apps/web/core/store/chat.store.ts b/apps/web/core/store/chat.store.ts
 new file mode 100644
-index 0000000..6f58035
+index 0000000..c793f6b
 --- /dev/null
 +++ b/apps/web/core/store/chat.store.ts
-@@ -0,0 +1,750 @@
+@@ -0,0 +1,767 @@
 +/**
 + * Sintergica CE extension: chat channels store.
 + *
@@ -122450,6 +122511,7 @@ index 0000000..6f58035
 +  highlightMessageId: string | null;
 +  pendingJump: { channelId: string; messageId: string } | null;
 +  jumpToMessage: (workspaceSlug: string, channelId: string, messageId: string) => Promise<void>;
++  fetchNewerMessages: (workspaceSlug: string, channelId: string) => Promise<void>;
 +  returnToPresent: (workspaceSlug: string, channelId: string) => Promise<void>;
 +  setPendingJump: (jump: { channelId: string; messageId: string } | null) => void;
 +  clearHighlight: () => void;
@@ -122520,6 +122582,7 @@ index 0000000..6f58035
 +      removeChannelMember: action,
 +      togglePin: action,
 +      jumpToMessage: action,
++      fetchNewerMessages: action,
 +      returnToPresent: action,
 +      setPendingJump: action,
 +      clearHighlight: action,
@@ -122974,6 +123037,21 @@ index 0000000..6f58035
 +      this.highlightMessageId = messageId;
 +      // A reply opens its thread on top of the anchored window.
 +      this.activeThreadRootId = page.anchor_is_reply ? (page.anchor_root_id ?? null) : null;
++    });
++  };
++
++  fetchNewerMessages = async (workspaceSlug: string, channelId: string) => {
++    // History mode paginating down. Walking page by page can never leave a
++    // gap, so reaching the present just clears the flag.
++    const ids = this.messageIdsByChannel[channelId] ?? [];
++    const newest = ids.length ? this.messageMap[ids[ids.length - 1]] : undefined;
++    if (!newest) return;
++    const page = await this.service.fetchMessages(workspaceSlug, channelId, {
++      after: `${newest.created_at},${newest.id}`,
++    });
++    runInAction(() => {
++      for (const m of page.results) this.absorbMessage(m);
++      if (!page.has_more) this.isViewingHistory[channelId] = false;
 +    });
 +  };
 +
@@ -191386,7 +191464,7 @@ index 5aa7d2f..32afb6d 100644
        "fixed_schedule": "Pevný rozvrh",
        "schedule": {
 diff --git a/packages/i18n/src/locales/cs/common.json b/packages/i18n/src/locales/cs/common.json
-index c1e9372..1146bb8 100644
+index c1e9372..907c46a 100644
 --- a/packages/i18n/src/locales/cs/common.json
 +++ b/packages/i18n/src/locales/cs/common.json
 @@ -244,7 +244,7 @@
@@ -191416,7 +191494,7 @@ index c1e9372..1146bb8 100644
    "in_app": "V aplikaci",
    "forms": "Formuláře",
    "milestones": "Milníky",
-@@ -867,5 +867,428 @@
+@@ -867,5 +867,431 @@
        "description": "Exportujte položky do JSON.",
        "short_description": "Exportovat jako JSON"
      }
@@ -191842,7 +191920,10 @@ index c1e9372..1146bb8 100644
 +    "chat_in": "Chat v {name}",
 +    "write_in": "Piš do #{name}",
 +    "write_to": "Napiš {name}",
-+    "jump_failed": "Nelze přejít na zprávu"
++    "jump_failed": "Nelze přejít na zprávu",
++    "copy_link": "Kopírovat odkaz",
++    "link_copied": "Odkaz zkopírován",
++    "mark_read": "Označit jako přečtené"
    }
  }
 diff --git a/packages/i18n/src/locales/cs/empty-state.json b/packages/i18n/src/locales/cs/empty-state.json
@@ -192550,7 +192631,7 @@ index 66379d4..2c778e6 100644
        "fixed_schedule": "Fester Zeitplan",
        "schedule": {
 diff --git a/packages/i18n/src/locales/de/common.json b/packages/i18n/src/locales/de/common.json
-index 1e18d4e..39b811b 100644
+index 1e18d4e..75def64 100644
 --- a/packages/i18n/src/locales/de/common.json
 +++ b/packages/i18n/src/locales/de/common.json
 @@ -244,7 +244,7 @@
@@ -192571,7 +192652,7 @@ index 1e18d4e..39b811b 100644
      "choose_view_logs_from_setup_sh_and_docker_logs_to_be_sure": "Wählen Sie View Logs aus setup.sh und Docker-Logs, um sicherzugehen."
    },
    "customize_navigation": "Navigation anpassen",
-@@ -867,5 +867,428 @@
+@@ -867,5 +867,431 @@
        "description": "Arbeitselemente in JSON exportieren.",
        "short_description": "Als JSON exportieren"
      }
@@ -192997,7 +193078,10 @@ index 1e18d4e..39b811b 100644
 +    "chat_in": "Chat in {name}",
 +    "write_in": "Schreibe in #{name}",
 +    "write_to": "Schreibe an {name}",
-+    "jump_failed": "Konnte nicht zur Nachricht springen"
++    "jump_failed": "Konnte nicht zur Nachricht springen",
++    "copy_link": "Link kopieren",
++    "link_copied": "Link kopiert",
++    "mark_read": "Als gelesen markieren"
    }
  }
 diff --git a/packages/i18n/src/locales/de/empty-state.json b/packages/i18n/src/locales/de/empty-state.json
@@ -193690,7 +193774,7 @@ index 64779c7..c549990 100644
        "fixed_schedule": "Fixed schedule",
        "schedule": {
 diff --git a/packages/i18n/src/locales/en/common.json b/packages/i18n/src/locales/en/common.json
-index a138304..a93bd15 100644
+index a138304..8a97e3d 100644
 --- a/packages/i18n/src/locales/en/common.json
 +++ b/packages/i18n/src/locales/en/common.json
 @@ -244,7 +244,7 @@
@@ -193720,7 +193804,7 @@ index a138304..a93bd15 100644
    "in_app": "In-app",
    "forms": "Forms",
    "milestones": "Milestones",
-@@ -867,5 +867,428 @@
+@@ -867,5 +867,431 @@
        "description": "Export work items to a JSON file.",
        "short_description": "Export as json"
      }
@@ -194146,7 +194230,10 @@ index a138304..a93bd15 100644
 +    "chat_in": "Chat in {name}",
 +    "write_in": "Write in #{name}",
 +    "write_to": "Write to {name}",
-+    "jump_failed": "Could not jump to the message"
++    "jump_failed": "Could not jump to the message",
++    "copy_link": "Copy link",
++    "link_copied": "Link copied",
++    "mark_read": "Mark as read"
    }
  }
 diff --git a/packages/i18n/src/locales/en/empty-state.json b/packages/i18n/src/locales/en/empty-state.json
@@ -194913,7 +195000,7 @@ index f49d529..b042251 100644
        "fixed_schedule": "Horario fijo",
        "schedule": {
 diff --git a/packages/i18n/src/locales/es/common.json b/packages/i18n/src/locales/es/common.json
-index 64440c9..cab661a 100644
+index 64440c9..b991d25 100644
 --- a/packages/i18n/src/locales/es/common.json
 +++ b/packages/i18n/src/locales/es/common.json
 @@ -145,7 +145,7 @@
@@ -194952,7 +195039,7 @@ index 64440c9..cab661a 100644
    "in_app": "En la aplicación",
    "forms": "Formularios",
    "milestones": "Hitos",
-@@ -867,5 +867,428 @@
+@@ -867,5 +867,431 @@
        "description": "Exporta elementos de trabajo a un archivo JSON.",
        "short_description": "Exportar como json"
      }
@@ -195378,7 +195465,10 @@ index 64440c9..cab661a 100644
 +    "chat_in": "Chat en {name}",
 +    "write_in": "Escribe en #{name}",
 +    "write_to": "Escribe a {name}",
-+    "jump_failed": "No se pudo saltar al mensaje"
++    "jump_failed": "No se pudo saltar al mensaje",
++    "copy_link": "Copiar enlace",
++    "link_copied": "Enlace copiado",
++    "mark_read": "Marcar como leído"
    }
  }
 diff --git a/packages/i18n/src/locales/es/empty-state.json b/packages/i18n/src/locales/es/empty-state.json
@@ -196136,7 +196226,7 @@ index 5343f12..1a31636 100644
        "fixed_schedule": "Horaire fixe",
        "schedule": {
 diff --git a/packages/i18n/src/locales/fr/common.json b/packages/i18n/src/locales/fr/common.json
-index a94ab8a..d001607 100644
+index a94ab8a..663060a 100644
 --- a/packages/i18n/src/locales/fr/common.json
 +++ b/packages/i18n/src/locales/fr/common.json
 @@ -244,7 +244,7 @@
@@ -196166,7 +196256,7 @@ index a94ab8a..d001607 100644
    "in_app": "Dans l'application",
    "forms": "Formulaires",
    "milestones": "Jalons",
-@@ -867,5 +867,428 @@
+@@ -867,5 +867,431 @@
        "description": "Exportez les éléments de travail vers un fichier JSON.",
        "short_description": "Exporter en json"
      }
@@ -196592,7 +196682,10 @@ index a94ab8a..d001607 100644
 +    "chat_in": "Chat dans {name}",
 +    "write_in": "Écrire dans #{name}",
 +    "write_to": "Écrire à {name}",
-+    "jump_failed": "Impossible d'accéder au message"
++    "jump_failed": "Impossible d'accéder au message",
++    "copy_link": "Copier le lien",
++    "link_copied": "Lien copié",
++    "mark_read": "Marquer comme lu"
    }
  }
 diff --git a/packages/i18n/src/locales/fr/empty-state.json b/packages/i18n/src/locales/fr/empty-state.json
@@ -197348,7 +197441,7 @@ index 2fd8636..c6ce762 100644
        "fixed_schedule": "Jadwal tetap",
        "schedule": {
 diff --git a/packages/i18n/src/locales/id/common.json b/packages/i18n/src/locales/id/common.json
-index 7d26685..f75a55e 100644
+index 7d26685..b6a5c02 100644
 --- a/packages/i18n/src/locales/id/common.json
 +++ b/packages/i18n/src/locales/id/common.json
 @@ -244,7 +244,7 @@
@@ -197369,7 +197462,7 @@ index 7d26685..f75a55e 100644
      "choose_view_logs_from_setup_sh_and_docker_logs_to_be_sure": "Pilih View Logs dari setup.sh dan log Docker untuk memastikan."
    },
    "customize_navigation": "Sesuaikan navigasi",
-@@ -867,5 +867,428 @@
+@@ -867,5 +867,431 @@
        "description": "Ekspor item kerja ke file JSON.",
        "short_description": "Ekspor sebagai json"
      }
@@ -197795,7 +197888,10 @@ index 7d26685..f75a55e 100644
 +    "chat_in": "Obrolan di {name}",
 +    "write_in": "Tulis di #{name}",
 +    "write_to": "Tulis ke {name}",
-+    "jump_failed": "Tidak dapat melompat ke pesan"
++    "jump_failed": "Tidak dapat melompat ke pesan",
++    "copy_link": "Salin tautan",
++    "link_copied": "Tautan disalin",
++    "mark_read": "Tandai sudah dibaca"
    }
  }
 diff --git a/packages/i18n/src/locales/id/empty-state.json b/packages/i18n/src/locales/id/empty-state.json
@@ -198552,7 +198648,7 @@ index f279366..b302f18 100644
        "fixed_schedule": "Pianificazione fissa",
        "schedule": {
 diff --git a/packages/i18n/src/locales/it/common.json b/packages/i18n/src/locales/it/common.json
-index 6fda1b0..5cb9530 100644
+index 6fda1b0..3652a01 100644
 --- a/packages/i18n/src/locales/it/common.json
 +++ b/packages/i18n/src/locales/it/common.json
 @@ -244,7 +244,7 @@
@@ -198582,7 +198678,7 @@ index 6fda1b0..5cb9530 100644
    "in_app": "In-app",
    "forms": "Moduli",
    "milestones": "Milestone",
-@@ -867,5 +867,428 @@
+@@ -867,5 +867,431 @@
        "description": "Esporta elementi di lavoro in un file JSON.",
        "short_description": "Esporta come JSON"
      }
@@ -199008,7 +199104,10 @@ index 6fda1b0..5cb9530 100644
 +    "chat_in": "Chat in {name}",
 +    "write_in": "Scrivi in #{name}",
 +    "write_to": "Scrivi a {name}",
-+    "jump_failed": "Impossibile andare al messaggio"
++    "jump_failed": "Impossibile andare al messaggio",
++    "copy_link": "Copia link",
++    "link_copied": "Link copiato",
++    "mark_read": "Segna come letto"
    }
  }
 diff --git a/packages/i18n/src/locales/it/empty-state.json b/packages/i18n/src/locales/it/empty-state.json
@@ -199706,7 +199805,7 @@ index d3dd8d3..0f5426b 100644
            }
          }
 diff --git a/packages/i18n/src/locales/ja/common.json b/packages/i18n/src/locales/ja/common.json
-index 4899411..052fd5f 100644
+index 4899411..8ed7863 100644
 --- a/packages/i18n/src/locales/ja/common.json
 +++ b/packages/i18n/src/locales/ja/common.json
 @@ -244,7 +244,7 @@
@@ -199718,7 +199817,7 @@ index 4899411..052fd5f 100644
    "please_select_at_least_one_invitation": "少なくとも1つの招待を選択してください。",
    "please_select_at_least_one_invitation_description": "ワークスペースに参加するには少なくとも1つの招待を選択してください。",
    "we_see_that_someone_has_invited_you_to_join_a_workspace": "誰かがあなたをワークスペースに招待しています",
-@@ -867,5 +867,428 @@
+@@ -867,5 +867,431 @@
        "description": "作業項目をJSONファイルにエクスポートします。",
        "short_description": "JSONとしてエクスポート"
      }
@@ -200144,7 +200243,10 @@ index 4899411..052fd5f 100644
 +    "chat_in": "{name}のチャット",
 +    "write_in": "#{name}に書き込む",
 +    "write_to": "{name}に送信",
-+    "jump_failed": "メッセージに移動できませんでした"
++    "jump_failed": "メッセージに移動できませんでした",
++    "copy_link": "リンクをコピー",
++    "link_copied": "リンクをコピーしました",
++    "mark_read": "既読にする"
    }
  }
 diff --git a/packages/i18n/src/locales/ja/integration.json b/packages/i18n/src/locales/ja/integration.json
@@ -200386,7 +200488,7 @@ index 8d77f70..279ae09 100644
        "fixed_schedule": "고정 일정",
        "schedule": {
 diff --git a/packages/i18n/src/locales/ko/common.json b/packages/i18n/src/locales/ko/common.json
-index 73eea6b..f1fca21 100644
+index 73eea6b..82d59ab 100644
 --- a/packages/i18n/src/locales/ko/common.json
 +++ b/packages/i18n/src/locales/ko/common.json
 @@ -244,7 +244,7 @@
@@ -200407,7 +200509,7 @@ index 73eea6b..f1fca21 100644
      "choose_view_logs_from_setup_sh_and_docker_logs_to_be_sure": "확실히 하려면 setup.sh와 Docker 로그에서 View Logs를 선택하세요."
    },
    "customize_navigation": "내비게이션 사용자 지정",
-@@ -867,5 +867,428 @@
+@@ -867,5 +867,431 @@
        "description": "작업 항목을 JSON 파일로 내보냅니다.",
        "short_description": "JSON으로 내보내기"
      }
@@ -200833,7 +200935,10 @@ index 73eea6b..f1fca21 100644
 +    "chat_in": "{name} 채팅",
 +    "write_in": "#{name}에 작성",
 +    "write_to": "{name}에게 작성",
-+    "jump_failed": "메시지로 이동할 수 없습니다"
++    "jump_failed": "메시지로 이동할 수 없습니다",
++    "copy_link": "링크 복사",
++    "link_copied": "링크가 복사되었습니다",
++    "mark_read": "읽음으로 표시"
    }
  }
 diff --git a/packages/i18n/src/locales/ko/empty-state.json b/packages/i18n/src/locales/ko/empty-state.json
@@ -201228,7 +201333,7 @@ index 0632d1f..6396693 100644
        "fixed_schedule": "Stały harmonogram",
        "schedule": {
 diff --git a/packages/i18n/src/locales/pl/common.json b/packages/i18n/src/locales/pl/common.json
-index 4c4850c..98b9168 100644
+index 4c4850c..ec617ce 100644
 --- a/packages/i18n/src/locales/pl/common.json
 +++ b/packages/i18n/src/locales/pl/common.json
 @@ -244,7 +244,7 @@
@@ -201249,7 +201354,7 @@ index 4c4850c..98b9168 100644
      "choose_view_logs_from_setup_sh_and_docker_logs_to_be_sure": "Wybierz View Logs z setup.sh i logów Docker, aby mieć pewność."
    },
    "customize_navigation": "Dostosuj nawigację",
-@@ -867,5 +867,428 @@
+@@ -867,5 +867,431 @@
        "description": "Eksportuj elementy do pliku JSON.",
        "short_description": "Eksportuj jako JSON"
      }
@@ -201675,7 +201780,10 @@ index 4c4850c..98b9168 100644
 +    "chat_in": "Czat w {name}",
 +    "write_in": "Napisz na #{name}",
 +    "write_to": "Napisz do {name}",
-+    "jump_failed": "Nie można przejść do wiadomości"
++    "jump_failed": "Nie można przejść do wiadomości",
++    "copy_link": "Kopiuj link",
++    "link_copied": "Link skopiowany",
++    "mark_read": "Oznacz jako przeczytane"
    }
  }
 diff --git a/packages/i18n/src/locales/pl/empty-state.json b/packages/i18n/src/locales/pl/empty-state.json
@@ -202377,7 +202485,7 @@ index 3eab73f..c2c7c08 100644
        "fixed_schedule": "Agendamento fixo",
        "schedule": {
 diff --git a/packages/i18n/src/locales/pt-BR/common.json b/packages/i18n/src/locales/pt-BR/common.json
-index 565e85d..22397a2 100644
+index 565e85d..f79a4a8 100644
 --- a/packages/i18n/src/locales/pt-BR/common.json
 +++ b/packages/i18n/src/locales/pt-BR/common.json
 @@ -244,7 +244,7 @@
@@ -202398,7 +202506,7 @@ index 565e85d..22397a2 100644
      "choose_view_logs_from_setup_sh_and_docker_logs_to_be_sure": "Escolha View Logs do setup.sh e logs do Docker para ter certeza."
    },
    "customize_navigation": "Personalizar navegação",
-@@ -867,5 +867,428 @@
+@@ -867,5 +867,431 @@
        "description": "Exporte itens de trabalho para um arquivo JSON.",
        "short_description": "Exportar como JSON"
      }
@@ -202824,7 +202932,10 @@ index 565e85d..22397a2 100644
 +    "chat_in": "Chat em {name}",
 +    "write_in": "Escreva em #{name}",
 +    "write_to": "Escreva para {name}",
-+    "jump_failed": "Não foi possível ir à mensagem"
++    "jump_failed": "Não foi possível ir à mensagem",
++    "copy_link": "Copiar link",
++    "link_copied": "Link copiado",
++    "mark_read": "Marcar como lido"
    }
  }
 diff --git a/packages/i18n/src/locales/pt-BR/empty-state.json b/packages/i18n/src/locales/pt-BR/empty-state.json
@@ -203576,7 +203687,7 @@ index 509bbb1..0c56d9c 100644
        "fixed_schedule": "Program fix",
        "schedule": {
 diff --git a/packages/i18n/src/locales/ro/common.json b/packages/i18n/src/locales/ro/common.json
-index e2b44ce..340c3fa 100644
+index e2b44ce..d2e48d9 100644
 --- a/packages/i18n/src/locales/ro/common.json
 +++ b/packages/i18n/src/locales/ro/common.json
 @@ -244,7 +244,7 @@
@@ -203606,7 +203717,7 @@ index e2b44ce..340c3fa 100644
    "in_app": "În-app",
    "forms": "Formulare",
    "milestones": "Jaloane",
-@@ -867,5 +867,428 @@
+@@ -867,5 +867,431 @@
        "description": "Exportă activitățile într-un fișier JSON.",
        "short_description": "Exportă ca JSON"
      }
@@ -204032,7 +204143,10 @@ index e2b44ce..340c3fa 100644
 +    "chat_in": "Chat în {name}",
 +    "write_in": "Scrie în #{name}",
 +    "write_to": "Scrie către {name}",
-+    "jump_failed": "Nu s-a putut sări la mesaj"
++    "jump_failed": "Nu s-a putut sări la mesaj",
++    "copy_link": "Copiază linkul",
++    "link_copied": "Link copiat",
++    "mark_read": "Marchează ca citit"
    }
  }
 diff --git a/packages/i18n/src/locales/ro/empty-state.json b/packages/i18n/src/locales/ro/empty-state.json
@@ -204782,7 +204896,7 @@ index a97e9e6..7ce3fde 100644
        "fixed_schedule": "Фиксированное расписание",
        "schedule": {
 diff --git a/packages/i18n/src/locales/ru/common.json b/packages/i18n/src/locales/ru/common.json
-index c2881e5..5ce1dd6 100644
+index c2881e5..62fdd6c 100644
 --- a/packages/i18n/src/locales/ru/common.json
 +++ b/packages/i18n/src/locales/ru/common.json
 @@ -244,7 +244,7 @@
@@ -204803,7 +204917,7 @@ index c2881e5..5ce1dd6 100644
      "choose_view_logs_from_setup_sh_and_docker_logs_to_be_sure": "Выберите View Logs из setup.sh и логов Docker, чтобы убедиться."
    },
    "customize_navigation": "Настроить навигацию",
-@@ -867,5 +867,428 @@
+@@ -867,5 +867,431 @@
        "description": "Экспорт рабочих элементов в JSON-файл.",
        "short_description": "Экспорт в json"
      }
@@ -205229,7 +205343,10 @@ index c2881e5..5ce1dd6 100644
 +    "chat_in": "Чат в {name}",
 +    "write_in": "Написать в #{name}",
 +    "write_to": "Написать {name}",
-+    "jump_failed": "Не удалось перейти к сообщению"
++    "jump_failed": "Не удалось перейти к сообщению",
++    "copy_link": "Скопировать ссылку",
++    "link_copied": "Ссылка скопирована",
++    "mark_read": "Отметить прочитанным"
    }
  }
 diff --git a/packages/i18n/src/locales/ru/empty-state.json b/packages/i18n/src/locales/ru/empty-state.json
@@ -205968,7 +206085,7 @@ index 3e7dbc5..27f375f 100644
        "fixed_schedule": "Pevný rozvrh",
        "schedule": {
 diff --git a/packages/i18n/src/locales/sk/common.json b/packages/i18n/src/locales/sk/common.json
-index 4fc339c..c20984a 100644
+index 4fc339c..f392b67 100644
 --- a/packages/i18n/src/locales/sk/common.json
 +++ b/packages/i18n/src/locales/sk/common.json
 @@ -244,7 +244,7 @@
@@ -205989,7 +206106,7 @@ index 4fc339c..c20984a 100644
      "choose_view_logs_from_setup_sh_and_docker_logs_to_be_sure": "Vyberte View Logs z setup.sh a Docker logov, aby ste si boli istí."
    },
    "customize_navigation": "Prispôsobiť navigáciu",
-@@ -867,5 +867,428 @@
+@@ -867,5 +867,431 @@
        "description": "Exportujte položky do JSON.",
        "short_description": "Exportovať ako JSON"
      }
@@ -206415,7 +206532,10 @@ index 4fc339c..c20984a 100644
 +    "chat_in": "Chat v {name}",
 +    "write_in": "Píš do #{name}",
 +    "write_to": "Napíš {name}",
-+    "jump_failed": "Nedá sa prejsť na správu"
++    "jump_failed": "Nedá sa prejsť na správu",
++    "copy_link": "Kopírovať odkaz",
++    "link_copied": "Odkaz skopírovaný",
++    "mark_read": "Označiť ako prečítané"
    }
  }
 diff --git a/packages/i18n/src/locales/sk/empty-state.json b/packages/i18n/src/locales/sk/empty-state.json
@@ -207106,7 +207226,7 @@ index 5d44f94..bd09842 100644
        "fixed_schedule": "Sabit zamanlama",
        "schedule": {
 diff --git a/packages/i18n/src/locales/tr-TR/common.json b/packages/i18n/src/locales/tr-TR/common.json
-index 74bd5cb..1b88139 100644
+index 74bd5cb..6d0d355 100644
 --- a/packages/i18n/src/locales/tr-TR/common.json
 +++ b/packages/i18n/src/locales/tr-TR/common.json
 @@ -244,7 +244,7 @@
@@ -207136,7 +207256,7 @@ index 74bd5cb..1b88139 100644
    "in_app": "Uygulama İçi",
    "forms": "Formlar",
    "milestones": "Kilometre taşları",
-@@ -867,5 +867,428 @@
+@@ -867,5 +867,431 @@
        "description": "İş öğelerini JSON dosyasına aktarın.",
        "short_description": "JSON olarak aktar"
      }
@@ -207562,7 +207682,10 @@ index 74bd5cb..1b88139 100644
 +    "chat_in": "{name} sohbeti",
 +    "write_in": "#{name} kanalına yaz",
 +    "write_to": "{name} kişisine yaz",
-+    "jump_failed": "Mesaja gidilemedi"
++    "jump_failed": "Mesaja gidilemedi",
++    "copy_link": "Bağlantıyı kopyala",
++    "link_copied": "Bağlantı kopyalandı",
++    "mark_read": "Okundu olarak işaretle"
    }
  }
 diff --git a/packages/i18n/src/locales/tr-TR/empty-state.json b/packages/i18n/src/locales/tr-TR/empty-state.json
@@ -208285,7 +208408,7 @@ index 25a1f98..64286c8 100644
        "fixed_schedule": "Фіксований розклад",
        "schedule": {
 diff --git a/packages/i18n/src/locales/ua/common.json b/packages/i18n/src/locales/ua/common.json
-index 89bd906..e3825f2 100644
+index 89bd906..284beff 100644
 --- a/packages/i18n/src/locales/ua/common.json
 +++ b/packages/i18n/src/locales/ua/common.json
 @@ -244,7 +244,7 @@
@@ -208306,7 +208429,7 @@ index 89bd906..e3825f2 100644
      "choose_view_logs_from_setup_sh_and_docker_logs_to_be_sure": "Виберіть View Logs з setup.sh та логів Docker, щоб переконатися."
    },
    "customize_navigation": "Налаштувати навігацію",
-@@ -867,5 +867,428 @@
+@@ -867,5 +867,431 @@
        "description": "Експортуйте одиниці у формат JSON.",
        "short_description": "Експортувати як JSON"
      }
@@ -208732,7 +208855,10 @@ index 89bd906..e3825f2 100644
 +    "chat_in": "Чат у {name}",
 +    "write_in": "Написати в #{name}",
 +    "write_to": "Написати {name}",
-+    "jump_failed": "Не вдалося перейти до повідомлення"
++    "jump_failed": "Не вдалося перейти до повідомлення",
++    "copy_link": "Скопіювати посилання",
++    "link_copied": "Посилання скопійовано",
++    "mark_read": "Позначити прочитаним"
    }
  }
 diff --git a/packages/i18n/src/locales/ua/empty-state.json b/packages/i18n/src/locales/ua/empty-state.json
@@ -209286,7 +209412,7 @@ index 8dec0fb..fd3adb2 100644
        "fixed_schedule": "Lịch trình cố định",
        "schedule": {
 diff --git a/packages/i18n/src/locales/vi-VN/common.json b/packages/i18n/src/locales/vi-VN/common.json
-index f9aae43..55876e7 100644
+index f9aae43..cf66ec2 100644
 --- a/packages/i18n/src/locales/vi-VN/common.json
 +++ b/packages/i18n/src/locales/vi-VN/common.json
 @@ -244,7 +244,7 @@
@@ -209316,7 +209442,7 @@ index f9aae43..55876e7 100644
    "in_app": "Trong ứng dụng",
    "forms": "Biểu mẫu",
    "milestones": "Cột mốc",
-@@ -867,5 +867,428 @@
+@@ -867,5 +867,431 @@
        "description": "Xuất mục công việc thành tệp JSON.",
        "short_description": "Xuất sang JSON"
      }
@@ -209742,7 +209868,10 @@ index f9aae43..55876e7 100644
 +    "chat_in": "Trò chuyện trong {name}",
 +    "write_in": "Viết trong #{name}",
 +    "write_to": "Viết cho {name}",
-+    "jump_failed": "Không thể chuyển đến tin nhắn"
++    "jump_failed": "Không thể chuyển đến tin nhắn",
++    "copy_link": "Sao chép liên kết",
++    "link_copied": "Đã sao chép liên kết",
++    "mark_read": "Đánh dấu đã đọc"
    }
  }
 diff --git a/packages/i18n/src/locales/vi-VN/empty-state.json b/packages/i18n/src/locales/vi-VN/empty-state.json
@@ -210498,7 +210627,7 @@ index 3f057bd..9322b6f 100644
        "fixed_schedule": "固定计划",
        "schedule": {
 diff --git a/packages/i18n/src/locales/zh-CN/common.json b/packages/i18n/src/locales/zh-CN/common.json
-index dd67d92..4b2ffc9 100644
+index dd67d92..83c50ba 100644
 --- a/packages/i18n/src/locales/zh-CN/common.json
 +++ b/packages/i18n/src/locales/zh-CN/common.json
 @@ -820,7 +820,7 @@
@@ -210510,7 +210639,7 @@ index dd67d92..4b2ffc9 100644
      "choose_view_logs_from_setup_sh_and_docker_logs_to_be_sure": "请选择“查看日志”来查看 setup.sh 和 Docker 日志，以确认问题。"
    },
    "customize_navigation": "自定义导航",
-@@ -867,5 +867,428 @@
+@@ -867,5 +867,431 @@
        "description": "将工作项导出为 JSON 文件。",
        "short_description": "导出为 JSON"
      }
@@ -210936,7 +211065,10 @@ index dd67d92..4b2ffc9 100644
 +    "chat_in": "{name} 聊天",
 +    "write_in": "在 #{name} 中输入",
 +    "write_to": "发给 {name}",
-+    "jump_failed": "无法跳转到该消息"
++    "jump_failed": "无法跳转到该消息",
++    "copy_link": "复制链接",
++    "link_copied": "链接已复制",
++    "mark_read": "标为已读"
    }
  }
 diff --git a/packages/i18n/src/locales/zh-CN/empty-state.json b/packages/i18n/src/locales/zh-CN/empty-state.json
@@ -211543,7 +211675,7 @@ index 27b9a4b..c71e752 100644
        "fixed_schedule": "固定排程",
        "schedule": {
 diff --git a/packages/i18n/src/locales/zh-TW/common.json b/packages/i18n/src/locales/zh-TW/common.json
-index 834a2d9..65bb5e1 100644
+index 834a2d9..05f7dfe 100644
 --- a/packages/i18n/src/locales/zh-TW/common.json
 +++ b/packages/i18n/src/locales/zh-TW/common.json
 @@ -244,7 +244,7 @@
@@ -211564,7 +211696,7 @@ index 834a2d9..65bb5e1 100644
      "choose_view_logs_from_setup_sh_and_docker_logs_to_be_sure": "從 setup.sh 和 Docker 日誌中選擇 View Logs 來確認。"
    },
    "customize_navigation": "自訂導覽",
-@@ -867,5 +867,428 @@
+@@ -867,5 +867,431 @@
        "description": "將工作事項匯出為 JSON 檔案。",
        "short_description": "匯出為 JSON"
      }
@@ -211990,7 +212122,10 @@ index 834a2d9..65bb5e1 100644
 +    "chat_in": "{name} 聊天",
 +    "write_in": "在 #{name} 中輸入",
 +    "write_to": "傳給 {name}",
-+    "jump_failed": "無法跳至該訊息"
++    "jump_failed": "無法跳至該訊息",
++    "copy_link": "複製連結",
++    "link_copied": "連結已複製",
++    "mark_read": "標為已讀"
    }
  }
 diff --git a/packages/i18n/src/locales/zh-TW/empty-state.json b/packages/i18n/src/locales/zh-TW/empty-state.json

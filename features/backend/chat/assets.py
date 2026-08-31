@@ -59,6 +59,21 @@ class ChatAssetsEndpoint(BaseAPIView):
             )
 
         workspace = Workspace.objects.get(slug=slug)
+
+        # Opportunistic cleanup: this user's CHAT uploads that never finished
+        # (browser closed mid-upload) are dead weight — sweep the >24h ones
+        # while we are here, instead of configuring a beat schedule.
+        from datetime import timedelta
+
+        from django.utils import timezone
+
+        FileAsset.objects.filter(
+            entity_type=CHAT_ENTITY_TYPE,
+            created_by=request.user,
+            is_uploaded=False,
+            created_at__lt=timezone.now() - timedelta(hours=24),
+        ).delete()
+
         asset_key = f"{workspace.id}/{uuid.uuid4().hex}-{name}"
         asset = FileAsset.objects.create(
             attributes={

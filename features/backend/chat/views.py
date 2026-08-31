@@ -452,6 +452,30 @@ class ChatMessagesEndpoint(BaseAPIView):
                 status=status.HTTP_200_OK,
             )
 
+        after_raw = request.GET.get("after")
+        if after_raw:
+            # History mode paginating DOWN toward the present: the page of 50
+            # roots strictly newer than the cursor, oldest first. has_more
+            # False means the client reached the present and can leave
+            # history mode.
+            cursor = _parse_cursor(after_raw)
+            if cursor is None:
+                return _bad_request("Invalid after cursor.")
+            ts, row_id = cursor
+            qs_roots = _annotate_thread_meta(qs.filter(parent__isnull=True)).filter(
+                Q(created_at__gt=ts) | Q(created_at=ts, id__gt=row_id)
+            )
+            rows = list(qs_roots.order_by("created_at", "id")[: MESSAGES_PAGE_SIZE + 1])
+            has_more = len(rows) > MESSAGES_PAGE_SIZE
+            rows = rows[:MESSAGES_PAGE_SIZE]
+            return Response(
+                {
+                    "results": MessageSerializer(rows, many=True).data,
+                    "has_more": has_more,
+                },
+                status=status.HTTP_200_OK,
+            )
+
         parent_id = request.GET.get("parent_id")
         if parent_id:
             rows = qs.filter(parent_id=parent_id).order_by("created_at", "id")

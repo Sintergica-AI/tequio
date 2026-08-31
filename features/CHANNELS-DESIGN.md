@@ -84,6 +84,21 @@ chat.0002 (ambas generadas dentro de la imagen, dependencia fijada a db.0122).
 - Fuera de esta ronda: GIFs/link previews, paginación bidireccional,
   limpieza periódica de assets huérfanos (is_uploaded=false).
 
+## Ronda 5 (31 Ago 2026)
+
+- **Enlaces a mensajes**: "Copiar enlace" en el menú del mensaje →
+  `…/channels/<id>?message=<mid>`; el deep-link (y el card de notificación de
+  mención, que ahora lo incluye) aterriza con jumpToMessage en el mensaje
+  exacto.
+- **Paginación bidireccional en modo historial**: `?after=<cursor>` devuelve
+  las 50 raíces siguientes hacia el presente; al agotar (`has_more: false`) el
+  cliente sale solo del modo historial — caminar página a página no puede
+  dejar huecos.
+- **Menú de canal ampliado**: "Marcar como leído" (si hay no-leídos) y "Salir
+  del canal" (privados, no #general).
+- **Limpieza oportunista de adjuntos huérfanos**: al presignar, se barren los
+  CHAT del propio usuario con is_uploaded=false y >24h — sin beat schedule.
+
 ## Ronda 4 (31 Ago 2026) — UI inspirada en ClickUp + fix crítico
 
 - **FIX CRÍTICO (migración chat.0003)**: todos los DMs tienen `name=""` y

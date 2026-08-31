@@ -155,6 +155,24 @@ try:
     r = c.get(f"{base}/channels/{priv['id']}/messages/?anchor=00000000-0000-0000-0000-000000000000")
     check("ancla inexistente → 404", r.status_code == 404, f"HTTP {r.status_code}")
 
+    # paginación hacia el presente (?after=): desde el ancla, el resto de raíces
+    from urllib.parse import quote as _q
+
+    from plane.chat.models import ChatMessage as _CM
+
+    anchor_msg = _CM.objects.get(pk=mid)
+    r = c.get(
+        f"{base}/channels/{priv['id']}/messages/?after={_q(f'{anchor_msg.created_at.isoformat()},{mid}')}"
+    )
+    check(
+        "after devuelve solo raíces más nuevas, asc",
+        r.status_code == 200
+        and all(m["created_at"] > anchor_msg.created_at.isoformat() for m in r.json()["results"])
+        and r.json()["has_more"] is False,
+    )
+    r = c.get(f"{base}/channels/{priv['id']}/messages/?after=basura")
+    check("after inválido → 400", r.status_code == 400, f"HTTP {r.status_code}")
+
     print("\nBÚSQUEDA")
     r = c.get(f"{base}/search/?q=fijable único vf12")
     check("busca en visibles", r.status_code == 200 and any(x["id"] == mid for x in r.json()))
