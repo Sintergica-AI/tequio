@@ -482,6 +482,31 @@ Tequio.
 - `AssistantHeaderActions` gana `showHistory` / `showNewChat`: en la página se
   apagan las dos, porque el rail ya las ofrece. En el panel siguen encendidas.
 
+## 8e. El botón "+": elegir sobre qué trabajar (31 Ago 2026)
+
+Hasta aquí el asistente sólo sabía DÓNDE estaba parado el usuario (contexto de
+navegación, deducido de la ruta). El "+" del composer le deja DECIRLO:
+
+- **Proyecto** (lista de los suyos), **Documento** (buscador sobre la wiki y
+  las páginas de proyecto) y **Finanzas** (sólo si su rol puede obtener
+  respuesta — el mismo criterio que las sugerencias).
+- El foco vive en el store (`AssistantStore.focus`) y viaja en el `context` de
+  cada mensaje: `scope` + `project_id`/`page_id`. **No es decoración**:
+  `build_system_prompt` lo convierte en instrucción — con un documento
+  adjunto obliga a leerlo con `get_page` por su id antes de responder; con
+  finanzas manda empezar por `finance_overview`; con proyecto acota ahí.
+- **El foco explícito gana sobre la navegación.** Si estás viendo el proyecto
+  A y adjuntas el B, manda el B: uno es una orden, el otro una suposición.
+- `resetActive()` limpia el foco: una conversación nueva no debe heredar el
+  documento adjunto de la anterior.
+- **Endpoint nuevo** `GET /assistant/pages/?q=` (mín. 2 caracteres) para el
+  buscador. Reutiliza `tools.search_pages`, así que el picker ofrece
+  exactamente lo que el modelo podría leer — mismo alcance y misma privacidad,
+  sin una segunda consulta que pudiera divergir. Búsqueda con debounce de
+  250 ms en el cliente.
+- Verificado en prod: endpoint 200 con resultados reales, 401 anónimo, `q`
+  corta devuelve vacío sin consultar, y el prompt refleja documento y ámbito.
+
 ## 9. Riesgos y decisiones abiertas
 
 | Riesgo | Mitigación |

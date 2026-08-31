@@ -214,6 +214,34 @@ def build_system_prompt(ctx, conversation, can_write=False):
         )
     if context.get("view"):
         lines.append(f"- Vista actual: {context['view']}.")
+
+    # Foco elegido a mano con el botón "+" del composer. A diferencia del
+    # contexto de navegación (que solo dice dónde está parado el usuario),
+    # esto es una instrucción explícita suya sobre qué quiere trabajar.
+    if context.get("page_id"):
+        page_name = context.get("page_name") or "el documento adjunto"
+        lines.append(
+            f"- El usuario ADJUNTÓ el documento «{page_name}» (id {context['page_id']}). "
+            f"Léelo con get_page usando ese id ANTES de responder, y si dice «este documento» "
+            f"o «el documento», se refiere a ese."
+        )
+    scope = context.get("scope")
+    if scope == "finance":
+        lines.append(
+            "- El usuario quiere trabajar sobre FINANZAS. Empieza por finance_overview "
+            "(o finance_collections si pregunta por cobros) antes de responder."
+        )
+    elif scope == "wiki":
+        lines.append(
+            "- El usuario quiere trabajar sobre DOCUMENTOS. Localiza lo que pida con "
+            "search_pages y léelo con get_page antes de responder."
+        )
+    elif scope == "project" and context.get("project_name"):
+        lines.append(
+            f"- El usuario ELIGIÓ trabajar sobre el proyecto «{context['project_name']}». "
+            f"Acota ahí tus consultas salvo que pida explícitamente otra cosa."
+        )
+
     navigation = "\n".join(lines) if lines else "- Sin contexto de navegación."
 
     finance_policy = {

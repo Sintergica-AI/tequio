@@ -47,6 +47,34 @@ def _build_context(request, slug):
     )
 
 
+class AssistantPagesEndpoint(BaseAPIView):
+    """Page picker for the composer's "+" menu.
+
+    Reuses the assistant's own search tool instead of a new query, so what the
+    picker offers is exactly what the model would be able to read: same scope,
+    same privacy rules (no one else's private pages).
+    """
+
+    @allow_assistant
+    def get(self, request, slug):
+        from plane.assistant import tools
+
+        ctx = _build_context(request, slug)
+        query = (request.query_params.get("q") or "").strip()
+        if len(query) < 2:
+            return Response({"pages": []}, status=status.HTTP_200_OK)
+        result = tools.search_pages(ctx, query=query, limit=15)
+        return Response(
+            {
+                "pages": [
+                    {"id": p["id"], "name": p["name"], "scope": p["scope"]}
+                    for p in result.get("pages", [])
+                ]
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
 class AssistantConfigEndpoint(BaseAPIView):
     """What the panel needs to know before rendering anything."""
 
