@@ -148,6 +148,43 @@ chat.0002 (ambas generadas dentro de la imagen, dependencia fijada a db.0122).
   de texto: sin él, el snippet de búsqueda y el cuerpo de la notificación
   salen vacíos.
 
+## Patrón: editar un mensaje borra sus adjuntos (tres causas, un síntoma)
+
+**La regla que generaliza, y la única que hay que recordar:** `message_html` es
+el documento ENTERO. Cualquier cliente que, al editar, envíe sólo lo que el
+usuario escribió BORRA los adjuntos — aunque los ficheros sigan existiendo en
+el almacenamiento. Editar es reescribir el documento completo, no parchear el
+texto.
+
+El 31 Ago 2026 el mismo síntoma apareció por tres caminos distintos, en tres
+clientes distintos, el mismo día. Quien lo vuelva a ver diagnosticará uno solo
+si no sabe que son tres:
+
+1. **Backend** — la validación de edición usaba `strip_tags`, que deja vacío un
+   `<image-component>`, y rechazaba con 400 el mensaje cuyo único contenido era
+   un adjunto. Corregido con `_has_content()` (ver ronda 7).
+2. **Editor web** — el editor de edición se monta con
+   `disabledExtensions={["image"]}`, así que `CustomImageExtension` no se
+   registra, el esquema de ProseMirror no conoce el nodo `image-component` y lo
+   DESCARTA al parsear: el HTML que sale hacia el guardado ya viene sin la
+   imagen. Corregido extrayendo los nodos antes de editar y reinyectándolos
+   verbatim al guardar (`splitMessageForEditing` en `chat/attachments.ts`).
+3. **App móvil** — la pantalla de edición enviaba `<p>${texto}</p>` como
+   `message_html` completo. Mismo efecto, misma corrección: reinyectar verbatim
+   (tequio-mobile d148b95).
+
+Nótese que las tres son la MISMA regla vista desde tres sitios: dos de ellas
+(2 y 3) ni siquiera son bugs de adjuntos, son bugs de "confundí el texto con el
+documento".
+
+**Dato del que dependen las correcciones 2 y 3**: la etiqueta viene CERRADA
+(`…></image-component>`), nunca autocerrada, tanto en lo que emite el editor
+web (su `renderHTML` devuelve `["image-component", attrs]`, que TipTap serializa
+con cierre) como en lo que escribe el móvil. Verificado sobre markup real de
+producción, no deducido — y hace falta que siga siendo así, porque extraer el
+nodo por `outerHTML` con una etiqueta sin cerrar se tragaría el resto del
+mensaje. Si algún cliente cambia la forma del nodo, tiene que anunciarlo.
+
 ## Ronda 4 (31 Ago 2026) — UI inspirada en ClickUp + fix crítico
 
 - **FIX CRÍTICO (migración chat.0003)**: todos los DMs tienen `name=""` y
