@@ -463,6 +463,25 @@ asistente puede leer la wiki o las finanzas.
   (`chips[].label` vs `chips[].prompt`): lo que se lee cabe, lo que se manda
   está bien formado.
 
+**Tercera pasada — la pantalla deja de parecer un widget encima:**
+
+Diagnóstico de Axel: "pareciera una app superpuesta, no parte del sistema".
+Y era exacto: un chat centrado en un lienzo vacío, con el historial escondido
+tras un icono de reloj, no se parece ni a la referencia (donde el asistente
+ES la pantalla, con su lista de conversaciones) ni a los módulos hermanos de
+Tequio.
+
+- **Rail propio de conversaciones** (`assistant/conversation-list.tsx`):
+  "Nueva conversación", buscador y lista agrupada por Hoy / Ayer / Últimos 7
+  días / Anteriores, con borrado al pasar el ratón. Copia deliberadamente las
+  medidas de `ChatChannelList` — `w-60`, `border-r border-subtle`,
+  `bg-surface-1`, cabeceras de grupo en `text-[11px] uppercase` — para que
+  Asistente y Canales se sientan el mismo sistema y no dos apps distintas.
+- La página pasa a dos columnas (rail + hilo) ocupando todo el ancho; el hilo
+  conserva `max-w-3xl` centrado para que la línea de lectura no se estire.
+- `AssistantHeaderActions` gana `showHistory` / `showNewChat`: en la página se
+  apagan las dos, porque el rail ya las ofrece. En el panel siguen encendidas.
+
 ## 9. Riesgos y decisiones abiertas
 
 | Riesgo | Mitigación |

@@ -64721,10 +64721,10 @@ index d9c76f8..ec090ca 100644
  
 diff --git a/apps/web/app/(all)/[workspaceSlug]/(projects)/assistant/header.tsx b/apps/web/app/(all)/[workspaceSlug]/(projects)/assistant/header.tsx
 new file mode 100644
-index 0000000..1c4275e
+index 0000000..e8a43d8
 --- /dev/null
 +++ b/apps/web/app/(all)/[workspaceSlug]/(projects)/assistant/header.tsx
-@@ -0,0 +1,70 @@
+@@ -0,0 +1,73 @@
 +/**
 + * Sintergica CE extension: assistant page header.
 + *
@@ -64789,6 +64789,9 @@ index 0000000..1c4275e
 +            onOpenConversation={(id) => void assistant.openConversation(slug, id)}
 +            onDeleteConversation={(id) => void assistant.deleteConversation(slug, id)}
 +            onModelChange={(model) => void assistant.setModel(slug, model)}
++            // El rail de la izquierda ya trae ambas cosas.
++            showHistory={false}
++            showNewChat={false}
 +          />
 +        </div>
 +      </Header.RightItem>
@@ -64824,20 +64827,25 @@ index 0000000..965ced4
 +}
 diff --git a/apps/web/app/(all)/[workspaceSlug]/(projects)/assistant/page.tsx b/apps/web/app/(all)/[workspaceSlug]/(projects)/assistant/page.tsx
 new file mode 100644
-index 0000000..e6cb24a
+index 0000000..d7360bf
 --- /dev/null
 +++ b/apps/web/app/(all)/[workspaceSlug]/(projects)/assistant/page.tsx
-@@ -0,0 +1,41 @@
+@@ -0,0 +1,63 @@
 +/**
-+ * Sintergica CE extension: full-page assistant, for long conversations that
-+ * do not fit comfortably in the docked panel.
++ * Sintergica CE extension: full-page assistant.
++ *
++ * Owns the screen like the other modules do: conversation rail on the left
++ * (same width and surface as Canales'), thread on the right. The docked panel
++ * remains the compact one-column version for quick questions.
 + * Derived from Plane CE code (AGPL-3.0-only).
 + */
 +
 +import { useEffect } from "react";
 +import { observer } from "mobx-react";
 +import { useParams, useSearchParams } from "next/navigation";
++import useSWR from "swr";
 +// components
++import { AssistantConversationList } from "@/components/assistant/conversation-list";
 +import { AssistantRoot } from "@/components/assistant/root";
 +import { PageHead } from "@/components/core/page-title";
 +// hooks
@@ -64849,6 +64857,11 @@ index 0000000..e6cb24a
 +  const assistant = useAssistant();
 +  const slug = workspaceSlug?.toString();
 +
++  // Same SWR key as the header and the root: one request between them all.
++  useSWR(slug ? `ASSISTANT_CONVERSATIONS_${slug}` : null, () =>
++    slug ? assistant.fetchConversations(slug) : null
++  );
++
 +  // "Vista completa" from the docked panel hands over its conversation here:
 +  // closing the panel resets the active thread, so it travels by id in the URL.
 +  const conversationId = searchParams.get("conversation");
@@ -64858,11 +64871,23 @@ index 0000000..e6cb24a
 +
 +  if (!slug) return null;
 +
++  const conversations = assistant.conversationsByWorkspace[slug] ?? [];
++
 +  return (
 +    <>
 +      <PageHead title="Asistente" />
-+      <div className="mx-auto flex h-full w-full max-w-4xl flex-col overflow-hidden">
-+        <AssistantRoot workspaceSlug={slug} variant="page" />
++      <div className="flex h-full w-full overflow-hidden">
++        <AssistantConversationList
++          conversations={conversations}
++          activeConversationId={assistant.activeConversationId}
++          isStreaming={assistant.isStreaming}
++          onNewChat={() => assistant.resetActive()}
++          onOpenConversation={(id) => void assistant.openConversation(slug, id)}
++          onDeleteConversation={(id) => void assistant.deleteConversation(slug, id)}
++        />
++        <div className="min-w-0 flex-1">
++          <AssistantRoot workspaceSlug={slug} variant="page" />
++        </div>
 +      </div>
 +    </>
 +  );
@@ -111116,6 +111141,162 @@ index 0000000..6efe5cd
 +    </div>
 +  );
 +}
+diff --git a/apps/web/core/components/assistant/conversation-list.tsx b/apps/web/core/components/assistant/conversation-list.tsx
+new file mode 100644
+index 0000000..7c992aa
+--- /dev/null
++++ b/apps/web/core/components/assistant/conversation-list.tsx
+@@ -0,0 +1,150 @@
++/**
++ * Sintergica CE extension: the assistant's own conversation rail.
++ *
++ * The full page used to be a chat box floating in the middle of an empty
++ * canvas, with the history hidden behind a clock icon — it read as a widget
++ * dropped on top of Tequio rather than a section of it. Every other module
++ * here (Canales) owns its screen with a list on the left, so the assistant
++ * does the same: same width, same border, same surface as ChatChannelList.
++ *
++ * Derived from Plane CE code (AGPL-3.0-only).
++ */
++
++import { useMemo, useState } from "react";
++import { observer } from "mobx-react";
++import { PenSquare, Search, Trash2 } from "lucide-react";
++// plane imports
++import { cn } from "@plane/utils";
++// services
++import type { TAssistantConversation } from "@/services/assistant.service";
++
++type TProps = {
++  conversations: TAssistantConversation[];
++  activeConversationId: string | null;
++  isStreaming: boolean;
++  onNewChat: () => void;
++  onOpenConversation: (id: string) => void;
++  onDeleteConversation: (id: string) => void;
++};
++
++/** Today / Yesterday / older, so a long list stays scannable. */
++function bucketOf(iso: string): string {
++  const date = new Date(iso);
++  if (Number.isNaN(date.getTime())) return "Anteriores";
++  const now = new Date();
++  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
++  const time = date.getTime();
++  if (time >= startOfToday) return "Hoy";
++  if (time >= startOfToday - 86400000) return "Ayer";
++  if (time >= startOfToday - 7 * 86400000) return "Últimos 7 días";
++  return "Anteriores";
++}
++
++const BUCKET_ORDER = ["Hoy", "Ayer", "Últimos 7 días", "Anteriores"];
++
++export const AssistantConversationList = observer(function AssistantConversationList(props: TProps) {
++  const {
++    conversations,
++    activeConversationId,
++    isStreaming,
++    onNewChat,
++    onOpenConversation,
++    onDeleteConversation,
++  } = props;
++  const [query, setQuery] = useState("");
++
++  const grouped = useMemo(() => {
++    const needle = query.trim().toLowerCase();
++    const matching = needle
++      ? conversations.filter((c) => (c.title || "").toLowerCase().includes(needle))
++      : conversations;
++    const buckets = new Map<string, TAssistantConversation[]>();
++    for (const conversation of matching) {
++      const key = bucketOf(conversation.updated_at ?? conversation.created_at);
++      const list = buckets.get(key) ?? [];
++      list.push(conversation);
++      buckets.set(key, list);
++    }
++    return BUCKET_ORDER.filter((k) => buckets.get(k)?.length).map((k) => ({
++      label: k,
++      items: buckets.get(k) ?? [],
++    }));
++  }, [conversations, query]);
++
++  return (
++    <div className="flex h-full w-60 shrink-0 flex-col border-r border-subtle bg-surface-1">
++      <div className="p-2">
++        <button
++          type="button"
++          onClick={onNewChat}
++          disabled={isStreaming}
++          className={cn(
++            "flex w-full items-center gap-2 rounded-lg border border-subtle px-3 py-2 text-13 font-medium",
++            "text-primary transition-colors hover:bg-layer-1 disabled:opacity-50"
++          )}
++        >
++          <PenSquare className="size-4 text-tertiary" />
++          Nueva conversación
++        </button>
++      </div>
++
++      <div className="px-2 pb-2">
++        <div className="flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-13 focus-within:bg-layer-1 hover:bg-layer-1">
++          <Search className="size-3.5 shrink-0 text-tertiary" />
++          <input
++            value={query}
++            onChange={(e) => setQuery(e.target.value)}
++            placeholder="Buscar conversaciones"
++            className="w-full bg-transparent text-12 text-primary outline-none placeholder:text-placeholder"
++          />
++        </div>
++      </div>
++
++      <div className="flex-1 space-y-3 overflow-y-auto px-2 pb-4">
++        {conversations.length === 0 ? (
++          <p className="px-2 py-3 text-11 text-tertiary">
++            Aún no hay conversaciones. La primera pregunta abre una.
++          </p>
++        ) : grouped.length === 0 ? (
++          <p className="px-2 py-3 text-11 text-tertiary">Ninguna coincide con «{query.trim()}».</p>
++        ) : (
++          grouped.map((group) => (
++            <div key={group.label}>
++              <p className="px-2 pb-1 text-[11px] font-medium uppercase text-tertiary">{group.label}</p>
++              {group.items.map((conversation) => (
++                <div
++                  key={conversation.id}
++                  className={cn(
++                    "group flex items-center gap-1 rounded-md pr-1 transition-colors",
++                    conversation.id === activeConversationId ? "bg-layer-1" : "hover:bg-layer-1"
++                  )}
++                >
++                  <button
++                    type="button"
++                    onClick={() => onOpenConversation(conversation.id)}
++                    className={cn(
++                      "min-w-0 flex-1 truncate px-2 py-1.5 text-left text-13",
++                      conversation.id === activeConversationId
++                        ? "font-medium text-primary"
++                        : "text-secondary"
++                    )}
++                  >
++                    {conversation.title || "Sin título"}
++                  </button>
++                  <button
++                    type="button"
++                    aria-label="Borrar conversación"
++                    onClick={() => onDeleteConversation(conversation.id)}
++                    className="hidden rounded p-1 text-tertiary hover:text-danger-primary group-hover:block"
++                  >
++                    <Trash2 className="size-3.5" />
++                  </button>
++                </div>
++              ))}
++            </div>
++          ))
++        )}
++      </div>
++    </div>
++  );
++});
 diff --git a/apps/web/core/components/assistant/conversation.tsx b/apps/web/core/components/assistant/conversation.tsx
 new file mode 100644
 index 0000000..fa18b43
@@ -111460,10 +111641,10 @@ index 0000000..d12862b
 +}
 diff --git a/apps/web/core/components/assistant/header.tsx b/apps/web/core/components/assistant/header.tsx
 new file mode 100644
-index 0000000..54fa905
+index 0000000..3390434
 --- /dev/null
 +++ b/apps/web/core/components/assistant/header.tsx
-@@ -0,0 +1,209 @@
+@@ -0,0 +1,221 @@
 +/**
 + * Sintergica CE extension: assistant header — history, model picker, new chat.
 + * Derived from Plane CE code (AGPL-3.0-only).
@@ -111493,6 +111674,12 @@ index 0000000..54fa905
 +  onClose?: () => void;
 +  /** Present only in the docked panel: jumps to the full-page view. */
 +  onExpand?: () => void;
++  /**
++   * The full page has its own conversation rail with "Nueva conversación" and
++   * a search box, so it turns these off instead of offering them twice.
++   */
++  showHistory?: boolean;
++  showNewChat?: boolean;
 +};
 +
 +export const AssistantHeader = observer(function AssistantHeader(props: TAssistantHeaderProps) {
@@ -111539,6 +111726,8 @@ index 0000000..54fa905
 +    onModelChange,
 +    onClose,
 +    onExpand,
++    showHistory = true,
++    showNewChat = true,
 +  } = props;
 +
 +  // Model names are provider/model:variant — the tail is what tells them apart.
@@ -111574,6 +111763,7 @@ index 0000000..54fa905
 +        </CustomMenu>
 +      )}
 +
++      {showHistory && (
 +      <CustomMenu
 +        customButton={
 +          <span
@@ -111632,18 +111822,21 @@ index 0000000..54fa905
 +          ))
 +        )}
 +      </CustomMenu>
++      )}
 +
-+      <Tooltip tooltipContent="Nueva conversación" position="bottom">
-+        <button
-+          type="button"
-+          onClick={onNewChat}
-+          disabled={isStreaming}
-+          aria-label="Nueva conversación"
-+          className="grid size-7 place-items-center rounded-md text-secondary hover:bg-layer-1 disabled:opacity-50"
-+        >
-+          <Plus className="size-4" />
-+        </button>
-+      </Tooltip>
++      {showNewChat && (
++        <Tooltip tooltipContent="Nueva conversación" position="bottom">
++          <button
++            type="button"
++            onClick={onNewChat}
++            disabled={isStreaming}
++            aria-label="Nueva conversación"
++            className="grid size-7 place-items-center rounded-md text-secondary hover:bg-layer-1 disabled:opacity-50"
++          >
++            <Plus className="size-4" />
++          </button>
++        </Tooltip>
++      )}
 +
 +      {onExpand && (
 +        <Tooltip tooltipContent="Vista completa" position="bottom">
@@ -112090,10 +112283,10 @@ index 0000000..20718f1
 +});
 diff --git a/apps/web/core/components/assistant/root.tsx b/apps/web/core/components/assistant/root.tsx
 new file mode 100644
-index 0000000..7019f7c
+index 0000000..93dc932
 --- /dev/null
 +++ b/apps/web/core/components/assistant/root.tsx
-@@ -0,0 +1,161 @@
+@@ -0,0 +1,168 @@
 +/**
 + * Sintergica CE extension: the assistant chat, shared by the docked panel and
 + * the full-page route.
@@ -112231,27 +112424,34 @@ index 0000000..7019f7c
 +          )}
 +        </div>
 +      ) : (
-+        <AssistantConversation
-+          variant={variant}
-+          userName={greetingName}
-+          financeRole={config?.finance_role}
-+          messages={messages}
-+          streamingContent={assistant.streamingContent}
-+          toolTrace={assistant.toolTrace}
-+          linkMap={assistant.linkMap}
-+          isStreaming={assistant.isStreaming}
-+          errorMessage={assistant.errorMessage}
-+          pendingActions={assistant.pendingActions}
-+          decidingActionId={assistant.decidingActionId}
-+          onSuggestion={send}
-+          onDecide={(actionId, decision) =>
-+            void assistant.decideAction(workspaceSlug, actionId, decision)
-+          }
-+        />
++        // On the page the thread keeps a readable measure and stays centred in
++        // its column; the panel is already narrow enough.
++        <div
++          className={cn(
++            "flex min-h-0 w-full flex-1 flex-col",
++            variant === "page" && "mx-auto max-w-3xl"
++          )}
++        >
++          <AssistantConversation
++            variant={variant}
++            userName={greetingName}
++            financeRole={config?.finance_role}
++            messages={messages}
++            streamingContent={assistant.streamingContent}
++            toolTrace={assistant.toolTrace}
++            linkMap={assistant.linkMap}
++            isStreaming={assistant.isStreaming}
++            errorMessage={assistant.errorMessage}
++            pendingActions={assistant.pendingActions}
++            decidingActionId={assistant.decidingActionId}
++            onSuggestion={send}
++            onDecide={(actionId, decision) =>
++              void assistant.decideAction(workspaceSlug, actionId, decision)
++            }
++          />
++          {composer}
++        </div>
 +      )}
-+
-+      {/* In hero mode the composer already rides with the greeting above. */}
-+      {!isHero && composer}
 +    </div>
 +  );
 +});
