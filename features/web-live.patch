@@ -114163,10 +114163,10 @@ index 0000000..86d8ed3
 +});
 diff --git a/apps/web/core/components/chat/chat-presence.tsx b/apps/web/core/components/chat/chat-presence.tsx
 new file mode 100644
-index 0000000..4d27ab2
+index 0000000..5097f87
 --- /dev/null
 +++ b/apps/web/core/components/chat/chat-presence.tsx
-@@ -0,0 +1,36 @@
+@@ -0,0 +1,131 @@
 +/**
 + * Sintergica CE extension: workspace-wide chat presence.
 + *
@@ -114181,11 +114181,104 @@ index 0000000..4d27ab2
 + * Derived from Plane CE code (AGPL-3.0-only).
 + */
 +
++import { useEffect, useRef } from "react";
 +import { observer } from "mobx-react";
-+import { useParams } from "next/navigation";
++import { useParams, usePathname } from "next/navigation";
 +// hooks
 +import { useWorkspace } from "@/hooks/store/use-workspace";
 +import { useWorkspaceChatConnection } from "@/hooks/use-channel-connection";
++
++/**
++ * MITIGACIÓN TEMPORAL (31 Ago 2026) de la navegación congelada.
++ *
++ * Síntoma medido: al navegar (sobre todo saliendo de Canales tras enviar un
++ * mensaje) react-router completa la navegación —carga el módulo de la ruta y
++ * hace pushState—, pero la actualización de estado que reparte la location
++ * nueva a React nunca se confirma: la URL cambia y la pantalla vieja queda
++ * montada y viva hasta recargar. Causa raíz aún sin identificar; ver la traza
++ * del 31 Ago (pushState sin re-render, sidebar con la ruta vieja activa).
++ *
++ * Este vigilante compara cada 400ms la URL real con la que React tiene
++ * renderizada. Tres desajustes seguidos hacia el mismo destino (~1.2s) se
++ * tratan como congelamiento: se anota el incidente en sessionStorage —con una
++ * medición de FPS de 400ms, el discriminador entre "transición suspendida"
++ * (hilo libre) y "transición hambreada" (hilo saturado)— y se recarga, que
++ * aterriza en la URL nueva. Una navegación sana se confirma en decenas de ms,
++ * así que el umbral no la toca.
++ *
++ * Quitar cuando la causa raíz esté arreglada.
++ */
++const FREEZE_LOG_KEY = "tequio:nav-freeze";
++const FREEZE_CHECK_MS = 400;
++const FREEZE_MISSES = 3;
++
++const normalize = (path: string) => (path.endsWith("/") ? path : `${path}/`);
++
++const useFrozenNavigationWatchdog = () => {
++  const pathname = usePathname();
++  const renderedPathRef = useRef(pathname);
++  renderedPathRef.current = pathname;
++
++  useEffect(() => {
++    // Incidentes de antes de la última recarga, para el diagnóstico.
++    try {
++      const raw = sessionStorage.getItem(FREEZE_LOG_KEY);
++      if (raw) console.warn("tequio: navegaciones congeladas registradas:", JSON.parse(raw));
++    } catch {
++      // sessionStorage puede no estar disponible
++    }
++
++    let misses = 0;
++    let target = "";
++    let recovering = false;
++
++    const record = (rendered: string, url: string, fps: number) => {
++      try {
++        const raw = sessionStorage.getItem(FREEZE_LOG_KEY);
++        const log: unknown[] = raw ? JSON.parse(raw) : [];
++        log.push({ at: new Date().toISOString(), rendered, url, fps });
++        sessionStorage.setItem(FREEZE_LOG_KEY, JSON.stringify(log.slice(-20)));
++      } catch {
++        // sin almacenamiento no hay bitácora, pero la recarga sigue
++      }
++    };
++
++    const tick = () => {
++      if (recovering) return;
++      const real = window.location.pathname;
++      const rendered = renderedPathRef.current ?? "";
++      if (normalize(real) === normalize(rendered)) {
++        misses = 0;
++        target = "";
++        return;
++      }
++      if (real === target) misses += 1;
++      else {
++        misses = 1;
++        target = real;
++      }
++      if (misses < FREEZE_MISSES) return;
++      recovering = true;
++      // FPS durante ~400ms: si sale bajo, el hilo está saturado (transición
++      // hambreada); si sale a ~60, la transición está suspendida en algo.
++      let frames = 0;
++      const t0 = performance.now();
++      const count = () => {
++        frames += 1;
++        if (performance.now() - t0 < 400) requestAnimationFrame(count);
++        else {
++          record(rendered, real, Math.round(frames / 0.4));
++          window.location.reload();
++        }
++      };
++      requestAnimationFrame(count);
++    };
++
++    const id = setInterval(tick, FREEZE_CHECK_MS);
++    return () => clearInterval(id);
++    // eslint-disable-next-line react-hooks/exhaustive-deps
++  }, []);
++};
 +
 +export const ChatPresence = observer(function ChatPresence() {
 +  // router
@@ -114194,6 +114287,8 @@ index 0000000..4d27ab2
 +  const workspaceStore = useWorkspace();
 +  // derived values
 +  const slug = workspaceSlug?.toString();
++
++  useFrozenNavigationWatchdog();
 +
 +  useWorkspaceChatConnection({
 +    workspaceSlug: slug ?? "",
