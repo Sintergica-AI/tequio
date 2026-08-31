@@ -65228,6 +65228,28 @@ index 0000000..b3370d2
 +}
 +
 +export default observer(WorkspaceFinancePage);
+diff --git a/apps/web/app/(all)/[workspaceSlug]/(projects)/layout.tsx b/apps/web/app/(all)/[workspaceSlug]/(projects)/layout.tsx
+index 090eefb..7bc701e 100644
+--- a/apps/web/app/(all)/[workspaceSlug]/(projects)/layout.tsx
++++ b/apps/web/app/(all)/[workspaceSlug]/(projects)/layout.tsx
+@@ -6,6 +6,7 @@
+ 
+ import { observer } from "mobx-react";
+ import { Outlet } from "react-router";
++import { ChatPresence } from "@/components/chat";
+ import { ProjectsAppPowerKProvider } from "@/components/power-k/projects-app-provider";
+ // plane web components
+ import { ProjectAppSidebar } from "./_sidebar";
+@@ -15,6 +16,9 @@ function WorkspaceLayout() {
+   return (
+     <>
+       <ProjectsAppPowerKProvider />
++      {/* Sintergica: socket de chat del espacio, para que los avisos y los
++          contadores funcionen fuera de la pantalla de Canales. */}
++      <ChatPresence />
+       <div className="relative flex h-full w-full flex-col overflow-hidden rounded-lg border border-subtle">
+         <div id="full-screen-portal" className="absolute inset-0 w-full" />
+         <div className="relative flex size-full overflow-hidden">
 diff --git a/apps/web/app/(all)/[workspaceSlug]/(projects)/projects/(detail)/[projectId]/channels/[channelId]/page.tsx b/apps/web/app/(all)/[workspaceSlug]/(projects)/projects/(detail)/[projectId]/channels/[channelId]/page.tsx
 new file mode 100644
 index 0000000..97c078b
@@ -114139,12 +114161,54 @@ index 0000000..86d8ed3
 +    </Row>
 +  );
 +});
+diff --git a/apps/web/core/components/chat/chat-presence.tsx b/apps/web/core/components/chat/chat-presence.tsx
+new file mode 100644
+index 0000000..4d27ab2
+--- /dev/null
++++ b/apps/web/core/components/chat/chat-presence.tsx
+@@ -0,0 +1,36 @@
++/**
++ * Sintergica CE extension: workspace-wide chat presence.
++ *
++ * El socket de avisos vivía dentro de ChatView, así que solo existía mientras
++ * mirabas la pantalla de Canales: en cualquier otra (trabajo, wiki, drive) no
++ * había suscripción y por tanto ningún aviso de mensaje nuevo. Este componente
++ * lo monta una sola vez en el layout del espacio de trabajo, de modo que los
++ * contadores del sidebar y las notificaciones funcionan desde cualquier sitio.
++ *
++ * No pinta nada.
++ *
++ * Derived from Plane CE code (AGPL-3.0-only).
++ */
++
++import { observer } from "mobx-react";
++import { useParams } from "next/navigation";
++// hooks
++import { useWorkspace } from "@/hooks/store/use-workspace";
++import { useWorkspaceChatConnection } from "@/hooks/use-channel-connection";
++
++export const ChatPresence = observer(function ChatPresence() {
++  // router
++  const { workspaceSlug } = useParams();
++  // store hooks
++  const workspaceStore = useWorkspace();
++  // derived values
++  const slug = workspaceSlug?.toString();
++
++  useWorkspaceChatConnection({
++    workspaceSlug: slug ?? "",
++    workspaceId: slug ? workspaceStore.getWorkspaceBySlug(slug)?.id : undefined,
++    enabled: !!slug,
++  });
++
++  return null;
++});
 diff --git a/apps/web/core/components/chat/chat-view.tsx b/apps/web/core/components/chat/chat-view.tsx
 new file mode 100644
-index 0000000..c80ccca
+index 0000000..66521c2
 --- /dev/null
 +++ b/apps/web/core/components/chat/chat-view.tsx
-@@ -0,0 +1,386 @@
+@@ -0,0 +1,385 @@
 +/**
 + * Sintergica CE extension: chat root view (channel sidebar + room + thread).
 + *
@@ -114172,8 +114236,7 @@ index 0000000..c80ccca
 +// hooks
 +import { useChat } from "@/hooks/store/use-chat";
 +import { useAppRouter } from "@/hooks/use-app-router";
-+import { useChannelConnection, useWorkspaceChatConnection } from "@/hooks/use-channel-connection";
-+import { useWorkspace } from "@/hooks/store/use-workspace";
++import { useChannelConnection } from "@/hooks/use-channel-connection";
 +// services
 +import type { TChatMessage } from "@/services/chat.service";
 +// hooks (people)
@@ -114213,11 +114276,11 @@ index 0000000..c80ccca
 +  const { getUserDetails } = useMember();
 +  const { data: currentUser } = useUser();
 +  const { t } = useTranslation();
-+  const workspaceStore = useWorkspace();
 +  // realtime: websocket over the live server; polling stays as fallback
 +  const { isLive, typingUsers, onlineUsers, setTyping } = useChannelConnection({ workspaceSlug, channelId });
-+  // badges en vivo de TODOS los canales visibles mientras el chat está abierto
-+  useWorkspaceChatConnection({ workspaceSlug, workspaceId: workspaceStore.getWorkspaceBySlug(workspaceSlug)?.id });
++  // El socket de todo el espacio (badges en vivo + avisos) ya no se monta aquí:
++  // vive en ChatPresence, dentro del layout, para que también funcione en las
++  // demás pantallas. Montarlo dos veces duplicaría cada notificación.
 +  // derived values
 +  const channel = channelId ? chat.channels[channelId] : undefined;
 +  const basePath = projectId
@@ -114533,10 +114596,10 @@ index 0000000..c80ccca
 +});
 diff --git a/apps/web/core/components/chat/composer.tsx b/apps/web/core/components/chat/composer.tsx
 new file mode 100644
-index 0000000..2dd8b2c
+index 0000000..7aafe2a
 --- /dev/null
 +++ b/apps/web/core/components/chat/composer.tsx
-@@ -0,0 +1,439 @@
+@@ -0,0 +1,440 @@
 +/**
 + * Sintergica CE extension: chat message composer.
 + *
@@ -114562,6 +114625,7 @@ index 0000000..2dd8b2c
 +import type { EditorRefApi, ToolbarMenuItem } from "@plane/editor";
 +import { TOOLBAR_ITEMS } from "@plane/editor";
 +import { useTranslation } from "@plane/i18n";
++import { stringToEmoji } from "@plane/propel/emoji-icon-picker";
 +import { EmojiReactionPicker } from "@plane/propel/emoji-reaction";
 +import { TOAST_TYPE, setToast } from "@plane/propel/toast";
 +import { Tooltip } from "@plane/propel/tooltip";
@@ -114912,7 +114976,7 @@ index 0000000..2dd8b2c
 +            <EmojiReactionPicker
 +              isOpen={isEmojiOpen}
 +              handleToggle={setIsEmojiOpen}
-+              onChange={(emoji) => insertAtCursor(emoji)}
++              onChange={(emoji) => insertAtCursor(stringToEmoji(emoji))}
 +              placement="top-start"
 +              label={
 +                <Tooltip tooltipContent={t("chat.toolbar_emoji")}>
@@ -115186,10 +115250,10 @@ index 0000000..e5cabd3
 +});
 diff --git a/apps/web/core/components/chat/index.ts b/apps/web/core/components/chat/index.ts
 new file mode 100644
-index 0000000..a63b2d9
+index 0000000..1a7718f
 --- /dev/null
 +++ b/apps/web/core/components/chat/index.ts
-@@ -0,0 +1,21 @@
+@@ -0,0 +1,22 @@
 +/**
 + * Sintergica CE extension: chat channels (Tequio canales) barrel.
 + * Not to be confused with the standalone Mattermost-based chat product —
@@ -115198,6 +115262,7 @@ index 0000000..a63b2d9
 + */
 +
 +export * from "./chat-notification-item";
++export * from "./chat-presence";
 +export * from "./chat-view";
 +export * from "./channel-list";
 +export * from "./composer";
@@ -115445,10 +115510,10 @@ index 0000000..a81a0da
 +}
 diff --git a/apps/web/core/components/chat/message-card.tsx b/apps/web/core/components/chat/message-card.tsx
 new file mode 100644
-index 0000000..f32ba3f
+index 0000000..2163ef8
 --- /dev/null
 +++ b/apps/web/core/components/chat/message-card.tsx
-@@ -0,0 +1,323 @@
+@@ -0,0 +1,339 @@
 +/**
 + * Sintergica CE extension: one chat message bubble.
 + *
@@ -115504,6 +115569,7 @@ index 0000000..f32ba3f
 +  // below), and neither loss is recoverable once saved.
 +  const [editHtml, setEditHtml] = useState(() => splitMessageForEditing(message.message_html).body);
 +  const [isPickerOpen, setIsPickerOpen] = useState(false);
++  const [isMenuOpen, setIsMenuOpen] = useState(false);
 +  // store hooks
 +  const chat = useChat();
 +  const { data: currentUser } = useUser();
@@ -115691,7 +115757,16 @@ index 0000000..f32ba3f
 +      </div>
 +      {/* hover actions */}
 +      {!isTemp && !isEditing && (
-+        <div className="absolute -top-3 right-4 hidden items-center gap-0.5 rounded border border-subtle bg-surface-1 p-0.5 shadow-sm group-hover:flex">
++        <div
++          className={cn(
++            // Nunca display:none: el trigger tiene que conservar su caja o Base UI
++            // reposiciona el panel abierto contra un ancla de 0x0 y el picker salta
++            // justo cuando vas a pulsar el emoji.
++            "absolute -top-3 right-4 flex items-center gap-0.5 rounded border border-subtle bg-surface-1 p-0.5 opacity-0 shadow-sm transition-opacity",
++            "pointer-events-none group-hover:pointer-events-auto group-hover:opacity-100",
++            (isPickerOpen || isMenuOpen) && "pointer-events-auto opacity-100"
++          )}
++        >
 +          <EmojiReactionPicker
 +            isOpen={isPickerOpen}
 +            handleToggle={setIsPickerOpen}
@@ -115713,7 +115788,13 @@ index 0000000..f32ba3f
 +              </button>
 +            </Tooltip>
 +          )}
-+          <CustomMenu ellipsis placement="bottom-end" closeOnSelect>
++          <CustomMenu
++            ellipsis
++            placement="bottom-end"
++            closeOnSelect
++            menuButtonOnClick={() => setIsMenuOpen(true)}
++            onMenuClose={() => setIsMenuOpen(false)}
++          >
 +            <CustomMenu.MenuItem onClick={() => onLinkWorkItem?.(message.id)}>
 +              <span className="flex items-center gap-2">
 +                <Link2 className="size-3.5" /> {t("chat.link_work_item")}
@@ -123139,21 +123220,103 @@ index b73c87b..a13b68a 100644
              </p>
            </div>
            <form
+diff --git a/apps/web/core/components/onboarding/root.tsx b/apps/web/core/components/onboarding/root.tsx
+index 395e19b..3c581ad 100644
+--- a/apps/web/core/components/onboarding/root.tsx
++++ b/apps/web/core/components/onboarding/root.tsx
+@@ -7,6 +7,7 @@
+ import { useCallback, useEffect, useState } from "react";
+ import { observer } from "mobx-react";
+ // plane imports
++import { useTranslation } from "@plane/i18n";
+ import { TOAST_TYPE, setToast } from "@plane/propel/toast";
+ import type { IWorkspaceMemberInvitation, TOnboardingStep, TOnboardingSteps, TUserProfile } from "@plane/types";
+ import { EOnboardingSteps } from "@plane/types";
+@@ -29,6 +30,7 @@ export const OnboardingRoot = observer(function OnboardingRoot({ invitations = [
+   const { data: userProfile, updateUserProfile, finishUserOnboarding } = useUserProfile();
+   const { workspaces } = useWorkspace();
+   const { config: instanceConfig } = useInstance();
++  const { t } = useTranslation();
+ 
+   const workspacesList = Object.values(workspaces ?? {});
+   const isSelfManaged = instanceConfig?.is_self_managed;
+@@ -44,11 +46,11 @@ export const OnboardingRoot = observer(function OnboardingRoot({ invitations = [
+     } catch (_error) {
+       setToast({
+         type: TOAST_TYPE.ERROR,
+-        title: "Failed",
+-        message: "Failed to finish onboarding, Please try again later.",
++        title: t("common.error"),
++        message: t("onboarding.finish_failed"),
+       });
+     }
+-  }, [user, finishUserOnboarding]);
++  }, [user, finishUserOnboarding, t]);
+ 
+   // handle step change
+   const stepChange = useCallback(
+diff --git a/apps/web/core/components/onboarding/step-indicator.tsx b/apps/web/core/components/onboarding/step-indicator.tsx
+index 8aa8dca..320e3bb 100644
+--- a/apps/web/core/components/onboarding/step-indicator.tsx
++++ b/apps/web/core/components/onboarding/step-indicator.tsx
+@@ -6,6 +6,7 @@
+ 
+ import React from "react";
+ // helpers
++import { useTranslation } from "@plane/i18n";
+ import { cn } from "@plane/utils";
+ 
+ interface OnboardingStepIndicatorProps {
+@@ -14,6 +15,8 @@ interface OnboardingStepIndicatorProps {
+ }
+ 
+ export function OnboardingStepIndicator({ currentStep, totalSteps }: OnboardingStepIndicatorProps) {
++  const { t } = useTranslation();
++
+   const renderIndicators = () => {
+     const indicators = [];
+ 
+@@ -43,7 +46,7 @@ export function OnboardingStepIndicator({ currentStep, totalSteps }: OnboardingS
+   return (
+     <div className="flex flex-col justify-center">
+       <div className="text-13 font-medium text-tertiary">
+-        {currentStep} of {totalSteps} steps
++        {t("onboarding.step_progress", { current: currentStep, total: totalSteps })}
+       </div>
+       <div className="mx-1 my-0.5 flex w-40 items-center justify-center lg:w-52">{renderIndicators()}</div>
+     </div>
 diff --git a/apps/web/core/components/onboarding/steps/profile/consent.tsx b/apps/web/core/components/onboarding/steps/profile/consent.tsx
-index 18f4206..36d1e51 100644
+index 18f4206..5633132 100644
 --- a/apps/web/core/components/onboarding/steps/profile/consent.tsx
 +++ b/apps/web/core/components/onboarding/steps/profile/consent.tsx
-@@ -23,7 +23,7 @@ export function MarketingConsent({ isChecked, handleChange }: Props) {
+@@ -4,6 +4,7 @@
+  * See the LICENSE file for details.
+  */
+ 
++import { useTranslation } from "@plane/i18n";
+ import { CheckIcon } from "@plane/propel/icons";
+ 
+ type Props = {
+@@ -12,6 +13,8 @@ type Props = {
+ };
+ 
+ export function MarketingConsent({ isChecked, handleChange }: Props) {
++  const { t } = useTranslation();
++
+   return (
+     <div className="flex items-center justify-center gap-1.5">
+       <button
+@@ -23,7 +26,7 @@ export function MarketingConsent({ isChecked, handleChange }: Props) {
        >
          {isChecked && <CheckIcon className="h-3 w-3 text-on-color" />}
        </button>
 -      <span className="text-13 text-tertiary">I agree to Plane marketing communications</span>
-+      <span className="text-13 text-tertiary">Acepto recibir comunicaciones de Tequio</span>
++      <span className="text-13 text-tertiary">{t("onboarding.marketing_consent")}</span>
      </div>
    );
  }
 diff --git a/apps/web/core/components/onboarding/steps/profile/root.tsx b/apps/web/core/components/onboarding/steps/profile/root.tsx
-index 5e71c80..09248d3 100644
+index 5e71c80..06f2c76 100644
 --- a/apps/web/core/components/onboarding/steps/profile/root.tsx
 +++ b/apps/web/core/components/onboarding/steps/profile/root.tsx
 @@ -1,5 +1,5 @@
@@ -123163,15 +123326,154 @@ index 5e71c80..09248d3 100644
   * SPDX-License-Identifier: AGPL-3.0-only
   * See the LICENSE file for details.
   */
-@@ -147,7 +147,7 @@ export const ProfileSetupStep = observer(function ProfileSetupStep({ handleStepC
+@@ -10,6 +10,7 @@ import { Controller, useForm } from "react-hook-form";
+ import { ImageIcon } from "lucide-react";
+ // plane imports
+ import { E_PASSWORD_STRENGTH } from "@plane/constants";
++import { useTranslation } from "@plane/i18n";
+ import { Button } from "@plane/propel/button";
+ import { TOAST_TYPE, setToast } from "@plane/propel/toast";
+ import type { IUser } from "@plane/types";
+@@ -60,6 +61,7 @@ export const ProfileSetupStep = observer(function ProfileSetupStep({ handleStepC
+   const { data: user, updateCurrentUser } = useUser();
+   const { updateUserProfile } = useUserProfile();
+   const { config: instanceConfig } = useInstance();
++  const { t } = useTranslation();
+   // form info
+   const {
+     getValues,
+@@ -99,8 +101,8 @@ export const ProfileSetupStep = observer(function ProfileSetupStep({ handleStepC
+     } catch {
+       setToast({
+         type: TOAST_TYPE.ERROR,
+-        title: "Error",
+-        message: "User details update failed. Please try again!",
++        title: t("common.error"),
++        message: t("onboarding.profile_update_failed"),
+       });
+     }
+   };
+@@ -147,7 +149,7 @@ export const ProfileSetupStep = observer(function ProfileSetupStep({ handleStepC
    return (
      <form onSubmit={handleSubmit(onSubmit)} className="flex flex-col gap-10">
        {/* Header */}
 -      <CommonOnboardingHeader title="Create your profile." description="This is how you will appear in Plane." />
-+      <CommonOnboardingHeader title="Create your profile." description="This is how you will appear in Tequio." />
++      <CommonOnboardingHeader title={t("onboarding.profile_title")} description={t("onboarding.profile_description")} />
  
        {/* Profile Picture Section */}
        <Controller
+@@ -190,7 +192,7 @@ export const ProfileSetupStep = observer(function ProfileSetupStep({ handleStepC
+           onClick={() => setIsImageUploadModalOpen(true)}
+         >
+           <ImageIcon className="size-4" />
+-          <span className="text-13">{userAvatar ? "Change image" : "Upload image"}</span>
++          <span className="text-13">{userAvatar ? t("onboarding.change_image") : t("onboarding.upload_image")}</span>
+         </button>
+       </div>
+ 
+@@ -201,17 +203,17 @@ export const ProfileSetupStep = observer(function ProfileSetupStep({ handleStepC
+             className="block text-13 font-medium text-tertiary after:ml-0.5 after:text-danger-primary after:content-['*']"
+             htmlFor="first_name"
+           >
+-            Name
++            {t("onboarding.name_label")}
+           </label>
+           <Controller
+             control={control}
+             name="first_name"
+             rules={{
+-              required: "Name is required",
++              required: t("onboarding.name_required"),
+               validate: validatePersonName,
+               maxLength: {
+                 value: 50,
+-                message: "Name must be within 50 characters.",
++                message: t("onboarding.name_max_length"),
+               },
+             }}
+             render={({ field: { value, onChange, ref } }) => (
+@@ -230,7 +232,7 @@ export const ProfileSetupStep = observer(function ProfileSetupStep({ handleStepC
+                     "border-danger-strong": errors.first_name,
+                   }
+                 )}
+-                placeholder="Enter your full name"
++                placeholder={t("onboarding.name_placeholder")}
+                 autoComplete="on"
+               />
+             )}
+@@ -248,7 +250,7 @@ export const ProfileSetupStep = observer(function ProfileSetupStep({ handleStepC
+       </div>
+       {/* Continue Button */}
+       <Button variant="primary" type="submit" className="w-full" size="xl" disabled={isButtonDisabled}>
+-        Continue
++        {t("onboarding.continue_action")}
+       </Button>
+ 
+       {/* Marketing Consent */}
+diff --git a/apps/web/core/components/onboarding/steps/profile/set-password.tsx b/apps/web/core/components/onboarding/steps/profile/set-password.tsx
+index 95421e2..befb636 100644
+--- a/apps/web/core/components/onboarding/steps/profile/set-password.tsx
++++ b/apps/web/core/components/onboarding/steps/profile/set-password.tsx
+@@ -5,6 +5,7 @@
+  */
+ 
+ import React, { useState, useCallback, useMemo } from "react";
++import { useTranslation } from "@plane/i18n";
+ import { LockIcon, ChevronDownIcon } from "@plane/propel/icons";
+ import { PasswordInput, PasswordStrengthIndicator } from "@plane/ui";
+ import { cn } from "@plane/utils";
+@@ -21,6 +22,7 @@ interface SetPasswordRootProps {
+ }
+ 
+ export function SetPasswordRoot({ onPasswordChange, onConfirmPasswordChange, disabled = false }: SetPasswordRootProps) {
++  const { t } = useTranslation();
+   const [isExpanded, setIsExpanded] = useState(false);
+   const [passwordState, setPasswordState] = useState<PasswordState>({
+     password: "",
+@@ -87,8 +89,8 @@ export function SetPasswordRoot({ onPasswordChange, onConfirmPasswordChange, dis
+       >
+         <div className="flex items-center gap-1 text-tertiary">
+           <LockIcon className="size-3" />
+-          <span className="font-medium">Set a password</span>
+-          <span>{`(Optional)`}</span>
++          <span className="font-medium">{t("onboarding.set_password")}</span>
++          <span>{t("onboarding.optional")}</span>
+         </div>
+         <div className="flex items-center gap-2 text-placeholder">
+           <ChevronDownIcon className={chevronIconClasses} />
+@@ -102,7 +104,7 @@ export function SetPasswordRoot({ onPasswordChange, onConfirmPasswordChange, dis
+             id="password"
+             value={passwordState.password}
+             onChange={(value) => handlePasswordChange("password", value)}
+-            placeholder="Set a password"
++            placeholder={t("onboarding.password_placeholder")}
+             className="transition-all duration-200"
+           />
+           {passwordState.password.length > 0 && <PasswordStrengthIndicator password={passwordState.password} />}
+@@ -111,7 +113,7 @@ export function SetPasswordRoot({ onPasswordChange, onConfirmPasswordChange, dis
+         <div className="flex flex-col gap-2 pb-2">
+           {/* Confirm password label */}
+           <div className="transform text-13 font-medium text-tertiary transition-all delay-75 duration-300 ease-in-out">
+-            Confirm password
++            {t("onboarding.confirm_password")}
+           </div>
+ 
+           {/* Confirm password input */}
+@@ -120,11 +122,11 @@ export function SetPasswordRoot({ onPasswordChange, onConfirmPasswordChange, dis
+               id="confirm-password"
+               value={passwordState.confirmPassword}
+               onChange={(value) => handlePasswordChange("confirmPassword", value)}
+-              placeholder="Confirm password"
++              placeholder={t("onboarding.confirm_password_placeholder")}
+               className="transition-all duration-200"
+             />
+-            {hasPasswordMismatch && <p className="mt-1 text-11 text-danger-primary">Passwords do not match</p>}
+-            {isPasswordValid && <p className="mt-1 text-11 text-success-primary">✓ Passwords match</p>}
++            {hasPasswordMismatch && <p className="mt-1 text-11 text-danger-primary">{t("onboarding.passwords_no_match")}</p>}
++            {isPasswordValid && <p className="mt-1 text-11 text-success-primary">{`✓ ${t("onboarding.passwords_match")}`}</p>}
+           </div>
+         </div>
+       </div>
 diff --git a/apps/web/core/components/onboarding/steps/role/root.tsx b/apps/web/core/components/onboarding/steps/role/root.tsx
 index 43029d1..07a30d8 100644
 --- a/apps/web/core/components/onboarding/steps/role/root.tsx
@@ -123193,7 +123495,7 @@ index 43029d1..07a30d8 100644
        <div className="flex flex-col gap-3">
          <p className="text-body-sm-semibold text-placeholder">Select one</p>
 diff --git a/apps/web/core/components/onboarding/steps/team/root.tsx b/apps/web/core/components/onboarding/steps/team/root.tsx
-index 536110f..01f7c49 100644
+index 536110f..1c184ab 100644
 --- a/apps/web/core/components/onboarding/steps/team/root.tsx
 +++ b/apps/web/core/components/onboarding/steps/team/root.tsx
 @@ -1,5 +1,5 @@
@@ -123203,15 +123505,83 @@ index 536110f..01f7c49 100644
   * SPDX-License-Identifier: AGPL-3.0-only
   * See the LICENSE file for details.
   */
-@@ -343,7 +343,7 @@ export const InviteTeamStep = observer(function InviteTeamStep(props: Props) {
+@@ -145,7 +145,7 @@ const InviteMemberInput = observer(function InviteMemberInput(props: InviteMembe
+             rules={{
+               pattern: {
+                 value: emailRegex,
+-                message: "Invalid Email ID",
++                message: t("onboarding.invalid_email"),
+               },
+             }}
+             render={({ field: { value, onChange, ref } }) => (
+@@ -262,6 +262,8 @@ export const InviteTeamStep = observer(function InviteTeamStep(props: Props) {
+ 
+   const [isInvitationDisabled, setIsInvitationDisabled] = useState(true);
+ 
++  const { t } = useTranslation();
++
+   const { workspaces } = useWorkspace();
+   const workspacesList = Object.values(workspaces ?? {});
+   const workspace = workspacesList[0];
+@@ -300,15 +302,15 @@ export const InviteTeamStep = observer(function InviteTeamStep(props: Props) {
+       .then(async () => {
+         setToast({
+           type: TOAST_TYPE.SUCCESS,
+-          title: "Success!",
+-          message: "Invitations sent successfully.",
++          title: t("common.success"),
++          message: t("onboarding.invitations_sent"),
+         });
+         await nextStep();
+       })
+       .catch((err) => {
+         setToast({
+           type: TOAST_TYPE.ERROR,
+-          title: "Error!",
++          title: t("common.error"),
+           message: err?.error,
+         });
+       });
+@@ -342,13 +344,13 @@ export const InviteTeamStep = observer(function InviteTeamStep(props: Props) {
+       }}
      >
        <CommonOnboardingHeader
-         title="Invite your teammates"
+-        title="Invite your teammates"
 -        description="Work in plane happens best with your team. Invite them now to use Plane to its potential."
-+        description="Work in Tequio happens best with your team. Invite them now to use Tequio to its potential."
++        title={t("onboarding.team_title")}
++        description={t("onboarding.team_description")}
        />
        <div className="w-full py-4 text-13">
          <div className="group relative mx-8 grid grid-cols-10 gap-4 py-2">
+-          <div className="col-span-6 px-1 text-13 font-medium text-secondary">Email</div>
+-          <div className="col-span-4 px-1 text-13 font-medium text-secondary">Role</div>
++          <div className="col-span-6 px-1 text-13 font-medium text-secondary">{t("onboarding.email_column")}</div>
++          <div className="col-span-4 px-1 text-13 font-medium text-secondary">{t("onboarding.role_column")}</div>
+         </div>
+         <div className="mb-3 space-y-3 sm:space-y-4">
+           {fields.map((field, index) => (
+@@ -374,7 +376,7 @@ export const InviteTeamStep = observer(function InviteTeamStep(props: Props) {
+           onClick={appendField}
+         >
+           <PlusIcon className="h-4 w-4" strokeWidth={2} />
+-          Add another
++          {t("onboarding.add_another")}
+         </button>
+       </div>
+       <div className="mx-auto flex w-full flex-col items-center justify-center gap-4 px-8 sm:px-2">
+@@ -385,10 +387,10 @@ export const InviteTeamStep = observer(function InviteTeamStep(props: Props) {
+           className="w-full"
+           disabled={isInvitationDisabled || !isValid || isSubmitting}
+         >
+-          {isSubmitting ? <Spinner height="20px" width="20px" /> : "Continue"}
++          {isSubmitting ? <Spinner height="20px" width="20px" /> : t("onboarding.continue_action")}
+         </Button>
+         <Button variant="ghost" size="xl" className="w-full" onClick={nextStep}>
+-          I’ll do it later
++          {t("onboarding.do_it_later")}
+         </Button>
+       </div>
+     </form>
 diff --git a/apps/web/core/components/onboarding/steps/usecase/root.tsx b/apps/web/core/components/onboarding/steps/usecase/root.tsx
 index 8908ada..ae05665 100644
 --- a/apps/web/core/components/onboarding/steps/usecase/root.tsx
@@ -123232,6 +123602,170 @@ index 8908ada..ae05665 100644
  
        {/* Use Case Selection */}
        <div className="flex flex-col gap-3">
+diff --git a/apps/web/core/components/onboarding/steps/workspace/create.tsx b/apps/web/core/components/onboarding/steps/workspace/create.tsx
+index f9c32a9..632402e 100644
+--- a/apps/web/core/components/onboarding/steps/workspace/create.tsx
++++ b/apps/web/core/components/onboarding/steps/workspace/create.tsx
+@@ -132,7 +132,10 @@ export const WorkspaceCreateStep = observer(function WorkspaceCreateStep({
+         void handleSubmit(handleCreateWorkspace)(e);
+       }}
+     >
+-      <CommonOnboardingHeader title="Create your workspace" description="All your work — unified." />
++      <CommonOnboardingHeader
++        title={t("onboarding.workspace_create_title")}
++        description={t("onboarding.workspace_subtitle")}
++      />
+       <div className="flex flex-col gap-8">
+         <div className="flex flex-col gap-2">
+           <label
+@@ -166,7 +169,7 @@ export const WorkspaceCreateStep = observer(function WorkspaceCreateStep({
+                       shouldValidate: true,
+                     });
+                   }}
+-                  placeholder="Enter workspace name"
++                  placeholder={t("onboarding.workspace_name_placeholder")}
+                   ref={ref}
+                   className={cn(
+                     "w-full rounded-md border border-strong bg-surface-1 px-3 py-2 text-secondary transition-all duration-200 placeholder:text-placeholder focus:border-transparent focus:ring-2 focus:ring-accent-strong focus:outline-none",
+diff --git a/apps/web/core/components/onboarding/steps/workspace/join-invites.tsx b/apps/web/core/components/onboarding/steps/workspace/join-invites.tsx
+index c49c0d2..6812b03 100644
+--- a/apps/web/core/components/onboarding/steps/workspace/join-invites.tsx
++++ b/apps/web/core/components/onboarding/steps/workspace/join-invites.tsx
+@@ -7,6 +7,7 @@
+ import { useState } from "react";
+ // plane imports
+ import { ROLE } from "@plane/constants";
++import { useTranslation } from "@plane/i18n";
+ import { Button } from "@plane/propel/button";
+ import type { IWorkspaceMemberInvitation } from "@plane/types";
+ import { Checkbox, Spinner } from "@plane/ui";
+@@ -36,6 +37,7 @@ export function WorkspaceJoinInvitesStep(props: Props) {
+   // store hooks
+   const { fetchWorkspaces } = useWorkspace();
+   const { fetchCurrentUserSettings } = useUserSettings();
++  const { t } = useTranslation();
+ 
+   // handle invitation
+   const handleInvitation = (workspace_invitation: IWorkspaceMemberInvitation, action: "accepted" | "withdraw") => {
+@@ -67,7 +69,10 @@ export function WorkspaceJoinInvitesStep(props: Props) {
+ 
+   return invitations && invitations.length > 0 ? (
+     <div className="flex flex-col gap-10">
+-      <CommonOnboardingHeader title="Join invites or create a workspace" description="All your work — unified." />
++      <CommonOnboardingHeader
++        title={t("onboarding.workspace_join_title")}
++        description={t("onboarding.workspace_subtitle")}
++      />
+       <div className="flex flex-col gap-3">
+         {invitations &&
+           invitations.length > 0 &&
+@@ -106,7 +111,7 @@ export function WorkspaceJoinInvitesStep(props: Props) {
+           onClick={submitInvitations}
+           disabled={isJoiningWorkspaces || !invitationsRespond.length}
+         >
+-          {isJoiningWorkspaces ? <Spinner height="20px" width="20px" /> : "Continue"}
++          {isJoiningWorkspaces ? <Spinner height="20px" width="20px" /> : t("onboarding.continue_action")}
+         </Button>
+         <Button
+           variant="ghost"
+@@ -115,11 +120,11 @@ export function WorkspaceJoinInvitesStep(props: Props) {
+           onClick={handleCurrentViewChange}
+           disabled={isJoiningWorkspaces}
+         >
+-          Create new workspace
++          {t("onboarding.create_new_workspace")}
+         </Button>
+       </div>
+     </div>
+   ) : (
+-    <div>No Invitations found</div>
++    <div>{t("onboarding.no_invitations")}</div>
+   );
+ }
+diff --git a/apps/web/core/components/onboarding/switch-account-dropdown.tsx b/apps/web/core/components/onboarding/switch-account-dropdown.tsx
+index bf96aae..2e6472f 100644
+--- a/apps/web/core/components/onboarding/switch-account-dropdown.tsx
++++ b/apps/web/core/components/onboarding/switch-account-dropdown.tsx
+@@ -8,6 +8,7 @@ import { useState } from "react";
+ import { observer } from "mobx-react";
+ import { Menu, Transition } from "@headlessui/react";
+ // ui
++import { useTranslation } from "@plane/i18n";
+ import { cn, getFileURL } from "@plane/utils";
+ // helpers
+ // hooks
+@@ -25,6 +26,7 @@ export const SwitchAccountDropdown = observer(function SwitchAccountDropdown(pro
+   const [showSwitchAccountModal, setShowSwitchAccountModal] = useState(false);
+   // store hooks
+   const { data: user } = useUser();
++  const { t } = useTranslation();
+ 
+   const displayName = user?.first_name
+     ? `${user?.first_name} ${user?.last_name ?? ""}`
+@@ -71,7 +73,7 @@ export const SwitchAccountDropdown = observer(function SwitchAccountDropdown(pro
+               }
+               onClick={() => setShowSwitchAccountModal(true)}
+             >
+-              Wrong e-mail address?
++              {t("onboarding.wrong_email")}
+             </Menu.Item>
+           </Menu.Items>
+         </Transition>
+diff --git a/apps/web/core/components/onboarding/switch-account-modal.tsx b/apps/web/core/components/onboarding/switch-account-modal.tsx
+index aa80f8e..fc40e68 100644
+--- a/apps/web/core/components/onboarding/switch-account-modal.tsx
++++ b/apps/web/core/components/onboarding/switch-account-modal.tsx
+@@ -10,6 +10,7 @@ import { useTheme } from "next-themes";
+ import { ArrowRightLeft } from "lucide-react";
+ import { Dialog, Transition } from "@headlessui/react";
+ // ui
++import { useTranslation } from "@plane/i18n";
+ import { Button } from "@plane/propel/button";
+ import { TOAST_TYPE, setToast } from "@plane/propel/toast";
+ // hooks
+@@ -29,6 +30,7 @@ export function SwitchAccountModal(props: Props) {
+   const router = useAppRouter();
+   // store hooks
+   const { data: userData, signOut } = useUser();
++  const { t } = useTranslation();
+ 
+   const { setTheme } = useTheme();
+ 
+@@ -49,8 +51,8 @@ export function SwitchAccountModal(props: Props) {
+       .catch(() =>
+         setToast({
+           type: TOAST_TYPE.ERROR,
+-          title: "Error!",
+-          message: "Failed to sign out. Please try again.",
++          title: t("common.error"),
++          message: t("onboarding.sign_out_failed"),
+         })
+       )
+       .finally(() => setSwitchingAccount(false));
+@@ -92,12 +94,11 @@ export function SwitchAccountModal(props: Props) {
+                     </div>
+                     <div className="flex flex-col gap-y-6 py-3">
+                       <Dialog.Title as="h3" className="text-20 leading-6 font-medium text-primary">
+-                        Switch account
++                        {t("onboarding.switch_account")}
+                       </Dialog.Title>
+                       {userData?.email && (
+                         <div className="text-14 font-regular text-secondary">
+-                          If you have signed up via <span className="text-accent-primary">{userData.email}</span>{" "}
+-                          un-intentionally, you can switch your account to a different one from here.
++                          {t("onboarding.switch_account_description", { email: userData.email })}
+                         </div>
+                       )}
+                     </div>
+@@ -105,7 +106,7 @@ export function SwitchAccountModal(props: Props) {
+                 </div>
+                 <div className="mb-2 flex items-center justify-end gap-3 p-4 sm:px-6">
+                   <Button variant="secondary" size="lg" onClick={handleSwitchAccount} disabled={switchingAccount}>
+-                    {switchingAccount ? "Switching..." : "Switch account"}
++                    {switchingAccount ? t("onboarding.switching") : t("onboarding.switch_account")}
+                   </Button>
+                 </div>
+               </Dialog.Panel>
 diff --git a/apps/web/core/components/onboarding/tour/root.tsx b/apps/web/core/components/onboarding/tour/root.tsx
 index db87b71..e9f8f05 100644
 --- a/apps/web/core/components/onboarding/tour/root.tsx
@@ -124184,10 +124718,10 @@ index 0000000..393a6e7
 +};
 diff --git a/apps/web/core/hooks/use-channel-connection.ts b/apps/web/core/hooks/use-channel-connection.ts
 new file mode 100644
-index 0000000..873112d
+index 0000000..3f8d7e1
 --- /dev/null
 +++ b/apps/web/core/hooks/use-channel-connection.ts
-@@ -0,0 +1,247 @@
+@@ -0,0 +1,305 @@
 +/**
 + * Sintergica CE extension: websocket connection for a chat channel.
 + *
@@ -124201,11 +124735,14 @@ index 0000000..873112d
 + * Derived from Plane CE code (AGPL-3.0-only).
 + */
 +
-+import { useCallback, useEffect, useRef, useState } from "react";
++import { createElement, useCallback, useEffect, useRef, useState } from "react";
 +import { HocuspocusProvider } from "@hocuspocus/provider";
 +// plane imports
 +import { LIVE_BASE_PATH, LIVE_BASE_URL } from "@plane/constants";
++import { useTranslation } from "@plane/i18n";
++import { TOAST_TYPE, setToast } from "@plane/propel/toast";
 +// hooks
++import { useAppRouter } from "@/hooks/use-app-router";
 +import { useChat } from "@/hooks/store/use-chat";
 +import { useMember } from "@/hooks/store/use-member";
 +import { useUser } from "@/hooks/store/user";
@@ -124214,19 +124751,52 @@ index 0000000..873112d
 + * Desktop notification, best-effort: only when granted and the tab is not
 + * focused. Clicking focuses the tab and lands on the channel.
 + */
-+const showDesktopNotification = (title: string, body: string | undefined, href: string) => {
++const showDesktopNotification = (title: string, body: string | undefined, href: string): boolean => {
 +  try {
-+    if (typeof window === "undefined" || !("Notification" in window)) return;
-+    if (Notification.permission !== "granted" || document.hasFocus()) return;
++    if (typeof window === "undefined" || !("Notification" in window)) return false;
++    if (Notification.permission !== "granted" || document.hasFocus()) return false;
 +    const notification = new Notification(title, { body, tag: href });
 +    notification.onclick = () => {
 +      window.focus();
 +      window.location.href = href;
 +      notification.close();
 +    };
++    return true;
 +  } catch {
 +    // Notification puede lanzar en contextos raros (iframes, permisos raros)
++    return false;
 +  }
++};
++
++/**
++ * Aviso dentro de la app para cuando la notificación del sistema no puede
++ * salir: pestaña enfocada, permiso denegado o navegador sin Notification.
++ * Sin esto, estar mirando Tequio en otra pantalla era el caso en el que un
++ * mensaje nuevo no producía ninguna señal.
++ *
++ * Solo lo levantan los DM y las menciones. Un canal concurrido movería el
++ * contador del sidebar en cada mensaje, no vale la pena un toast por cada uno.
++ */
++const showInAppNotice = (
++  title: string,
++  body: string | undefined,
++  actionLabel: string,
++  onOpen: () => void
++) => {
++  setToast({
++    type: TOAST_TYPE.INFO,
++    title,
++    message: body,
++    actionItems: createElement(
++      "button",
++      {
++        type: "button",
++        className: "text-xs font-medium text-accent-primary hover:underline",
++        onClick: onOpen,
++      },
++      actionLabel
++    ),
++  });
 +};
 +
 +type TArgs = {
@@ -124377,8 +124947,24 @@ index 0000000..873112d
 +}): void => {
 +  // store hooks
 +  const chat = useChat();
++  const router = useAppRouter();
 +  const { getUserDetails } = useMember();
 +  const { data: currentUser } = useUser();
++  const { t } = useTranslation();
++  // El efecto del socket no se re-crea en cada render, así que router y t
++  // viajan por ref: dentro del closure siempre se usa el valor vigente.
++  const notifyRef = useRef({ router, t });
++  notifyRef.current = { router, t };
++
++  // applyIncomingEvent descarta channel.activity de un canal que no está en el
++  // store ("chat never opened"). Al vivir este socket fuera del chat hay que
++  // sembrar la lista, o el primer aviso llega justo cuando ya no hace falta.
++  useEffect(() => {
++    if (!enabled || !workspaceSlug) return;
++    if (chat.channelsFetchedFor["workspace"]) return;
++    void chat.fetchChannels(workspaceSlug).then(() => chat.fetchUnreads(workspaceSlug));
++    // eslint-disable-next-line react-hooks/exhaustive-deps
++  }, [workspaceSlug, enabled]);
 +
 +  useEffect(() => {
 +    if (!enabled || !workspaceId || !currentUser?.id || typeof window === "undefined") return;
@@ -124413,12 +124999,18 @@ index 0000000..873112d
 +            const href = channel.project
 +              ? `/${workspaceSlug}/projects/${channel.project}/channels/${channel.id}`
 +              : `/${workspaceSlug}/channels/${channel.id}`;
++            const { router: appRouter, t: translate } = notifyRef.current;
++            // Aviso dentro de la app solo si la del sistema no pudo salir.
++            const notify = (title: string, body: string | undefined, inApp: boolean) => {
++              if (showDesktopNotification(title, body, href)) return;
++              if (inApp) showInAppNotice(title, body, translate("chat.open"), () => appRouter.push(href));
++            };
 +            if (channel.is_direct) {
-+              showDesktopNotification(actorName || "DM", undefined, href);
++              notify(actorName || "DM", undefined, true);
 +            } else if (mentioned) {
-+              showDesktopNotification(`@ #${channel.name}`, actorName, href);
++              notify(`@ #${channel.name}`, actorName, true);
 +            } else if (channel.access === 1) {
-+              showDesktopNotification(`#${channel.name}`, actorName, href);
++              notify(`#${channel.name}`, actorName, false);
 +            }
 +          } catch {
 +            // ignore non-chat payloads
@@ -195784,7 +196376,7 @@ index 5aa7d2f..32afb6d 100644
        "fixed_schedule": "Pevný rozvrh",
        "schedule": {
 diff --git a/packages/i18n/src/locales/cs/common.json b/packages/i18n/src/locales/cs/common.json
-index c1e9372..23ce855 100644
+index c1e9372..2c68243 100644
 --- a/packages/i18n/src/locales/cs/common.json
 +++ b/packages/i18n/src/locales/cs/common.json
 @@ -244,7 +244,7 @@
@@ -195814,7 +196406,7 @@ index c1e9372..23ce855 100644
    "in_app": "V aplikaci",
    "forms": "Formuláře",
    "milestones": "Milníky",
-@@ -867,5 +867,448 @@
+@@ -867,5 +867,491 @@
        "description": "Exportujte položky do JSON.",
        "short_description": "Exportovat jako JSON"
      }
@@ -196260,7 +196852,50 @@ index c1e9372..23ce855 100644
 +    "remove_attachment": "Odebrat",
 +    "attachment_error": "Nahrání selhalo",
 +    "attachment_failed": "Soubor {name} se nepodařilo nahrát",
-+    "attachment_too_large": "{name} překračuje limit velikosti"
++    "attachment_too_large": "{name} překračuje limit velikosti",
++    "open": "Otevřít"
++  },
++  "onboarding": {
++    "profile_title": "Vytvořte si profil.",
++    "profile_description": "Takto vás uvidí ostatní v Tequio.",
++    "upload_image": "Nahrát obrázek",
++    "change_image": "Změnit obrázek",
++    "name_label": "Jméno",
++    "name_required": "Jméno je povinné",
++    "name_max_length": "Jméno může mít nejvýše 50 znaků.",
++    "name_placeholder": "Zadejte celé jméno",
++    "continue_action": "Pokračovat",
++    "set_password": "Nastavit heslo",
++    "optional": "(Volitelné)",
++    "password_placeholder": "Nastavit heslo",
++    "confirm_password": "Potvrdit heslo",
++    "confirm_password_placeholder": "Potvrdit heslo",
++    "passwords_match": "Hesla se shodují",
++    "passwords_no_match": "Hesla se neshodují",
++    "marketing_consent": "Souhlasím se zasíláním sdělení od Tequio",
++    "profile_update_failed": "Údaje se nepodařilo uložit. Zkuste to znovu.",
++    "workspace_create_title": "Vytvořte pracovní prostor",
++    "workspace_join_title": "Přijměte pozvánku nebo vytvořte prostor",
++    "workspace_subtitle": "Všechna práce na jednom místě.",
++    "workspace_name_placeholder": "Název pracovního prostoru",
++    "create_new_workspace": "Vytvořit nový prostor",
++    "no_invitations": "Žádné pozvánky",
++    "team_title": "Pozvěte svůj tým",
++    "team_description": "Tequio nejlépe funguje v týmu. Pozvěte je hned.",
++    "email_column": "E-mail",
++    "role_column": "Role",
++    "add_another": "Přidat další",
++    "do_it_later": "Udělám to později",
++    "invalid_email": "Neplatný e-mail",
++    "invitations_sent": "Pozvánky odeslány.",
++    "invitations_failed": "Pozvánky se nepodařilo odeslat.",
++    "finish_failed": "Nastavení se nepodařilo dokončit. Zkuste to později.",
++    "wrong_email": "Špatný e-mail?",
++    "switch_account": "Přepnout účet",
++    "switching": "Přepínání…",
++    "switch_account_description": "Pokud jste se omylem zaregistrovali s {email}, zde můžete přepnout účet.",
++    "sign_out_failed": "Odhlášení se nezdařilo. Zkuste to znovu.",
++    "step_progress": "Krok {current} z {total}"
    }
  }
 diff --git a/packages/i18n/src/locales/cs/empty-state.json b/packages/i18n/src/locales/cs/empty-state.json
@@ -196969,7 +197604,7 @@ index 66379d4..2c778e6 100644
        "fixed_schedule": "Fester Zeitplan",
        "schedule": {
 diff --git a/packages/i18n/src/locales/de/common.json b/packages/i18n/src/locales/de/common.json
-index 1e18d4e..0aeb7dd 100644
+index 1e18d4e..4ab0340 100644
 --- a/packages/i18n/src/locales/de/common.json
 +++ b/packages/i18n/src/locales/de/common.json
 @@ -244,7 +244,7 @@
@@ -196990,7 +197625,7 @@ index 1e18d4e..0aeb7dd 100644
      "choose_view_logs_from_setup_sh_and_docker_logs_to_be_sure": "Wählen Sie View Logs aus setup.sh und Docker-Logs, um sicherzugehen."
    },
    "customize_navigation": "Navigation anpassen",
-@@ -867,5 +867,448 @@
+@@ -867,5 +867,491 @@
        "description": "Arbeitselemente in JSON exportieren.",
        "short_description": "Als JSON exportieren"
      }
@@ -197436,7 +198071,50 @@ index 1e18d4e..0aeb7dd 100644
 +    "remove_attachment": "Entfernen",
 +    "attachment_error": "Hochladen fehlgeschlagen",
 +    "attachment_failed": "{name} konnte nicht hochgeladen werden",
-+    "attachment_too_large": "{name} überschreitet die Größenbeschränkung"
++    "attachment_too_large": "{name} überschreitet die Größenbeschränkung",
++    "open": "Öffnen"
++  },
++  "onboarding": {
++    "profile_title": "Erstelle dein Profil.",
++    "profile_description": "So erscheinst du in Tequio.",
++    "upload_image": "Bild hochladen",
++    "change_image": "Bild ändern",
++    "name_label": "Name",
++    "name_required": "Name ist erforderlich",
++    "name_max_length": "Der Name darf höchstens 50 Zeichen haben.",
++    "name_placeholder": "Vollständigen Namen eingeben",
++    "continue_action": "Weiter",
++    "set_password": "Passwort festlegen",
++    "optional": "(Optional)",
++    "password_placeholder": "Passwort festlegen",
++    "confirm_password": "Passwort bestätigen",
++    "confirm_password_placeholder": "Passwort bestätigen",
++    "passwords_match": "Passwörter stimmen überein",
++    "passwords_no_match": "Passwörter stimmen nicht überein",
++    "marketing_consent": "Ich möchte Mitteilungen von Tequio erhalten",
++    "profile_update_failed": "Deine Daten konnten nicht gespeichert werden. Bitte erneut versuchen.",
++    "workspace_create_title": "Erstelle deinen Workspace",
++    "workspace_join_title": "Einladung annehmen oder Workspace erstellen",
++    "workspace_subtitle": "Deine ganze Arbeit an einem Ort.",
++    "workspace_name_placeholder": "Workspace-Namen eingeben",
++    "create_new_workspace": "Neuen Workspace erstellen",
++    "no_invitations": "Keine Einladungen",
++    "team_title": "Lade dein Team ein",
++    "team_description": "Tequio entfaltet sich im Team. Lade sie jetzt ein.",
++    "email_column": "E-Mail",
++    "role_column": "Rolle",
++    "add_another": "Weitere hinzufügen",
++    "do_it_later": "Später erledigen",
++    "invalid_email": "Ungültige E-Mail-Adresse",
++    "invitations_sent": "Einladungen gesendet.",
++    "invitations_failed": "Einladungen konnten nicht gesendet werden.",
++    "finish_failed": "Einrichtung konnte nicht abgeschlossen werden. Bitte später erneut versuchen.",
++    "wrong_email": "Falsche E-Mail-Adresse?",
++    "switch_account": "Konto wechseln",
++    "switching": "Wird gewechselt…",
++    "switch_account_description": "Wenn du dich versehentlich mit {email} registriert hast, kannst du hier das Konto wechseln.",
++    "sign_out_failed": "Abmelden fehlgeschlagen. Bitte erneut versuchen.",
++    "step_progress": "Schritt {current} von {total}"
    }
  }
 diff --git a/packages/i18n/src/locales/de/empty-state.json b/packages/i18n/src/locales/de/empty-state.json
@@ -198130,7 +198808,7 @@ index 64779c7..c549990 100644
        "fixed_schedule": "Fixed schedule",
        "schedule": {
 diff --git a/packages/i18n/src/locales/en/common.json b/packages/i18n/src/locales/en/common.json
-index a138304..654d647 100644
+index a138304..a6b0a49 100644
 --- a/packages/i18n/src/locales/en/common.json
 +++ b/packages/i18n/src/locales/en/common.json
 @@ -244,7 +244,7 @@
@@ -198160,7 +198838,7 @@ index a138304..654d647 100644
    "in_app": "In-app",
    "forms": "Forms",
    "milestones": "Milestones",
-@@ -867,5 +867,448 @@
+@@ -867,5 +867,491 @@
        "description": "Export work items to a JSON file.",
        "short_description": "Export as json"
      }
@@ -198606,7 +199284,50 @@ index a138304..654d647 100644
 +    "remove_attachment": "Remove",
 +    "attachment_error": "Upload failed",
 +    "attachment_failed": "Could not upload {name}",
-+    "attachment_too_large": "{name} exceeds the size limit"
++    "attachment_too_large": "{name} exceeds the size limit",
++    "open": "Open"
++  },
++  "onboarding": {
++    "profile_title": "Create your profile.",
++    "profile_description": "This is how you will appear in Tequio.",
++    "upload_image": "Upload image",
++    "change_image": "Change image",
++    "name_label": "Name",
++    "name_required": "Name is required",
++    "name_max_length": "Name must be within 50 characters.",
++    "name_placeholder": "Enter your full name",
++    "continue_action": "Continue",
++    "set_password": "Set a password",
++    "optional": "(Optional)",
++    "password_placeholder": "Set a password",
++    "confirm_password": "Confirm password",
++    "confirm_password_placeholder": "Confirm password",
++    "passwords_match": "Passwords match",
++    "passwords_no_match": "Passwords do not match",
++    "marketing_consent": "I agree to receive communications from Tequio",
++    "profile_update_failed": "Could not save your details. Please try again.",
++    "workspace_create_title": "Create your workspace",
++    "workspace_join_title": "Join invites or create a workspace",
++    "workspace_subtitle": "All your work — unified.",
++    "workspace_name_placeholder": "Enter workspace name",
++    "create_new_workspace": "Create new workspace",
++    "no_invitations": "No invitations found",
++    "team_title": "Invite your teammates",
++    "team_description": "Work in Tequio happens best with your team. Invite them now to use Tequio to its potential.",
++    "email_column": "Email",
++    "role_column": "Role",
++    "add_another": "Add another",
++    "do_it_later": "I’ll do it later",
++    "invalid_email": "Invalid email address",
++    "invitations_sent": "Invitations sent successfully.",
++    "invitations_failed": "Could not send the invitations.",
++    "finish_failed": "Could not finish onboarding. Please try again later.",
++    "wrong_email": "Wrong e-mail address?",
++    "switch_account": "Switch account",
++    "switching": "Switching…",
++    "switch_account_description": "If you signed up with {email} by mistake, you can switch to a different account here.",
++    "sign_out_failed": "Could not sign out. Please try again.",
++    "step_progress": "Step {current} of {total}"
    }
  }
 diff --git a/packages/i18n/src/locales/en/empty-state.json b/packages/i18n/src/locales/en/empty-state.json
@@ -199374,7 +200095,7 @@ index f49d529..b042251 100644
        "fixed_schedule": "Horario fijo",
        "schedule": {
 diff --git a/packages/i18n/src/locales/es/common.json b/packages/i18n/src/locales/es/common.json
-index 64440c9..a90f8d7 100644
+index 64440c9..41e2cdb 100644
 --- a/packages/i18n/src/locales/es/common.json
 +++ b/packages/i18n/src/locales/es/common.json
 @@ -145,7 +145,7 @@
@@ -199413,7 +200134,7 @@ index 64440c9..a90f8d7 100644
    "in_app": "En la aplicación",
    "forms": "Formularios",
    "milestones": "Hitos",
-@@ -867,5 +867,448 @@
+@@ -867,5 +867,491 @@
        "description": "Exporta elementos de trabajo a un archivo JSON.",
        "short_description": "Exportar como json"
      }
@@ -199859,7 +200580,50 @@ index 64440c9..a90f8d7 100644
 +    "remove_attachment": "Quitar",
 +    "attachment_error": "Falló la subida",
 +    "attachment_failed": "No se pudo subir {name}",
-+    "attachment_too_large": "{name} supera el límite de tamaño"
++    "attachment_too_large": "{name} supera el límite de tamaño",
++    "open": "Abrir"
++  },
++  "onboarding": {
++    "profile_title": "Crea tu perfil.",
++    "profile_description": "Así te verán en Tequio.",
++    "upload_image": "Subir imagen",
++    "change_image": "Cambiar imagen",
++    "name_label": "Nombre",
++    "name_required": "El nombre es obligatorio",
++    "name_max_length": "El nombre no puede superar los 50 caracteres.",
++    "name_placeholder": "Escribe tu nombre completo",
++    "continue_action": "Continuar",
++    "set_password": "Poner una contraseña",
++    "optional": "(Opcional)",
++    "password_placeholder": "Poner una contraseña",
++    "confirm_password": "Confirmar contraseña",
++    "confirm_password_placeholder": "Confirmar contraseña",
++    "passwords_match": "Las contraseñas coinciden",
++    "passwords_no_match": "Las contraseñas no coinciden",
++    "marketing_consent": "Acepto recibir comunicaciones de Tequio",
++    "profile_update_failed": "No se pudieron guardar tus datos. Inténtalo de nuevo.",
++    "workspace_create_title": "Crea tu espacio de trabajo",
++    "workspace_join_title": "Acepta una invitación o crea un espacio",
++    "workspace_subtitle": "Todo tu trabajo, en un mismo sitio.",
++    "workspace_name_placeholder": "Nombre del espacio de trabajo",
++    "create_new_workspace": "Crear un espacio nuevo",
++    "no_invitations": "No hay invitaciones",
++    "team_title": "Invita a tu equipo",
++    "team_description": "Tequio se aprovecha mejor en equipo. Invítalos ahora.",
++    "email_column": "Correo",
++    "role_column": "Rol",
++    "add_another": "Agregar otro",
++    "do_it_later": "Lo haré más tarde",
++    "invalid_email": "Correo no válido",
++    "invitations_sent": "Invitaciones enviadas.",
++    "invitations_failed": "No se pudieron enviar las invitaciones.",
++    "finish_failed": "No se pudo terminar la configuración. Inténtalo más tarde.",
++    "wrong_email": "¿Correo equivocado?",
++    "switch_account": "Cambiar de cuenta",
++    "switching": "Cambiando…",
++    "switch_account_description": "Si te registraste con {email} por error, aquí puedes cambiar a otra cuenta.",
++    "sign_out_failed": "No se pudo cerrar la sesión. Inténtalo de nuevo.",
++    "step_progress": "Paso {current} de {total}"
    }
  }
 diff --git a/packages/i18n/src/locales/es/empty-state.json b/packages/i18n/src/locales/es/empty-state.json
@@ -200618,7 +201382,7 @@ index 5343f12..1a31636 100644
        "fixed_schedule": "Horaire fixe",
        "schedule": {
 diff --git a/packages/i18n/src/locales/fr/common.json b/packages/i18n/src/locales/fr/common.json
-index a94ab8a..85d36b4 100644
+index a94ab8a..63ac42f 100644
 --- a/packages/i18n/src/locales/fr/common.json
 +++ b/packages/i18n/src/locales/fr/common.json
 @@ -244,7 +244,7 @@
@@ -200648,7 +201412,7 @@ index a94ab8a..85d36b4 100644
    "in_app": "Dans l'application",
    "forms": "Formulaires",
    "milestones": "Jalons",
-@@ -867,5 +867,448 @@
+@@ -867,5 +867,491 @@
        "description": "Exportez les éléments de travail vers un fichier JSON.",
        "short_description": "Exporter en json"
      }
@@ -201094,7 +201858,50 @@ index a94ab8a..85d36b4 100644
 +    "remove_attachment": "Retirer",
 +    "attachment_error": "Échec du téléversement",
 +    "attachment_failed": "Impossible de téléverser {name}",
-+    "attachment_too_large": "{name} dépasse la taille limite"
++    "attachment_too_large": "{name} dépasse la taille limite",
++    "open": "Ouvrir"
++  },
++  "onboarding": {
++    "profile_title": "Créez votre profil.",
++    "profile_description": "Voici comment vous apparaîtrez dans Tequio.",
++    "upload_image": "Charger une image",
++    "change_image": "Changer l’image",
++    "name_label": "Nom",
++    "name_required": "Le nom est obligatoire",
++    "name_max_length": "Le nom ne doit pas dépasser 50 caractères.",
++    "name_placeholder": "Saisissez votre nom complet",
++    "continue_action": "Continuer",
++    "set_password": "Définir un mot de passe",
++    "optional": "(Facultatif)",
++    "password_placeholder": "Définir un mot de passe",
++    "confirm_password": "Confirmer le mot de passe",
++    "confirm_password_placeholder": "Confirmer le mot de passe",
++    "passwords_match": "Les mots de passe correspondent",
++    "passwords_no_match": "Les mots de passe ne correspondent pas",
++    "marketing_consent": "J’accepte de recevoir des communications de Tequio",
++    "profile_update_failed": "Impossible d’enregistrer vos informations. Réessayez.",
++    "workspace_create_title": "Créez votre espace de travail",
++    "workspace_join_title": "Rejoignez une invitation ou créez un espace",
++    "workspace_subtitle": "Tout votre travail, réuni.",
++    "workspace_name_placeholder": "Nom de l’espace de travail",
++    "create_new_workspace": "Créer un nouvel espace",
++    "no_invitations": "Aucune invitation",
++    "team_title": "Invitez votre équipe",
++    "team_description": "Tequio donne le meilleur en équipe. Invitez-les dès maintenant.",
++    "email_column": "E-mail",
++    "role_column": "Rôle",
++    "add_another": "Ajouter",
++    "do_it_later": "Je le ferai plus tard",
++    "invalid_email": "Adresse e-mail invalide",
++    "invitations_sent": "Invitations envoyées.",
++    "invitations_failed": "Impossible d’envoyer les invitations.",
++    "finish_failed": "Impossible de terminer la configuration. Réessayez plus tard.",
++    "wrong_email": "Mauvaise adresse e-mail ?",
++    "switch_account": "Changer de compte",
++    "switching": "Changement…",
++    "switch_account_description": "Si vous vous êtes inscrit avec {email} par erreur, vous pouvez changer de compte ici.",
++    "sign_out_failed": "Impossible de se déconnecter. Réessayez.",
++    "step_progress": "Étape {current} sur {total}"
    }
  }
 diff --git a/packages/i18n/src/locales/fr/empty-state.json b/packages/i18n/src/locales/fr/empty-state.json
@@ -201851,7 +202658,7 @@ index 2fd8636..c6ce762 100644
        "fixed_schedule": "Jadwal tetap",
        "schedule": {
 diff --git a/packages/i18n/src/locales/id/common.json b/packages/i18n/src/locales/id/common.json
-index 7d26685..8e6e290 100644
+index 7d26685..06ebac5 100644
 --- a/packages/i18n/src/locales/id/common.json
 +++ b/packages/i18n/src/locales/id/common.json
 @@ -244,7 +244,7 @@
@@ -201872,7 +202679,7 @@ index 7d26685..8e6e290 100644
      "choose_view_logs_from_setup_sh_and_docker_logs_to_be_sure": "Pilih View Logs dari setup.sh dan log Docker untuk memastikan."
    },
    "customize_navigation": "Sesuaikan navigasi",
-@@ -867,5 +867,448 @@
+@@ -867,5 +867,491 @@
        "description": "Ekspor item kerja ke file JSON.",
        "short_description": "Ekspor sebagai json"
      }
@@ -202318,7 +203125,50 @@ index 7d26685..8e6e290 100644
 +    "remove_attachment": "Hapus",
 +    "attachment_error": "Unggahan gagal",
 +    "attachment_failed": "Tidak dapat mengunggah {name}",
-+    "attachment_too_large": "{name} melebihi batas ukuran"
++    "attachment_too_large": "{name} melebihi batas ukuran",
++    "open": "Buka"
++  },
++  "onboarding": {
++    "profile_title": "Buat profilmu.",
++    "profile_description": "Beginilah kamu akan terlihat di Tequio.",
++    "upload_image": "Unggah gambar",
++    "change_image": "Ganti gambar",
++    "name_label": "Nama",
++    "name_required": "Nama wajib diisi",
++    "name_max_length": "Nama maksimal 50 karakter.",
++    "name_placeholder": "Masukkan nama lengkap",
++    "continue_action": "Lanjut",
++    "set_password": "Atur kata sandi",
++    "optional": "(Opsional)",
++    "password_placeholder": "Atur kata sandi",
++    "confirm_password": "Konfirmasi kata sandi",
++    "confirm_password_placeholder": "Konfirmasi kata sandi",
++    "passwords_match": "Kata sandi cocok",
++    "passwords_no_match": "Kata sandi tidak cocok",
++    "marketing_consent": "Saya bersedia menerima komunikasi dari Tequio",
++    "profile_update_failed": "Gagal menyimpan datamu. Coba lagi.",
++    "workspace_create_title": "Buat ruang kerjamu",
++    "workspace_join_title": "Terima undangan atau buat ruang kerja",
++    "workspace_subtitle": "Semua pekerjaanmu dalam satu tempat.",
++    "workspace_name_placeholder": "Nama ruang kerja",
++    "create_new_workspace": "Buat ruang kerja baru",
++    "no_invitations": "Tidak ada undangan",
++    "team_title": "Undang timmu",
++    "team_description": "Tequio paling optimal bersama tim. Undang mereka sekarang.",
++    "email_column": "Email",
++    "role_column": "Peran",
++    "add_another": "Tambah lagi",
++    "do_it_later": "Nanti saja",
++    "invalid_email": "Alamat email tidak valid",
++    "invitations_sent": "Undangan terkirim.",
++    "invitations_failed": "Gagal mengirim undangan.",
++    "finish_failed": "Gagal menyelesaikan penyiapan. Coba lagi nanti.",
++    "wrong_email": "Salah alamat email?",
++    "switch_account": "Ganti akun",
++    "switching": "Mengganti…",
++    "switch_account_description": "Jika kamu terdaftar dengan {email} secara keliru, kamu bisa ganti akun di sini.",
++    "sign_out_failed": "Gagal keluar. Coba lagi.",
++    "step_progress": "Langkah {current} dari {total}"
    }
  }
 diff --git a/packages/i18n/src/locales/id/empty-state.json b/packages/i18n/src/locales/id/empty-state.json
@@ -203076,7 +203926,7 @@ index f279366..b302f18 100644
        "fixed_schedule": "Pianificazione fissa",
        "schedule": {
 diff --git a/packages/i18n/src/locales/it/common.json b/packages/i18n/src/locales/it/common.json
-index 6fda1b0..ff1f907 100644
+index 6fda1b0..0499d10 100644
 --- a/packages/i18n/src/locales/it/common.json
 +++ b/packages/i18n/src/locales/it/common.json
 @@ -244,7 +244,7 @@
@@ -203106,7 +203956,7 @@ index 6fda1b0..ff1f907 100644
    "in_app": "In-app",
    "forms": "Moduli",
    "milestones": "Milestone",
-@@ -867,5 +867,448 @@
+@@ -867,5 +867,491 @@
        "description": "Esporta elementi di lavoro in un file JSON.",
        "short_description": "Esporta come JSON"
      }
@@ -203552,7 +204402,50 @@ index 6fda1b0..ff1f907 100644
 +    "remove_attachment": "Rimuovi",
 +    "attachment_error": "Caricamento non riuscito",
 +    "attachment_failed": "Impossibile caricare {name}",
-+    "attachment_too_large": "{name} supera il limite di dimensione"
++    "attachment_too_large": "{name} supera il limite di dimensione",
++    "open": "Apri"
++  },
++  "onboarding": {
++    "profile_title": "Crea il tuo profilo.",
++    "profile_description": "Così apparirai in Tequio.",
++    "upload_image": "Carica immagine",
++    "change_image": "Cambia immagine",
++    "name_label": "Nome",
++    "name_required": "Il nome è obbligatorio",
++    "name_max_length": "Il nome non può superare i 50 caratteri.",
++    "name_placeholder": "Inserisci il tuo nome completo",
++    "continue_action": "Continua",
++    "set_password": "Imposta una password",
++    "optional": "(Facoltativo)",
++    "password_placeholder": "Imposta una password",
++    "confirm_password": "Conferma password",
++    "confirm_password_placeholder": "Conferma password",
++    "passwords_match": "Le password coincidono",
++    "passwords_no_match": "Le password non coincidono",
++    "marketing_consent": "Accetto di ricevere comunicazioni da Tequio",
++    "profile_update_failed": "Impossibile salvare i tuoi dati. Riprova.",
++    "workspace_create_title": "Crea il tuo spazio di lavoro",
++    "workspace_join_title": "Accetta un invito o crea uno spazio",
++    "workspace_subtitle": "Tutto il tuo lavoro, in un unico posto.",
++    "workspace_name_placeholder": "Nome dello spazio di lavoro",
++    "create_new_workspace": "Crea un nuovo spazio",
++    "no_invitations": "Nessun invito",
++    "team_title": "Invita il tuo team",
++    "team_description": "Tequio rende al meglio in team. Invitali ora.",
++    "email_column": "Email",
++    "role_column": "Ruolo",
++    "add_another": "Aggiungi",
++    "do_it_later": "Lo farò più tardi",
++    "invalid_email": "Indirizzo email non valido",
++    "invitations_sent": "Inviti inviati.",
++    "invitations_failed": "Impossibile inviare gli inviti.",
++    "finish_failed": "Impossibile completare la configurazione. Riprova più tardi.",
++    "wrong_email": "Email sbagliata?",
++    "switch_account": "Cambia account",
++    "switching": "Cambio in corso…",
++    "switch_account_description": "Se ti sei registrato con {email} per errore, qui puoi passare a un altro account.",
++    "sign_out_failed": "Disconnessione non riuscita. Riprova.",
++    "step_progress": "Passo {current} di {total}"
    }
  }
 diff --git a/packages/i18n/src/locales/it/empty-state.json b/packages/i18n/src/locales/it/empty-state.json
@@ -204251,7 +205144,7 @@ index d3dd8d3..0f5426b 100644
            }
          }
 diff --git a/packages/i18n/src/locales/ja/common.json b/packages/i18n/src/locales/ja/common.json
-index 4899411..13f710b 100644
+index 4899411..6631cb8 100644
 --- a/packages/i18n/src/locales/ja/common.json
 +++ b/packages/i18n/src/locales/ja/common.json
 @@ -244,7 +244,7 @@
@@ -204263,7 +205156,7 @@ index 4899411..13f710b 100644
    "please_select_at_least_one_invitation": "少なくとも1つの招待を選択してください。",
    "please_select_at_least_one_invitation_description": "ワークスペースに参加するには少なくとも1つの招待を選択してください。",
    "we_see_that_someone_has_invited_you_to_join_a_workspace": "誰かがあなたをワークスペースに招待しています",
-@@ -867,5 +867,448 @@
+@@ -867,5 +867,491 @@
        "description": "作業項目をJSONファイルにエクスポートします。",
        "short_description": "JSONとしてエクスポート"
      }
@@ -204709,7 +205602,50 @@ index 4899411..13f710b 100644
 +    "remove_attachment": "削除",
 +    "attachment_error": "アップロードに失敗しました",
 +    "attachment_failed": "{name}をアップロードできませんでした",
-+    "attachment_too_large": "{name}はサイズ制限を超えています"
++    "attachment_too_large": "{name}はサイズ制限を超えています",
++    "open": "開く"
++  },
++  "onboarding": {
++    "profile_title": "プロフィールを作成",
++    "profile_description": "Tequio ではこのように表示されます。",
++    "upload_image": "画像をアップロード",
++    "change_image": "画像を変更",
++    "name_label": "名前",
++    "name_required": "名前は必須です",
++    "name_max_length": "名前は 50 文字以内で入力してください。",
++    "name_placeholder": "フルネームを入力",
++    "continue_action": "次へ",
++    "set_password": "パスワードを設定",
++    "optional": "（任意）",
++    "password_placeholder": "パスワードを設定",
++    "confirm_password": "パスワードの確認",
++    "confirm_password_placeholder": "パスワードの確認",
++    "passwords_match": "パスワードが一致しました",
++    "passwords_no_match": "パスワードが一致しません",
++    "marketing_consent": "Tequio からのお知らせを受け取る",
++    "profile_update_failed": "情報を保存できませんでした。もう一度お試しください。",
++    "workspace_create_title": "ワークスペースを作成",
++    "workspace_join_title": "招待を受けるかワークスペースを作成",
++    "workspace_subtitle": "すべての仕事をひとつに。",
++    "workspace_name_placeholder": "ワークスペース名",
++    "create_new_workspace": "新しいワークスペースを作成",
++    "no_invitations": "招待はありません",
++    "team_title": "チームを招待",
++    "team_description": "Tequio はチームで使うと力を発揮します。今すぐ招待しましょう。",
++    "email_column": "メール",
++    "role_column": "ロール",
++    "add_another": "さらに追加",
++    "do_it_later": "あとで行う",
++    "invalid_email": "メールアドレスが正しくありません",
++    "invitations_sent": "招待を送信しました。",
++    "invitations_failed": "招待を送信できませんでした。",
++    "finish_failed": "セットアップを完了できませんでした。時間をおいてお試しください。",
++    "wrong_email": "メールアドレスが違いますか？",
++    "switch_account": "アカウントを切り替え",
++    "switching": "切り替え中…",
++    "switch_account_description": "誤って {email} で登録した場合は、ここで別のアカウントに切り替えられます。",
++    "sign_out_failed": "サインアウトできませんでした。もう一度お試しください。",
++    "step_progress": "ステップ {current}/{total}"
    }
  }
 diff --git a/packages/i18n/src/locales/ja/integration.json b/packages/i18n/src/locales/ja/integration.json
@@ -204952,7 +205888,7 @@ index 8d77f70..279ae09 100644
        "fixed_schedule": "고정 일정",
        "schedule": {
 diff --git a/packages/i18n/src/locales/ko/common.json b/packages/i18n/src/locales/ko/common.json
-index 73eea6b..f97f64a 100644
+index 73eea6b..931a3d7 100644
 --- a/packages/i18n/src/locales/ko/common.json
 +++ b/packages/i18n/src/locales/ko/common.json
 @@ -244,7 +244,7 @@
@@ -204973,7 +205909,7 @@ index 73eea6b..f97f64a 100644
      "choose_view_logs_from_setup_sh_and_docker_logs_to_be_sure": "확실히 하려면 setup.sh와 Docker 로그에서 View Logs를 선택하세요."
    },
    "customize_navigation": "내비게이션 사용자 지정",
-@@ -867,5 +867,448 @@
+@@ -867,5 +867,491 @@
        "description": "작업 항목을 JSON 파일로 내보냅니다.",
        "short_description": "JSON으로 내보내기"
      }
@@ -205419,7 +206355,50 @@ index 73eea6b..f97f64a 100644
 +    "remove_attachment": "제거",
 +    "attachment_error": "업로드에 실패했습니다",
 +    "attachment_failed": "{name}을(를) 업로드할 수 없습니다",
-+    "attachment_too_large": "{name}이(가) 크기 제한을 초과합니다"
++    "attachment_too_large": "{name}이(가) 크기 제한을 초과합니다",
++    "open": "열기"
++  },
++  "onboarding": {
++    "profile_title": "프로필 만들기",
++    "profile_description": "Tequio에서 이렇게 표시됩니다.",
++    "upload_image": "이미지 업로드",
++    "change_image": "이미지 변경",
++    "name_label": "이름",
++    "name_required": "이름을 입력하세요",
++    "name_max_length": "이름은 50자 이내여야 합니다.",
++    "name_placeholder": "전체 이름 입력",
++    "continue_action": "계속",
++    "set_password": "비밀번호 설정",
++    "optional": "(선택)",
++    "password_placeholder": "비밀번호 설정",
++    "confirm_password": "비밀번호 확인",
++    "confirm_password_placeholder": "비밀번호 확인",
++    "passwords_match": "비밀번호가 일치합니다",
++    "passwords_no_match": "비밀번호가 일치하지 않습니다",
++    "marketing_consent": "Tequio의 소식을 받겠습니다",
++    "profile_update_failed": "정보를 저장하지 못했습니다. 다시 시도하세요.",
++    "workspace_create_title": "워크스페이스 만들기",
++    "workspace_join_title": "초대를 수락하거나 워크스페이스 만들기",
++    "workspace_subtitle": "모든 업무를 한곳에.",
++    "workspace_name_placeholder": "워크스페이스 이름",
++    "create_new_workspace": "새 워크스페이스 만들기",
++    "no_invitations": "초대가 없습니다",
++    "team_title": "팀 초대하기",
++    "team_description": "Tequio는 팀과 함께 쓸 때 가장 좋습니다. 지금 초대하세요.",
++    "email_column": "이메일",
++    "role_column": "역할",
++    "add_another": "추가",
++    "do_it_later": "나중에 하기",
++    "invalid_email": "올바르지 않은 이메일",
++    "invitations_sent": "초대를 보냈습니다.",
++    "invitations_failed": "초대를 보내지 못했습니다.",
++    "finish_failed": "설정을 마치지 못했습니다. 나중에 다시 시도하세요.",
++    "wrong_email": "이메일이 잘못되었나요?",
++    "switch_account": "계정 전환",
++    "switching": "전환 중…",
++    "switch_account_description": "실수로 {email}(으)로 가입했다면 여기서 다른 계정으로 전환할 수 있습니다.",
++    "sign_out_failed": "로그아웃하지 못했습니다. 다시 시도하세요.",
++    "step_progress": "{total}단계 중 {current}단계"
    }
  }
 diff --git a/packages/i18n/src/locales/ko/empty-state.json b/packages/i18n/src/locales/ko/empty-state.json
@@ -205815,7 +206794,7 @@ index 0632d1f..6396693 100644
        "fixed_schedule": "Stały harmonogram",
        "schedule": {
 diff --git a/packages/i18n/src/locales/pl/common.json b/packages/i18n/src/locales/pl/common.json
-index 4c4850c..551989f 100644
+index 4c4850c..5c7f736 100644
 --- a/packages/i18n/src/locales/pl/common.json
 +++ b/packages/i18n/src/locales/pl/common.json
 @@ -244,7 +244,7 @@
@@ -205836,7 +206815,7 @@ index 4c4850c..551989f 100644
      "choose_view_logs_from_setup_sh_and_docker_logs_to_be_sure": "Wybierz View Logs z setup.sh i logów Docker, aby mieć pewność."
    },
    "customize_navigation": "Dostosuj nawigację",
-@@ -867,5 +867,448 @@
+@@ -867,5 +867,491 @@
        "description": "Eksportuj elementy do pliku JSON.",
        "short_description": "Eksportuj jako JSON"
      }
@@ -206282,7 +207261,50 @@ index 4c4850c..551989f 100644
 +    "remove_attachment": "Usuń",
 +    "attachment_error": "Przesyłanie nie powiodło się",
 +    "attachment_failed": "Nie udało się przesłać {name}",
-+    "attachment_too_large": "{name} przekracza limit rozmiaru"
++    "attachment_too_large": "{name} przekracza limit rozmiaru",
++    "open": "Otwórz"
++  },
++  "onboarding": {
++    "profile_title": "Utwórz swój profil.",
++    "profile_description": "Tak będziesz widoczny w Tequio.",
++    "upload_image": "Prześlij obraz",
++    "change_image": "Zmień obraz",
++    "name_label": "Imię",
++    "name_required": "Imię jest wymagane",
++    "name_max_length": "Imię może mieć maksymalnie 50 znaków.",
++    "name_placeholder": "Wpisz imię i nazwisko",
++    "continue_action": "Dalej",
++    "set_password": "Ustaw hasło",
++    "optional": "(Opcjonalnie)",
++    "password_placeholder": "Ustaw hasło",
++    "confirm_password": "Potwierdź hasło",
++    "confirm_password_placeholder": "Potwierdź hasło",
++    "passwords_match": "Hasła są zgodne",
++    "passwords_no_match": "Hasła nie są zgodne",
++    "marketing_consent": "Zgadzam się na otrzymywanie wiadomości od Tequio",
++    "profile_update_failed": "Nie udało się zapisać danych. Spróbuj ponownie.",
++    "workspace_create_title": "Utwórz przestrzeń roboczą",
++    "workspace_join_title": "Przyjmij zaproszenie lub utwórz przestrzeń",
++    "workspace_subtitle": "Cała praca w jednym miejscu.",
++    "workspace_name_placeholder": "Nazwa przestrzeni roboczej",
++    "create_new_workspace": "Utwórz nową przestrzeń",
++    "no_invitations": "Brak zaproszeń",
++    "team_title": "Zaproś zespół",
++    "team_description": "Tequio najlepiej działa w zespole. Zaproś ich teraz.",
++    "email_column": "E-mail",
++    "role_column": "Rola",
++    "add_another": "Dodaj kolejny",
++    "do_it_later": "Zrobię to później",
++    "invalid_email": "Nieprawidłowy adres e-mail",
++    "invitations_sent": "Zaproszenia wysłane.",
++    "invitations_failed": "Nie udało się wysłać zaproszeń.",
++    "finish_failed": "Nie udało się zakończyć konfiguracji. Spróbuj później.",
++    "wrong_email": "Zły adres e-mail?",
++    "switch_account": "Zmień konto",
++    "switching": "Zmienianie…",
++    "switch_account_description": "Jeśli zarejestrowałeś się przez pomyłkę na {email}, tutaj zmienisz konto.",
++    "sign_out_failed": "Nie udało się wylogować. Spróbuj ponownie.",
++    "step_progress": "Krok {current} z {total}"
    }
  }
 diff --git a/packages/i18n/src/locales/pl/empty-state.json b/packages/i18n/src/locales/pl/empty-state.json
@@ -206985,7 +208007,7 @@ index 3eab73f..c2c7c08 100644
        "fixed_schedule": "Agendamento fixo",
        "schedule": {
 diff --git a/packages/i18n/src/locales/pt-BR/common.json b/packages/i18n/src/locales/pt-BR/common.json
-index 565e85d..d11633d 100644
+index 565e85d..4d87d3b 100644
 --- a/packages/i18n/src/locales/pt-BR/common.json
 +++ b/packages/i18n/src/locales/pt-BR/common.json
 @@ -244,7 +244,7 @@
@@ -207006,7 +208028,7 @@ index 565e85d..d11633d 100644
      "choose_view_logs_from_setup_sh_and_docker_logs_to_be_sure": "Escolha View Logs do setup.sh e logs do Docker para ter certeza."
    },
    "customize_navigation": "Personalizar navegação",
-@@ -867,5 +867,448 @@
+@@ -867,5 +867,491 @@
        "description": "Exporte itens de trabalho para um arquivo JSON.",
        "short_description": "Exportar como JSON"
      }
@@ -207452,7 +208474,50 @@ index 565e85d..d11633d 100644
 +    "remove_attachment": "Remover",
 +    "attachment_error": "Falha no envio",
 +    "attachment_failed": "Não foi possível enviar {name}",
-+    "attachment_too_large": "{name} excede o limite de tamanho"
++    "attachment_too_large": "{name} excede o limite de tamanho",
++    "open": "Abrir"
++  },
++  "onboarding": {
++    "profile_title": "Crie seu perfil.",
++    "profile_description": "É assim que você aparecerá no Tequio.",
++    "upload_image": "Enviar imagem",
++    "change_image": "Alterar imagem",
++    "name_label": "Nome",
++    "name_required": "O nome é obrigatório",
++    "name_max_length": "O nome deve ter no máximo 50 caracteres.",
++    "name_placeholder": "Digite seu nome completo",
++    "continue_action": "Continuar",
++    "set_password": "Definir uma senha",
++    "optional": "(Opcional)",
++    "password_placeholder": "Definir uma senha",
++    "confirm_password": "Confirmar senha",
++    "confirm_password_placeholder": "Confirmar senha",
++    "passwords_match": "As senhas coincidem",
++    "passwords_no_match": "As senhas não coincidem",
++    "marketing_consent": "Aceito receber comunicações do Tequio",
++    "profile_update_failed": "Não foi possível salvar seus dados. Tente novamente.",
++    "workspace_create_title": "Crie seu espaço de trabalho",
++    "workspace_join_title": "Aceite um convite ou crie um espaço",
++    "workspace_subtitle": "Todo o seu trabalho em um só lugar.",
++    "workspace_name_placeholder": "Nome do espaço de trabalho",
++    "create_new_workspace": "Criar novo espaço",
++    "no_invitations": "Nenhum convite encontrado",
++    "team_title": "Convide seu time",
++    "team_description": "O Tequio rende mais em equipe. Convide-os agora.",
++    "email_column": "E-mail",
++    "role_column": "Cargo",
++    "add_another": "Adicionar outro",
++    "do_it_later": "Faço isso depois",
++    "invalid_email": "E-mail inválido",
++    "invitations_sent": "Convites enviados.",
++    "invitations_failed": "Não foi possível enviar os convites.",
++    "finish_failed": "Não foi possível concluir a configuração. Tente mais tarde.",
++    "wrong_email": "E-mail errado?",
++    "switch_account": "Trocar de conta",
++    "switching": "Trocando…",
++    "switch_account_description": "Se você se cadastrou com {email} por engano, pode trocar de conta aqui.",
++    "sign_out_failed": "Não foi possível sair. Tente novamente.",
++    "step_progress": "Etapa {current} de {total}"
    }
  }
 diff --git a/packages/i18n/src/locales/pt-BR/empty-state.json b/packages/i18n/src/locales/pt-BR/empty-state.json
@@ -208205,7 +209270,7 @@ index 509bbb1..0c56d9c 100644
        "fixed_schedule": "Program fix",
        "schedule": {
 diff --git a/packages/i18n/src/locales/ro/common.json b/packages/i18n/src/locales/ro/common.json
-index e2b44ce..f7ef22d 100644
+index e2b44ce..a8f200d 100644
 --- a/packages/i18n/src/locales/ro/common.json
 +++ b/packages/i18n/src/locales/ro/common.json
 @@ -244,7 +244,7 @@
@@ -208235,7 +209300,7 @@ index e2b44ce..f7ef22d 100644
    "in_app": "În-app",
    "forms": "Formulare",
    "milestones": "Jaloane",
-@@ -867,5 +867,448 @@
+@@ -867,5 +867,491 @@
        "description": "Exportă activitățile într-un fișier JSON.",
        "short_description": "Exportă ca JSON"
      }
@@ -208681,7 +209746,50 @@ index e2b44ce..f7ef22d 100644
 +    "remove_attachment": "Eliminați",
 +    "attachment_error": "Încărcarea a eșuat",
 +    "attachment_failed": "Fișierul {name} nu a putut fi încărcat",
-+    "attachment_too_large": "{name} depășește limita de dimensiune"
++    "attachment_too_large": "{name} depășește limita de dimensiune",
++    "open": "Deschide"
++  },
++  "onboarding": {
++    "profile_title": "Creează-ți profilul.",
++    "profile_description": "Așa vei apărea în Tequio.",
++    "upload_image": "Încarcă imagine",
++    "change_image": "Schimbă imaginea",
++    "name_label": "Nume",
++    "name_required": "Numele este obligatoriu",
++    "name_max_length": "Numele poate avea cel mult 50 de caractere.",
++    "name_placeholder": "Introdu numele complet",
++    "continue_action": "Continuă",
++    "set_password": "Setează o parolă",
++    "optional": "(Opțional)",
++    "password_placeholder": "Setează o parolă",
++    "confirm_password": "Confirmă parola",
++    "confirm_password_placeholder": "Confirmă parola",
++    "passwords_match": "Parolele coincid",
++    "passwords_no_match": "Parolele nu coincid",
++    "marketing_consent": "Sunt de acord să primesc comunicări de la Tequio",
++    "profile_update_failed": "Datele nu au putut fi salvate. Încearcă din nou.",
++    "workspace_create_title": "Creează-ți spațiul de lucru",
++    "workspace_join_title": "Acceptă o invitație sau creează un spațiu",
++    "workspace_subtitle": "Toată munca ta, într-un singur loc.",
++    "workspace_name_placeholder": "Numele spațiului de lucru",
++    "create_new_workspace": "Creează un spațiu nou",
++    "no_invitations": "Nicio invitație",
++    "team_title": "Invită-ți echipa",
++    "team_description": "Tequio dă randament în echipă. Invită-i acum.",
++    "email_column": "E-mail",
++    "role_column": "Rol",
++    "add_another": "Adaugă altul",
++    "do_it_later": "O fac mai târziu",
++    "invalid_email": "Adresă de e-mail invalidă",
++    "invitations_sent": "Invitații trimise.",
++    "invitations_failed": "Invitațiile nu au putut fi trimise.",
++    "finish_failed": "Configurarea nu a putut fi finalizată. Încearcă mai târziu.",
++    "wrong_email": "E-mail greșit?",
++    "switch_account": "Schimbă contul",
++    "switching": "Se schimbă…",
++    "switch_account_description": "Dacă te-ai înregistrat din greșeală cu {email}, aici poți schimba contul.",
++    "sign_out_failed": "Deconectarea a eșuat. Încearcă din nou.",
++    "step_progress": "Pasul {current} din {total}"
    }
  }
 diff --git a/packages/i18n/src/locales/ro/empty-state.json b/packages/i18n/src/locales/ro/empty-state.json
@@ -209432,7 +210540,7 @@ index a97e9e6..7ce3fde 100644
        "fixed_schedule": "Фиксированное расписание",
        "schedule": {
 diff --git a/packages/i18n/src/locales/ru/common.json b/packages/i18n/src/locales/ru/common.json
-index c2881e5..0628c52 100644
+index c2881e5..f8621a0 100644
 --- a/packages/i18n/src/locales/ru/common.json
 +++ b/packages/i18n/src/locales/ru/common.json
 @@ -244,7 +244,7 @@
@@ -209453,7 +210561,7 @@ index c2881e5..0628c52 100644
      "choose_view_logs_from_setup_sh_and_docker_logs_to_be_sure": "Выберите View Logs из setup.sh и логов Docker, чтобы убедиться."
    },
    "customize_navigation": "Настроить навигацию",
-@@ -867,5 +867,448 @@
+@@ -867,5 +867,491 @@
        "description": "Экспорт рабочих элементов в JSON-файл.",
        "short_description": "Экспорт в json"
      }
@@ -209899,7 +211007,50 @@ index c2881e5..0628c52 100644
 +    "remove_attachment": "Убрать",
 +    "attachment_error": "Не удалось загрузить",
 +    "attachment_failed": "Не удалось загрузить {name}",
-+    "attachment_too_large": "{name} превышает ограничение по размеру"
++    "attachment_too_large": "{name} превышает ограничение по размеру",
++    "open": "Открыть"
++  },
++  "onboarding": {
++    "profile_title": "Создайте профиль.",
++    "profile_description": "Так вас будут видеть в Tequio.",
++    "upload_image": "Загрузить изображение",
++    "change_image": "Изменить изображение",
++    "name_label": "Имя",
++    "name_required": "Укажите имя",
++    "name_max_length": "Имя не длиннее 50 символов.",
++    "name_placeholder": "Введите полное имя",
++    "continue_action": "Продолжить",
++    "set_password": "Задать пароль",
++    "optional": "(необязательно)",
++    "password_placeholder": "Задать пароль",
++    "confirm_password": "Подтвердите пароль",
++    "confirm_password_placeholder": "Подтвердите пароль",
++    "passwords_match": "Пароли совпадают",
++    "passwords_no_match": "Пароли не совпадают",
++    "marketing_consent": "Согласен получать сообщения от Tequio",
++    "profile_update_failed": "Не удалось сохранить данные. Попробуйте ещё раз.",
++    "workspace_create_title": "Создайте рабочее пространство",
++    "workspace_join_title": "Примите приглашение или создайте пространство",
++    "workspace_subtitle": "Вся работа в одном месте.",
++    "workspace_name_placeholder": "Название рабочего пространства",
++    "create_new_workspace": "Создать новое пространство",
++    "no_invitations": "Приглашений нет",
++    "team_title": "Пригласите команду",
++    "team_description": "Tequio раскрывается в команде. Пригласите коллег.",
++    "email_column": "Эл. почта",
++    "role_column": "Роль",
++    "add_another": "Добавить ещё",
++    "do_it_later": "Сделаю позже",
++    "invalid_email": "Неверный адрес эл. почты",
++    "invitations_sent": "Приглашения отправлены.",
++    "invitations_failed": "Не удалось отправить приглашения.",
++    "finish_failed": "Не удалось завершить настройку. Попробуйте позже.",
++    "wrong_email": "Не тот адрес?",
++    "switch_account": "Сменить аккаунт",
++    "switching": "Смена…",
++    "switch_account_description": "Если вы случайно зарегистрировались с {email}, здесь можно сменить аккаунт.",
++    "sign_out_failed": "Не удалось выйти. Попробуйте ещё раз.",
++    "step_progress": "Шаг {current} из {total}"
    }
  }
 diff --git a/packages/i18n/src/locales/ru/empty-state.json b/packages/i18n/src/locales/ru/empty-state.json
@@ -210639,7 +211790,7 @@ index 3e7dbc5..27f375f 100644
        "fixed_schedule": "Pevný rozvrh",
        "schedule": {
 diff --git a/packages/i18n/src/locales/sk/common.json b/packages/i18n/src/locales/sk/common.json
-index 4fc339c..329ba89 100644
+index 4fc339c..7201dc8 100644
 --- a/packages/i18n/src/locales/sk/common.json
 +++ b/packages/i18n/src/locales/sk/common.json
 @@ -244,7 +244,7 @@
@@ -210660,7 +211811,7 @@ index 4fc339c..329ba89 100644
      "choose_view_logs_from_setup_sh_and_docker_logs_to_be_sure": "Vyberte View Logs z setup.sh a Docker logov, aby ste si boli istí."
    },
    "customize_navigation": "Prispôsobiť navigáciu",
-@@ -867,5 +867,448 @@
+@@ -867,5 +867,491 @@
        "description": "Exportujte položky do JSON.",
        "short_description": "Exportovať ako JSON"
      }
@@ -211106,7 +212257,50 @@ index 4fc339c..329ba89 100644
 +    "remove_attachment": "Odstrániť",
 +    "attachment_error": "Nahrávanie zlyhalo",
 +    "attachment_failed": "Súbor {name} sa nepodarilo nahrať",
-+    "attachment_too_large": "{name} prekračuje limit veľkosti"
++    "attachment_too_large": "{name} prekračuje limit veľkosti",
++    "open": "Otvoriť"
++  },
++  "onboarding": {
++    "profile_title": "Vytvorte si profil.",
++    "profile_description": "Takto vás uvidia v Tequio.",
++    "upload_image": "Nahrať obrázok",
++    "change_image": "Zmeniť obrázok",
++    "name_label": "Meno",
++    "name_required": "Meno je povinné",
++    "name_max_length": "Meno môže mať najviac 50 znakov.",
++    "name_placeholder": "Zadajte celé meno",
++    "continue_action": "Pokračovať",
++    "set_password": "Nastaviť heslo",
++    "optional": "(Voliteľné)",
++    "password_placeholder": "Nastaviť heslo",
++    "confirm_password": "Potvrdiť heslo",
++    "confirm_password_placeholder": "Potvrdiť heslo",
++    "passwords_match": "Heslá sa zhodujú",
++    "passwords_no_match": "Heslá sa nezhodujú",
++    "marketing_consent": "Súhlasím so zasielaním správ od Tequio",
++    "profile_update_failed": "Údaje sa nepodarilo uložiť. Skúste to znova.",
++    "workspace_create_title": "Vytvorte pracovný priestor",
++    "workspace_join_title": "Prijmite pozvánku alebo vytvorte priestor",
++    "workspace_subtitle": "Všetka práca na jednom mieste.",
++    "workspace_name_placeholder": "Názov pracovného priestoru",
++    "create_new_workspace": "Vytvoriť nový priestor",
++    "no_invitations": "Žiadne pozvánky",
++    "team_title": "Pozvite svoj tím",
++    "team_description": "Tequio najlepšie funguje v tíme. Pozvite ich hneď.",
++    "email_column": "E-mail",
++    "role_column": "Rola",
++    "add_another": "Pridať ďalší",
++    "do_it_later": "Urobím to neskôr",
++    "invalid_email": "Neplatný e-mail",
++    "invitations_sent": "Pozvánky odoslané.",
++    "invitations_failed": "Pozvánky sa nepodarilo odoslať.",
++    "finish_failed": "Nastavenie sa nepodarilo dokončiť. Skúste to neskôr.",
++    "wrong_email": "Nesprávny e-mail?",
++    "switch_account": "Prepnúť účet",
++    "switching": "Prepína sa…",
++    "switch_account_description": "Ak ste sa omylom zaregistrovali s {email}, tu môžete prepnúť účet.",
++    "sign_out_failed": "Odhlásenie zlyhalo. Skúste to znova.",
++    "step_progress": "Krok {current} z {total}"
    }
  }
 diff --git a/packages/i18n/src/locales/sk/empty-state.json b/packages/i18n/src/locales/sk/empty-state.json
@@ -211798,7 +212992,7 @@ index 5d44f94..bd09842 100644
        "fixed_schedule": "Sabit zamanlama",
        "schedule": {
 diff --git a/packages/i18n/src/locales/tr-TR/common.json b/packages/i18n/src/locales/tr-TR/common.json
-index 74bd5cb..b0495f2 100644
+index 74bd5cb..4bde80c 100644
 --- a/packages/i18n/src/locales/tr-TR/common.json
 +++ b/packages/i18n/src/locales/tr-TR/common.json
 @@ -244,7 +244,7 @@
@@ -211828,7 +213022,7 @@ index 74bd5cb..b0495f2 100644
    "in_app": "Uygulama İçi",
    "forms": "Formlar",
    "milestones": "Kilometre taşları",
-@@ -867,5 +867,448 @@
+@@ -867,5 +867,491 @@
        "description": "İş öğelerini JSON dosyasına aktarın.",
        "short_description": "JSON olarak aktar"
      }
@@ -212274,7 +213468,50 @@ index 74bd5cb..b0495f2 100644
 +    "remove_attachment": "Kaldırın",
 +    "attachment_error": "Yükleme başarısız oldu",
 +    "attachment_failed": "{name} yüklenemedi",
-+    "attachment_too_large": "{name} boyut sınırını aşıyor"
++    "attachment_too_large": "{name} boyut sınırını aşıyor",
++    "open": "Aç"
++  },
++  "onboarding": {
++    "profile_title": "Profilini oluştur.",
++    "profile_description": "Tequio'da böyle görüneceksin.",
++    "upload_image": "Görsel yükle",
++    "change_image": "Görseli değiştir",
++    "name_label": "Ad",
++    "name_required": "Ad zorunludur",
++    "name_max_length": "Ad en fazla 50 karakter olabilir.",
++    "name_placeholder": "Tam adını yaz",
++    "continue_action": "Devam",
++    "set_password": "Parola belirle",
++    "optional": "(İsteğe bağlı)",
++    "password_placeholder": "Parola belirle",
++    "confirm_password": "Parolayı doğrula",
++    "confirm_password_placeholder": "Parolayı doğrula",
++    "passwords_match": "Parolalar eşleşiyor",
++    "passwords_no_match": "Parolalar eşleşmiyor",
++    "marketing_consent": "Tequio'dan iletiler almayı kabul ediyorum",
++    "profile_update_failed": "Bilgilerin kaydedilemedi. Tekrar dene.",
++    "workspace_create_title": "Çalışma alanını oluştur",
++    "workspace_join_title": "Bir daveti kabul et ya da alan oluştur",
++    "workspace_subtitle": "Tüm işin tek yerde.",
++    "workspace_name_placeholder": "Çalışma alanı adı",
++    "create_new_workspace": "Yeni alan oluştur",
++    "no_invitations": "Davet yok",
++    "team_title": "Takımını davet et",
++    "team_description": "Tequio takımla daha verimli. Onları şimdi davet et.",
++    "email_column": "E-posta",
++    "role_column": "Rol",
++    "add_another": "Yeni ekle",
++    "do_it_later": "Sonra yaparım",
++    "invalid_email": "Geçersiz e-posta",
++    "invitations_sent": "Davetler gönderildi.",
++    "invitations_failed": "Davetler gönderilemedi.",
++    "finish_failed": "Kurulum tamamlanamadı. Daha sonra dene.",
++    "wrong_email": "Yanlış e-posta mı?",
++    "switch_account": "Hesap değiştir",
++    "switching": "Değiştiriliyor…",
++    "switch_account_description": "{email} ile yanlışlıkla kaydolduysan, buradan hesap değiştirebilirsin.",
++    "sign_out_failed": "Çıkış yapılamadı. Tekrar dene.",
++    "step_progress": "Adım {current}/{total}"
    }
  }
 diff --git a/packages/i18n/src/locales/tr-TR/empty-state.json b/packages/i18n/src/locales/tr-TR/empty-state.json
@@ -212998,7 +214235,7 @@ index 25a1f98..64286c8 100644
        "fixed_schedule": "Фіксований розклад",
        "schedule": {
 diff --git a/packages/i18n/src/locales/ua/common.json b/packages/i18n/src/locales/ua/common.json
-index 89bd906..06a8c07 100644
+index 89bd906..cdfd372 100644
 --- a/packages/i18n/src/locales/ua/common.json
 +++ b/packages/i18n/src/locales/ua/common.json
 @@ -244,7 +244,7 @@
@@ -213019,7 +214256,7 @@ index 89bd906..06a8c07 100644
      "choose_view_logs_from_setup_sh_and_docker_logs_to_be_sure": "Виберіть View Logs з setup.sh та логів Docker, щоб переконатися."
    },
    "customize_navigation": "Налаштувати навігацію",
-@@ -867,5 +867,448 @@
+@@ -867,5 +867,491 @@
        "description": "Експортуйте одиниці у формат JSON.",
        "short_description": "Експортувати як JSON"
      }
@@ -213465,7 +214702,50 @@ index 89bd906..06a8c07 100644
 +    "remove_attachment": "Прибрати",
 +    "attachment_error": "Не вдалося завантажити",
 +    "attachment_failed": "Не вдалося завантажити {name}",
-+    "attachment_too_large": "{name} перевищує обмеження розміру"
++    "attachment_too_large": "{name} перевищує обмеження розміру",
++    "open": "Відкрити"
++  },
++  "onboarding": {
++    "profile_title": "Створіть профіль.",
++    "profile_description": "Так вас бачитимуть у Tequio.",
++    "upload_image": "Завантажити зображення",
++    "change_image": "Змінити зображення",
++    "name_label": "Ім’я",
++    "name_required": "Вкажіть ім’я",
++    "name_max_length": "Ім’я не довше 50 символів.",
++    "name_placeholder": "Введіть повне ім’я",
++    "continue_action": "Продовжити",
++    "set_password": "Задати пароль",
++    "optional": "(необов’язково)",
++    "password_placeholder": "Задати пароль",
++    "confirm_password": "Підтвердіть пароль",
++    "confirm_password_placeholder": "Підтвердіть пароль",
++    "passwords_match": "Паролі збігаються",
++    "passwords_no_match": "Паролі не збігаються",
++    "marketing_consent": "Погоджуюсь отримувати повідомлення від Tequio",
++    "profile_update_failed": "Не вдалося зберегти дані. Спробуйте ще раз.",
++    "workspace_create_title": "Створіть робочий простір",
++    "workspace_join_title": "Прийміть запрошення або створіть простір",
++    "workspace_subtitle": "Уся робота в одному місці.",
++    "workspace_name_placeholder": "Назва робочого простору",
++    "create_new_workspace": "Створити новий простір",
++    "no_invitations": "Запрошень немає",
++    "team_title": "Запросіть команду",
++    "team_description": "Tequio розкривається в команді. Запросіть колег.",
++    "email_column": "Ел. пошта",
++    "role_column": "Роль",
++    "add_another": "Додати ще",
++    "do_it_later": "Зроблю пізніше",
++    "invalid_email": "Некоректна адреса ел. пошти",
++    "invitations_sent": "Запрошення надіслано.",
++    "invitations_failed": "Не вдалося надіслати запрошення.",
++    "finish_failed": "Не вдалося завершити налаштування. Спробуйте пізніше.",
++    "wrong_email": "Не та адреса?",
++    "switch_account": "Змінити обліковий запис",
++    "switching": "Зміна…",
++    "switch_account_description": "Якщо ви випадково зареєструвалися з {email}, тут можна змінити обліковий запис.",
++    "sign_out_failed": "Не вдалося вийти. Спробуйте ще раз.",
++    "step_progress": "Крок {current} з {total}"
    }
  }
 diff --git a/packages/i18n/src/locales/ua/empty-state.json b/packages/i18n/src/locales/ua/empty-state.json
@@ -214020,7 +215300,7 @@ index 8dec0fb..fd3adb2 100644
        "fixed_schedule": "Lịch trình cố định",
        "schedule": {
 diff --git a/packages/i18n/src/locales/vi-VN/common.json b/packages/i18n/src/locales/vi-VN/common.json
-index f9aae43..969c489 100644
+index f9aae43..73181ce 100644
 --- a/packages/i18n/src/locales/vi-VN/common.json
 +++ b/packages/i18n/src/locales/vi-VN/common.json
 @@ -244,7 +244,7 @@
@@ -214050,7 +215330,7 @@ index f9aae43..969c489 100644
    "in_app": "Trong ứng dụng",
    "forms": "Biểu mẫu",
    "milestones": "Cột mốc",
-@@ -867,5 +867,448 @@
+@@ -867,5 +867,491 @@
        "description": "Xuất mục công việc thành tệp JSON.",
        "short_description": "Xuất sang JSON"
      }
@@ -214496,7 +215776,50 @@ index f9aae43..969c489 100644
 +    "remove_attachment": "Xóa",
 +    "attachment_error": "Tải lên thất bại",
 +    "attachment_failed": "Không thể tải lên {name}",
-+    "attachment_too_large": "{name} vượt quá giới hạn dung lượng"
++    "attachment_too_large": "{name} vượt quá giới hạn dung lượng",
++    "open": "Mở"
++  },
++  "onboarding": {
++    "profile_title": "Tạo hồ sơ của bạn.",
++    "profile_description": "Đây là cách bạn hiển thị trong Tequio.",
++    "upload_image": "Tải ảnh lên",
++    "change_image": "Đổi ảnh",
++    "name_label": "Tên",
++    "name_required": "Tên là bắt buộc",
++    "name_max_length": "Tên tối đa 50 ký tự.",
++    "name_placeholder": "Nhập họ và tên",
++    "continue_action": "Tiếp tục",
++    "set_password": "Đặt mật khẩu",
++    "optional": "(Tùy chọn)",
++    "password_placeholder": "Đặt mật khẩu",
++    "confirm_password": "Xác nhận mật khẩu",
++    "confirm_password_placeholder": "Xác nhận mật khẩu",
++    "passwords_match": "Mật khẩu khớp",
++    "passwords_no_match": "Mật khẩu không khớp",
++    "marketing_consent": "Tôi đồng ý nhận thông tin từ Tequio",
++    "profile_update_failed": "Không lưu được thông tin. Vui lòng thử lại.",
++    "workspace_create_title": "Tạo không gian làm việc",
++    "workspace_join_title": "Nhận lời mời hoặc tạo không gian",
++    "workspace_subtitle": "Mọi công việc trong một nơi.",
++    "workspace_name_placeholder": "Tên không gian làm việc",
++    "create_new_workspace": "Tạo không gian mới",
++    "no_invitations": "Không có lời mời",
++    "team_title": "Mời đồng đội",
++    "team_description": "Tequio hiệu quả nhất khi làm việc nhóm. Mời họ ngay.",
++    "email_column": "Email",
++    "role_column": "Vai trò",
++    "add_another": "Thêm nữa",
++    "do_it_later": "Để sau",
++    "invalid_email": "Email không hợp lệ",
++    "invitations_sent": "Đã gửi lời mời.",
++    "invitations_failed": "Không gửi được lời mời.",
++    "finish_failed": "Không hoàn tất được thiết lập. Thử lại sau.",
++    "wrong_email": "Sai email?",
++    "switch_account": "Đổi tài khoản",
++    "switching": "Đang đổi…",
++    "switch_account_description": "Nếu bạn lỡ đăng ký bằng {email}, bạn có thể đổi tài khoản tại đây.",
++    "sign_out_failed": "Không đăng xuất được. Vui lòng thử lại.",
++    "step_progress": "Bước {current}/{total}"
    }
  }
 diff --git a/packages/i18n/src/locales/vi-VN/empty-state.json b/packages/i18n/src/locales/vi-VN/empty-state.json
@@ -215253,7 +216576,7 @@ index 3f057bd..9322b6f 100644
        "fixed_schedule": "固定计划",
        "schedule": {
 diff --git a/packages/i18n/src/locales/zh-CN/common.json b/packages/i18n/src/locales/zh-CN/common.json
-index dd67d92..e574156 100644
+index dd67d92..d21fb35 100644
 --- a/packages/i18n/src/locales/zh-CN/common.json
 +++ b/packages/i18n/src/locales/zh-CN/common.json
 @@ -820,7 +820,7 @@
@@ -215265,7 +216588,7 @@ index dd67d92..e574156 100644
      "choose_view_logs_from_setup_sh_and_docker_logs_to_be_sure": "请选择“查看日志”来查看 setup.sh 和 Docker 日志，以确认问题。"
    },
    "customize_navigation": "自定义导航",
-@@ -867,5 +867,448 @@
+@@ -867,5 +867,491 @@
        "description": "将工作项导出为 JSON 文件。",
        "short_description": "导出为 JSON"
      }
@@ -215711,7 +217034,50 @@ index dd67d92..e574156 100644
 +    "remove_attachment": "移除",
 +    "attachment_error": "上传失败",
 +    "attachment_failed": "无法上传 {name}",
-+    "attachment_too_large": "{name} 超出大小限制"
++    "attachment_too_large": "{name} 超出大小限制",
++    "open": "打开"
++  },
++  "onboarding": {
++    "profile_title": "创建你的个人资料",
++    "profile_description": "这是你在 Tequio 中的显示方式。",
++    "upload_image": "上传图片",
++    "change_image": "更换图片",
++    "name_label": "姓名",
++    "name_required": "请填写姓名",
++    "name_max_length": "姓名不能超过 50 个字符。",
++    "name_placeholder": "输入你的全名",
++    "continue_action": "继续",
++    "set_password": "设置密码",
++    "optional": "（可选）",
++    "password_placeholder": "设置密码",
++    "confirm_password": "确认密码",
++    "confirm_password_placeholder": "确认密码",
++    "passwords_match": "密码一致",
++    "passwords_no_match": "两次密码不一致",
++    "marketing_consent": "我愿意接收来自 Tequio 的信息",
++    "profile_update_failed": "无法保存你的资料，请重试。",
++    "workspace_create_title": "创建工作区",
++    "workspace_join_title": "接受邀请或创建工作区",
++    "workspace_subtitle": "所有工作，尽在一处。",
++    "workspace_name_placeholder": "输入工作区名称",
++    "create_new_workspace": "创建新的工作区",
++    "no_invitations": "没有邀请",
++    "team_title": "邀请你的团队",
++    "team_description": "Tequio 与团队一起使用效果最好，现在就邀请他们。",
++    "email_column": "邮箱",
++    "role_column": "角色",
++    "add_another": "再添加一个",
++    "do_it_later": "以后再说",
++    "invalid_email": "邮箱地址无效",
++    "invitations_sent": "邀请已发送。",
++    "invitations_failed": "无法发送邀请。",
++    "finish_failed": "无法完成初始设置，请稍后再试。",
++    "wrong_email": "邮箱不对？",
++    "switch_account": "切换账户",
++    "switching": "切换中…",
++    "switch_account_description": "如果你误用 {email} 注册，可以在这里切换到其他账户。",
++    "sign_out_failed": "无法退出登录，请重试。",
++    "step_progress": "第 {current} 步，共 {total} 步"
    }
  }
 diff --git a/packages/i18n/src/locales/zh-CN/empty-state.json b/packages/i18n/src/locales/zh-CN/empty-state.json
@@ -216319,7 +217685,7 @@ index 27b9a4b..c71e752 100644
        "fixed_schedule": "固定排程",
        "schedule": {
 diff --git a/packages/i18n/src/locales/zh-TW/common.json b/packages/i18n/src/locales/zh-TW/common.json
-index 834a2d9..ecdb10e 100644
+index 834a2d9..1975e90 100644
 --- a/packages/i18n/src/locales/zh-TW/common.json
 +++ b/packages/i18n/src/locales/zh-TW/common.json
 @@ -244,7 +244,7 @@
@@ -216340,7 +217706,7 @@ index 834a2d9..ecdb10e 100644
      "choose_view_logs_from_setup_sh_and_docker_logs_to_be_sure": "從 setup.sh 和 Docker 日誌中選擇 View Logs 來確認。"
    },
    "customize_navigation": "自訂導覽",
-@@ -867,5 +867,448 @@
+@@ -867,5 +867,491 @@
        "description": "將工作事項匯出為 JSON 檔案。",
        "short_description": "匯出為 JSON"
      }
@@ -216786,7 +218152,50 @@ index 834a2d9..ecdb10e 100644
 +    "remove_attachment": "移除",
 +    "attachment_error": "上傳失敗",
 +    "attachment_failed": "無法上傳 {name}",
-+    "attachment_too_large": "{name} 超出大小限制"
++    "attachment_too_large": "{name} 超出大小限制",
++    "open": "開啟"
++  },
++  "onboarding": {
++    "profile_title": "建立你的個人檔案",
++    "profile_description": "這是你在 Tequio 中的顯示方式。",
++    "upload_image": "上傳圖片",
++    "change_image": "更換圖片",
++    "name_label": "姓名",
++    "name_required": "請填寫姓名",
++    "name_max_length": "姓名不能超過 50 個字元。",
++    "name_placeholder": "輸入你的全名",
++    "continue_action": "繼續",
++    "set_password": "設定密碼",
++    "optional": "（選填）",
++    "password_placeholder": "設定密碼",
++    "confirm_password": "確認密碼",
++    "confirm_password_placeholder": "確認密碼",
++    "passwords_match": "密碼相符",
++    "passwords_no_match": "兩次密碼不相符",
++    "marketing_consent": "我願意接收來自 Tequio 的訊息",
++    "profile_update_failed": "無法儲存你的資料，請再試一次。",
++    "workspace_create_title": "建立工作區",
++    "workspace_join_title": "接受邀請或建立工作區",
++    "workspace_subtitle": "所有工作，集中一處。",
++    "workspace_name_placeholder": "輸入工作區名稱",
++    "create_new_workspace": "建立新的工作區",
++    "no_invitations": "沒有邀請",
++    "team_title": "邀請你的團隊",
++    "team_description": "Tequio 與團隊一起使用效果最好，現在就邀請他們。",
++    "email_column": "電子郵件",
++    "role_column": "角色",
++    "add_another": "再新增一個",
++    "do_it_later": "稍後再說",
++    "invalid_email": "電子郵件位址無效",
++    "invitations_sent": "邀請已送出。",
++    "invitations_failed": "無法送出邀請。",
++    "finish_failed": "無法完成初始設定，請稍後再試。",
++    "wrong_email": "電子郵件不對嗎？",
++    "switch_account": "切換帳號",
++    "switching": "切換中…",
++    "switch_account_description": "如果你誤用 {email} 註冊，可以在這裡切換到其他帳號。",
++    "sign_out_failed": "無法登出，請再試一次。",
++    "step_progress": "第 {current} 步，共 {total} 步"
    }
  }
 diff --git a/packages/i18n/src/locales/zh-TW/empty-state.json b/packages/i18n/src/locales/zh-TW/empty-state.json
