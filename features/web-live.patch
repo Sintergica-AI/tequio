@@ -64721,23 +64721,49 @@ index d9c76f8..ec090ca 100644
  
 diff --git a/apps/web/app/(all)/[workspaceSlug]/(projects)/assistant/header.tsx b/apps/web/app/(all)/[workspaceSlug]/(projects)/assistant/header.tsx
 new file mode 100644
-index 0000000..65892d4
+index 0000000..1c4275e
 --- /dev/null
 +++ b/apps/web/app/(all)/[workspaceSlug]/(projects)/assistant/header.tsx
-@@ -0,0 +1,29 @@
+@@ -0,0 +1,70 @@
 +/**
 + * Sintergica CE extension: assistant page header.
++ *
++ * It also hosts the assistant's own controls (model, history, new chat). They
++ * used to ride in a second bar inside the page, directly under this one, both
++ * labelled "Asistente" — the same title twice.
++ *
 + * Derived from Plane CE code (AGPL-3.0-only).
 + */
 +
 +import { observer } from "mobx-react";
++import { useParams } from "next/navigation";
++import useSWR from "swr";
 +// plane imports
 +import { Breadcrumbs, Header } from "@plane/ui";
 +// components
 +import { AgentIcon } from "@/components/assistant/agent-icon";
++import { AssistantHeaderActions } from "@/components/assistant/header";
 +import { BreadcrumbLink } from "@/components/common/breadcrumb-link";
++// hooks
++import { useAssistant } from "@/hooks/store/use-assistant";
 +
 +export const WorkspaceAssistantHeader = observer(function WorkspaceAssistantHeader() {
++  const { workspaceSlug } = useParams();
++  const assistant = useAssistant();
++  const slug = workspaceSlug?.toString() ?? "";
++
++  // Same SWR keys the page uses, so this costs no extra request.
++  useSWR(slug ? `ASSISTANT_CONFIG_${slug}` : null, () => (slug ? assistant.fetchConfig(slug) : null));
++  useSWR(slug ? `ASSISTANT_CONVERSATIONS_${slug}` : null, () =>
++    slug ? assistant.fetchConversations(slug) : null
++  );
++
++  const config = assistant.configByWorkspace[slug];
++  const conversations = assistant.conversationsByWorkspace[slug] ?? [];
++  const activeId = assistant.activeConversationId;
++  const activeConversation = conversations.find((c) => c.id === activeId);
++  const activeModel = activeConversation?.model || assistant.pendingModel || config?.model || null;
++
 +  return (
 +    <Header>
 +      <Header.LeftItem>
@@ -64751,6 +64777,21 @@ index 0000000..65892d4
 +          </Breadcrumbs>
 +        </div>
 +      </Header.LeftItem>
++      <Header.RightItem>
++        <div className="flex items-center gap-1">
++          <AssistantHeaderActions
++            config={config}
++            conversations={conversations}
++            activeConversationId={activeId}
++            activeModel={activeModel}
++            isStreaming={assistant.isStreaming}
++            onNewChat={() => assistant.resetActive()}
++            onOpenConversation={(id) => void assistant.openConversation(slug, id)}
++            onDeleteConversation={(id) => void assistant.deleteConversation(slug, id)}
++            onModelChange={(model) => void assistant.setModel(slug, model)}
++          />
++        </div>
++      </Header.RightItem>
 +    </Header>
 +  );
 +});
@@ -111210,10 +111251,10 @@ index 0000000..fa18b43
 +});
 diff --git a/apps/web/core/components/assistant/empty-state.tsx b/apps/web/core/components/assistant/empty-state.tsx
 new file mode 100644
-index 0000000..57d13bf
+index 0000000..d12862b
 --- /dev/null
 +++ b/apps/web/core/components/assistant/empty-state.tsx
-@@ -0,0 +1,165 @@
+@@ -0,0 +1,203 @@
 +/**
 + * Sintergica CE extension: what the assistant shows before the first message.
 + *
@@ -111239,7 +111280,13 @@ index 0000000..57d13bf
 +  key: string;
 +  label: string;
 +  Icon: LucideIcon;
++  /**
++   * `prompts` are what gets sent — full, well-formed questions. `chips` are
++   * what gets shown: the same intent, short enough that six of them read as
++   * one tidy block instead of three ragged rows.
++   */
 +  prompts: string[];
++  chips: { label: string; prompt: string }[];
 +};
 +
 +const PROJECT_AREA: TArea = {
@@ -111252,6 +111299,10 @@ index 0000000..57d13bf
 +    "Resume los work items urgentes sin responsable",
 +    "¿En qué se avanzó esta semana?",
 +  ],
++  chips: [
++    { label: "Lo mío con retraso", prompt: "¿Qué tengo asignado y va con retraso?" },
++    { label: "Cómo va el ciclo", prompt: "¿Cómo va el ciclo actual?" },
++  ],
 +};
 +
 +const DOCS_AREA: TArea = {
@@ -111262,6 +111313,10 @@ index 0000000..57d13bf
 +    "¿Qué documentos hay sobre este proyecto?",
 +    "Resume el documento de onboarding",
 +    "¿Dónde está documentado nuestro proceso de despliegue?",
++  ],
++  chips: [
++    { label: "Buscar en la wiki", prompt: "¿Qué documentos hay sobre este proyecto?" },
++    { label: "Resumir un documento", prompt: "Resume el documento de onboarding" },
 +  ],
 +};
 +
@@ -111274,6 +111329,10 @@ index 0000000..57d13bf
 +    "¿Cuánto nos deben y quién está vencido?",
 +    "¿Cuántos meses de runway tenemos?",
 +  ],
++  chips: [
++    { label: "Ingresos del mes", prompt: "¿Cómo vamos de ingresos este mes?" },
++    { label: "Quién está vencido", prompt: "¿Cuánto nos deben y quién está vencido?" },
++  ],
 +};
 +
 +const COLLECTIONS_AREA: TArea = {
@@ -111281,6 +111340,10 @@ index 0000000..57d13bf
 +  label: "Cobranza",
 +  Icon: WalletCards,
 +  prompts: ["¿Qué cobros están vencidos?", "¿A quién hay que cobrarle esta semana?"],
++  chips: [
++    { label: "Cobros vencidos", prompt: "¿Qué cobros están vencidos?" },
++    { label: "A quién cobrar", prompt: "¿A quién hay que cobrarle esta semana?" },
++  ],
 +};
 +
 +function areasFor(financeRole: string | null | undefined): TArea[] {
@@ -111335,56 +111398,72 @@ index 0000000..57d13bf
 +  }
 +
 +  return (
-+    <div className="flex flex-1 flex-col items-center justify-center gap-8 px-6 py-10">
-+      <div className="flex flex-col items-center gap-4 text-center">
-+        <AgentAvatar state="idle" className="size-16" />
-+        <div>
-+          <h1 className="text-2xl font-medium tracking-tight text-primary sm:text-3xl">
-+            {userName ? `Pregunta lo que quieras, ${userName}` : "Pregunta lo que quieras"}
-+          </h1>
-+          <p className="mt-2 text-13 text-tertiary">
-+            Respondo consultando tus proyectos, la wiki
-+            {financeRole ? " y las finanzas del espacio" : ""} — sin inventar nada.
-+          </p>
-+        </div>
-+      </div>
++    <div className="flex flex-col items-center gap-8 px-6">
++      <AssistantGreeting userName={userName} financeRole={financeRole} />
++      <AssistantSuggestions financeRole={financeRole} onSuggestion={onSuggestion} />
++    </div>
++  );
++}
 +
-+      <div
-+        className={cn(
-+          "grid w-full max-w-3xl gap-3",
-+          areas.length >= 3 ? "sm:grid-cols-3" : "sm:grid-cols-2"
-+        )}
-+      >
-+        {areas.map((area) => (
-+          <div key={area.key} className="rounded-lg border border-subtle bg-layer-1/50 p-3">
-+            <div className="mb-2 flex items-center gap-1.5 text-11 font-medium text-tertiary">
-+              <area.Icon className="size-3.5" />
-+              <span className="uppercase tracking-wide">{area.label}</span>
-+            </div>
-+            <div className="flex flex-col gap-1">
-+              {area.prompts.map((prompt) => (
-+                <button
-+                  key={prompt}
-+                  type="button"
-+                  onClick={() => onSuggestion(prompt)}
-+                  className="rounded-md px-2 py-1.5 text-left text-12 text-secondary transition-colors hover:bg-layer-2 hover:text-primary"
-+                >
-+                  {prompt}
-+                </button>
-+              ))}
-+            </div>
-+          </div>
-+        ))}
++/** Character + greeting. On the full page the composer sits right below it. */
++export function AssistantGreeting(props: { userName?: string; financeRole?: string | null }) {
++  const { userName, financeRole } = props;
++  return (
++    <div className="flex flex-col items-center gap-4 px-6 text-center">
++      <AgentAvatar state="idle" className="size-16" />
++      <div>
++        <h1 className="text-2xl font-medium tracking-tight text-primary sm:text-[2rem]">
++          {userName ? `Pregunta lo que quieras, ${userName}` : "Pregunta lo que quieras"}
++        </h1>
++        <p className="mt-2 text-13 text-tertiary">
++          Respondo consultando tus proyectos, la wiki
++          {financeRole ? " y las finanzas del espacio" : ""} — sin inventar nada.
++        </p>
 +      </div>
++    </div>
++  );
++}
++
++/**
++ * Discreet chips under the composer, not a wall of cards: the input is the
++ * centre of gravity of the page, and the suggestions are there to reveal what
++ * the assistant can reach — projects, the wiki, and money if you may see it.
++ */
++export function AssistantSuggestions(props: {
++  financeRole?: string | null;
++  onSuggestion: (value: string) => void;
++}) {
++  const { financeRole, onSuggestion } = props;
++  const areas = areasFor(financeRole);
++
++  return (
++    <div className="flex w-full max-w-2xl flex-wrap justify-center gap-2">
++      {areas.flatMap((area) =>
++        area.chips.map((chip) => (
++          <button
++            key={`${area.key}-${chip.label}`}
++            type="button"
++            title={chip.prompt}
++            onClick={() => onSuggestion(chip.prompt)}
++            className={cn(
++              "flex items-center gap-1.5 rounded-full border border-subtle px-3 py-1.5 text-12 text-secondary",
++              "transition-colors hover:border-strong hover:bg-layer-1 hover:text-primary"
++            )}
++          >
++            <area.Icon className="size-3.5 text-tertiary" />
++            {chip.label}
++          </button>
++        ))
++      )}
 +    </div>
 +  );
 +}
 diff --git a/apps/web/core/components/assistant/header.tsx b/apps/web/core/components/assistant/header.tsx
 new file mode 100644
-index 0000000..117c2f4
+index 0000000..54fa905
 --- /dev/null
 +++ b/apps/web/core/components/assistant/header.tsx
-@@ -0,0 +1,181 @@
+@@ -0,0 +1,209 @@
 +/**
 + * Sintergica CE extension: assistant header — history, model picker, new chat.
 + * Derived from Plane CE code (AGPL-3.0-only).
@@ -111431,15 +111510,43 @@ index 0000000..117c2f4
 +    onExpand,
 +  } = props;
 +
++  return (
++    <div className="flex h-11 shrink-0 items-center gap-1 border-b border-subtle px-3">
++      <AgentIcon className="size-4 text-secondary" />
++      <span className="mr-auto truncate text-13 font-medium text-primary">Asistente</span>
++      <AssistantHeaderActions {...props} />
++    </div>
++  );
++});
++
++/**
++ * The controls alone, without the title bar. The full page mounts these into
++ * the app's own breadcrumb header: rendering the whole AssistantHeader there
++ * would put a second bar saying "Asistente" right under the first one.
++ */
++export const AssistantHeaderActions = observer(function AssistantHeaderActions(
++  props: TAssistantHeaderProps
++) {
++  const {
++    config,
++    conversations,
++    activeConversationId,
++    activeModel,
++    isStreaming,
++    onNewChat,
++    onOpenConversation,
++    onDeleteConversation,
++    onModelChange,
++    onClose,
++    onExpand,
++  } = props;
++
 +  // Model names are provider/model:variant — the tail is what tells them apart.
 +  const shortModel = (model: string) => model.split("/").pop() ?? model;
 +  const models = config?.models ?? [];
 +
 +  return (
-+    <div className="flex h-11 shrink-0 items-center gap-1 border-b border-subtle px-3">
-+      <AgentIcon className="size-4 text-secondary" />
-+      <span className="mr-auto truncate text-13 font-medium text-primary">Asistente</span>
-+
++    <>
 +      {models.length > 1 && (
 +        <CustomMenu
 +          customButton={
@@ -111563,7 +111670,7 @@ index 0000000..117c2f4
 +          </button>
 +        </Tooltip>
 +      )}
-+    </div>
++    </>
 +  );
 +});
 diff --git a/apps/web/core/components/assistant/index.ts b/apps/web/core/components/assistant/index.ts
@@ -111877,10 +111984,10 @@ index 0000000..77bba38
 +}
 diff --git a/apps/web/core/components/assistant/panel-root.tsx b/apps/web/core/components/assistant/panel-root.tsx
 new file mode 100644
-index 0000000..e2f5ec5
+index 0000000..20718f1
 --- /dev/null
 +++ b/apps/web/core/components/assistant/panel-root.tsx
-@@ -0,0 +1,95 @@
+@@ -0,0 +1,100 @@
 +/**
 + * Sintergica CE extension: the assistant docked on the right of every
 + * workspace page, with a draggable width.
@@ -111889,7 +111996,7 @@ index 0000000..e2f5ec5
 +
 +import { useCallback, useEffect, useRef } from "react";
 +import { observer } from "mobx-react";
-+import { useParams } from "next/navigation";
++import { useParams, usePathname } from "next/navigation";
 +// plane imports
 +import { cn } from "@plane/utils";
 +// hooks
@@ -111905,6 +112012,7 @@ index 0000000..e2f5ec5
 +
 +export const AssistantPanelRoot = observer(function AssistantPanelRoot() {
 +  const { workspaceSlug } = useParams();
++  const pathname = usePathname();
 +  const assistant = useAssistant();
 +  const router = useAppRouter();
 +  const { storedValue, setValue } = useLocalStorage<number>("assistant_panel_width", DEFAULT_WIDTH);
@@ -111942,7 +112050,11 @@ index 0000000..e2f5ec5
 +    };
 +  }, [setValue]);
 +
-+  if (!assistant.isPanelOpen || !workspaceSlug) return null;
++  // Never dock beside the assistant's own page: it would render the same
++  // conversation twice. Covers the case of arriving there with the panel
++  // already open, which the hidden toggle alone would not.
++  const isAssistantPage = pathname?.startsWith(`/${workspaceSlug?.toString()}/assistant`);
++  if (!assistant.isPanelOpen || !workspaceSlug || isAssistantPage) return null;
 +
 +  return (
 +    <div
@@ -111978,10 +112090,10 @@ index 0000000..e2f5ec5
 +});
 diff --git a/apps/web/core/components/assistant/root.tsx b/apps/web/core/components/assistant/root.tsx
 new file mode 100644
-index 0000000..edb7dd3
+index 0000000..7019f7c
 --- /dev/null
 +++ b/apps/web/core/components/assistant/root.tsx
-@@ -0,0 +1,163 @@
+@@ -0,0 +1,161 @@
 +/**
 + * Sintergica CE extension: the assistant chat, shared by the docked panel and
 + * the full-page route.
@@ -112000,6 +112112,7 @@ index 0000000..edb7dd3
 +// local imports
 +import { AssistantComposer } from "./composer";
 +import { AssistantConversation } from "./conversation";
++import { AssistantGreeting, AssistantSuggestions } from "./empty-state";
 +import { AssistantHeader } from "./header";
 +
 +type TAssistantRootProps = {
@@ -112078,19 +112191,24 @@ index 0000000..edb7dd3
 +
 +  return (
 +    <div className={cn("flex h-full min-h-0 w-full flex-col bg-canvas", className)}>
-+      <AssistantHeader
-+        config={config}
-+        conversations={conversations}
-+        activeConversationId={activeId}
-+        activeModel={activeModel}
-+        isStreaming={assistant.isStreaming}
-+        onNewChat={() => assistant.resetActive()}
-+        onOpenConversation={(id) => void assistant.openConversation(workspaceSlug, id)}
-+        onDeleteConversation={(id) => void assistant.deleteConversation(workspaceSlug, id)}
-+        onModelChange={(model) => void assistant.setModel(workspaceSlug, model)}
-+        onClose={onClose}
-+        onExpand={onExpand}
-+      />
++      {/* The full page is titled by the app's own breadcrumb header, which also
++          hosts these controls: a second bar saying "Asistente" under the first
++          one is pure repetition. */}
++      {variant === "panel" && (
++        <AssistantHeader
++          config={config}
++          conversations={conversations}
++          activeConversationId={activeId}
++          activeModel={activeModel}
++          isStreaming={assistant.isStreaming}
++          onNewChat={() => assistant.resetActive()}
++          onOpenConversation={(id) => void assistant.openConversation(workspaceSlug, id)}
++          onDeleteConversation={(id) => void assistant.deleteConversation(workspaceSlug, id)}
++          onModelChange={(model) => void assistant.setModel(workspaceSlug, model)}
++          onClose={onClose}
++          onExpand={onExpand}
++        />
++      )}
 +
 +      {notConfigured ? (
 +        <div className="flex flex-1 items-center justify-center px-6 text-center">
@@ -112100,25 +112218,17 @@ index 0000000..edb7dd3
 +          </p>
 +        </div>
 +      ) : isHero ? (
-+        <div className="flex flex-1 flex-col justify-center overflow-y-auto">
-+          <AssistantConversation
-+            variant={variant}
-+            userName={greetingName}
-+            financeRole={config?.finance_role}
-+            messages={messages}
-+            streamingContent={assistant.streamingContent}
-+            toolTrace={assistant.toolTrace}
-+            linkMap={assistant.linkMap}
-+            isStreaming={assistant.isStreaming}
-+            errorMessage={assistant.errorMessage}
-+            pendingActions={assistant.pendingActions}
-+            decidingActionId={assistant.decidingActionId}
-+            onSuggestion={send}
-+            onDecide={(actionId, decision) =>
-+              void assistant.decideAction(workspaceSlug, actionId, decision)
-+            }
-+          />
-+          <div className="mx-auto w-full max-w-2xl shrink-0">{composer}</div>
++        // Greeting → input → suggestions, the way the reference lays it out:
++        // the composer is the centre of gravity, not a bar stuck to the floor.
++        <div className="flex flex-1 flex-col items-center justify-center gap-6 overflow-y-auto py-10">
++          <AssistantGreeting userName={greetingName} financeRole={config?.finance_role} />
++          <div className="w-full max-w-2xl shrink-0 px-4">{composer}</div>
++          <div className="w-full max-w-2xl px-4">
++            <AssistantSuggestions financeRole={config?.finance_role} onSuggestion={send} />
++          </div>
++          {assistant.errorMessage && (
++            <p className="px-6 text-11 text-danger-primary">{assistant.errorMessage}</p>
++          )}
 +        </div>
 +      ) : (
 +        <AssistantConversation
@@ -112147,17 +112257,17 @@ index 0000000..edb7dd3
 +});
 diff --git a/apps/web/core/components/assistant/toggle-button.tsx b/apps/web/core/components/assistant/toggle-button.tsx
 new file mode 100644
-index 0000000..e3e7d47
+index 0000000..40b2c9c
 --- /dev/null
 +++ b/apps/web/core/components/assistant/toggle-button.tsx
-@@ -0,0 +1,45 @@
+@@ -0,0 +1,49 @@
 +/**
 + * Sintergica CE extension: the assistant toggle in the top navigation.
 + * Derived from Plane CE code (AGPL-3.0-only).
 + */
 +
 +import { observer } from "mobx-react";
-+import { useParams } from "next/navigation";
++import { useParams, usePathname } from "next/navigation";
 +import useSWR from "swr";
 +// plane imports
 +import { Tooltip } from "@plane/propel/tooltip";
@@ -112169,15 +112279,19 @@ index 0000000..e3e7d47
 +
 +export const AssistantToggleButton = observer(function AssistantToggleButton() {
 +  const { workspaceSlug } = useParams();
++  const pathname = usePathname();
 +  const assistant = useAssistant();
 +  const slug = workspaceSlug?.toString();
++  // On the assistant's own page the docked panel would show the very same
++  // conversation twice, side by side. See AssistantPanelRoot for the other half.
++  const isAssistantPage = !!slug && pathname?.startsWith(`/${slug}/assistant`);
 +
 +  useSWR(slug ? `ASSISTANT_CONFIG_${slug}` : null, () => (slug ? assistant.fetchConfig(slug) : null));
 +
 +  const config = slug ? assistant.configByWorkspace[slug] : undefined;
 +  // Hidden until the config confirms it works: a button that always answers
 +  // "not configured" is worse than no button.
-+  if (!config?.enabled) return null;
++  if (!config?.enabled || isAssistantPage) return null;
 +
 +  return (
 +    <Tooltip tooltipContent="Asistente" position="bottom">

@@ -440,8 +440,28 @@ asistente puede leer la wiki o las finanzas.
   acompañar al saludo (bloque centrado) en vez de quedar clavado al fondo de
   una pantalla vacía; al llegar el primer mensaje vuelve al layout normal.
   `AssistantComposer` gana `variant="hero"` (sin regla superior, caja más
-  grande) y `autoFocus`.
+  grande) y `autoFocus`. Orden en la página: saludo → composer → sugerencias.
 - El icono del chrome NO es el personaje: ver 8b.
+
+**Segunda pasada (misma fecha), tras ver la pantalla montada:**
+
+- **Una sola cabecera.** La página mostraba DOS barras seguidas titulada cada
+  una "Asistente": la del breadcrumb de la app y la interna de `AssistantRoot`.
+  Ahora `AssistantRoot` solo pinta su cabecera en `variant="panel"`; las
+  acciones (modelo, historial, nueva conversación) se extrajeron a
+  `AssistantHeaderActions` y viven en el `Header.RightItem` de la página. Las
+  dos usan las MISMAS claves SWR, así que no hay petición extra.
+- **El panel no puede abrirse sobre su propia página.** Se podía tener la
+  pantalla completa y el panel acoplado a la vez, mostrando la misma
+  conversación dos veces. Ahora `AssistantToggleButton` se oculta en
+  `/<slug>/assistant` y `AssistantPanelRoot` no monta ahí — hacen falta las
+  dos cosas: ocultar el botón no basta si se llega con el panel ya abierto.
+- **Sugerencias como chips, no como tarjetas.** Tres tarjetones con nueve
+  preguntas competían con el composer; la referencia (Gemini) deja el input
+  como centro de gravedad. Ahora son seis chips centrados con el icono de su
+  área. Los chips llevan etiqueta CORTA y envían la pregunta LARGA
+  (`chips[].label` vs `chips[].prompt`): lo que se lee cabe, lo que se manda
+  está bien formado.
 
 ## 9. Riesgos y decisiones abiertas
 
