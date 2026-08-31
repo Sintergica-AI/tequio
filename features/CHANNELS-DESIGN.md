@@ -125,6 +125,29 @@ chat.0002 (ambas generadas dentro de la imagen, dependencia fijada a db.0122).
   tarjeta real de github.com, caché de 4 ms).
 - Sigue fuera: GIFs (pide API externa con clave).
 
+## Ronda 7 (31 Ago 2026) — mensajes que son solo un adjunto
+
+- **BUG que afectaba a los dos clientes**: `if not strip_tags(message_html).strip()`
+  rechazaba como "vacío" cualquier mensaje cuyo único contenido fuera una
+  imagen — el nodo `<image-component>` no deja texto tras `strip_tags`. O sea
+  que enviar SOLO una foto devolvía 400. En la web nunca se notó porque el
+  composer siempre mandaba texto; lo cazó la sesión del móvil al subir la
+  primera imagen real. Ahora la comprobación es `_has_content()`: texto O un
+  nodo de medios (image-component, img, video, file-component). Aplica al
+  envío Y a la edición, que tenía el mismo fallo igual de inadvertido.
+  Verificado en producción 7/7, incluidos los casos que DEBEN seguir vacíos.
+- **Contrato de adjuntos entre clientes** (acordado con la sesión del móvil,
+  que no usa el editor): el asset id viaja DENTRO del `message_html` como
+  `<image-component src="<asset_id>" id="<asset_id>" status="uploaded">`, NO
+  como URL. `src` es el id; cada cliente lo resuelve con
+  `/api/assets/v2/workspaces/<slug>/<asset_id>/` (o `.../projects/<pid>/...`
+  si el canal tiene proyecto). Ojo: al serializar a HTML los atributos van en
+  minúscula (`aspectratio`), y sin `status="uploaded"` la web lo trata como
+  subida en curso.
+- Aunque el backend ya acepta el adjunto solo, conviene seguir poniendo un pie
+  de texto: sin él, el snippet de búsqueda y el cuerpo de la notificación
+  salen vacíos.
+
 ## Ronda 4 (31 Ago 2026) — UI inspirada en ClickUp + fix crítico
 
 - **FIX CRÍTICO (migración chat.0003)**: todos los DMs tienen `name=""` y

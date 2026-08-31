@@ -30,6 +30,8 @@ from plane.assistant.serializers import (
     ConversationSerializer,
 )
 from plane.assistant.tools import ToolContext
+# plane.finance no importa plane.assistant, así que no hay ciclo.
+from plane.finance.permissions import finance_role
 
 MAX_PROMPT_CHARS = 8000
 
@@ -41,6 +43,7 @@ def _build_context(request, slug):
         workspace=workspace,
         slug=slug,
         project_ids=accessible_project_ids(request.user, slug),
+        finance_role=finance_role(request.user, slug),
     )
 
 
@@ -63,6 +66,9 @@ class AssistantConfigEndpoint(BaseAPIView):
                 # Depende del usuario, no de la instancia: un invitado sin
                 # proyectos escribibles no ve las herramientas de escritura.
                 "can_write": bool(writable_project_ids(request.user, slug)),
+                # El frontend lo usa para sugerir preguntas de finanzas sólo a
+                # quien puede obtener respuesta.
+                "finance_role": finance_role(request.user, slug),
                 "usage": {
                     "tokens_this_month": used,
                     "monthly_token_cap": config["monthly_token_cap"],

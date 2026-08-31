@@ -17,7 +17,7 @@
 from dataclasses import dataclass, field
 
 from django.core.exceptions import ValidationError as DjangoValidationError
-from django.db.models import Case, Count, IntegerField, Q, Value, When
+from django.db.models import Case, Count, IntegerField, Q, Sum, Value, When
 from django.utils import timezone
 
 from plane.db.models import (
@@ -40,6 +40,9 @@ MAX_LIMIT = 100
 DEFAULT_LIMIT = 25
 DESCRIPTION_CHARS = 4000
 COMMENT_CHARS = 1500
+# A wiki page is the one thing worth reading nearly whole — but not whole: a
+# 200-page handbook would eat the window on its own.
+PAGE_CHARS = 12000
 MAX_COMMENTS = 15
 
 PRIORITIES = ("urgent", "high", "medium", "low", "none")
@@ -63,6 +66,11 @@ class ToolContext:
     workspace: object
     slug: str
     project_ids: list = field(default_factory=list)
+    # "finance", "collections" or None. Finance data is NOT visible to every
+    # workspace member — not even to admins, who only manage the allowlist —
+    # so the role travels in the context and gates both the schemas the model
+    # is offered and the tools themselves.
+    finance_role: str = None
 
 
 # ---------------------------------------------------------------------------
@@ -610,6 +618,9 @@ def search_pages(ctx, query, project=None, limit=None):
             url = None
         out.append(
             {
+                # The id is what get_page takes: without it the model can find
+                # a page but never read it.
+                "id": str(page.id),
                 "name": page.name or "(sin título)",
                 "scope": "wiki" if page.is_global else "proyecto",
                 "owner": _person(page.owned_by),
@@ -619,3 +630,221 @@ def search_pages(ctx, query, project=None, limit=None):
             }
         )
     return {"pages": out, "count": len(out)}
+
+
+def _visible_pages(ctx):
+    """Wiki pages of the workspace plus pages of the user's projects, minus
+    other people's private ones. Same reach as search_pages."""
+    project_page_ids = ProjectPage.objects.filter(
+        project_id__in=ctx.project_ids
+    ).values("page_id")
+    return (
+        Page.objects.filter(workspace=ctx.workspace, archived_at__isnull=True)
+        .filter(Q(is_global=True) | Q(id__in=project_page_ids))
+        .filter(Q(access=0) | Q(owned_by=ctx.user))
+    )
+
+
+def get_page(ctx, identifier):
+    """Full text of one wiki or project page, by id or by exact-ish name."""
+    if not identifier:
+        raise ToolError("Falta 'identifier'.")
+    identifier = str(identifier).strip()
+    qs = _visible_pages(ctx)
+
+    page = None
+    try:
+        page = qs.filter(pk=identifier).select_related("owned_by").first()
+    except (DjangoValidationError, ValueError):
+        page = None  # not a UUID: fall through to the name lookup
+    if page is None:
+        page = (
+            qs.filter(name__iexact=identifier).select_related("owned_by").first()
+            or qs.filter(name__icontains=identifier)
+            .select_related("owned_by")
+            .order_by("-updated_at")
+            .first()
+        )
+    if page is None:
+        raise ToolError(f"No encuentro una página accesible con '{identifier}'.")
+
+    owning_project = (
+        ProjectPage.objects.filter(page_id=page.id).values_list("project_id", flat=True).first()
+    )
+    if page.is_global:
+        url = f"/{ctx.slug}/wiki/{page.id}"
+    elif owning_project:
+        url = f"/{ctx.slug}/projects/{owning_project}/pages/{page.id}"
+    else:
+        url = None
+
+    return {
+        "id": str(page.id),
+        "name": page.name or "(sin título)",
+        "scope": "wiki" if page.is_global else "proyecto",
+        "owner": _person(page.owned_by),
+        "updated_at": page.updated_at.isoformat(),
+        # description_stripped is the plain-text mirror Plane maintains; the
+        # binary/HTML fields would be useless to the model and huge.
+        "content": _truncate(page.description_stripped, PAGE_CHARS),
+        "url": url,
+    }
+
+
+# ---------------------------------------------------------------------------
+# finance
+#
+# Gated on ctx.finance_role, which mirrors plane.finance.permissions: "finance"
+# sees everything, "collections" only what it needs to chase payments, and
+# anyone else does not even get the schemas (see registry.all_tool_schemas).
+# The check is repeated inside each tool on purpose: hiding a schema is a UX
+# decision, refusing the data is the security boundary.
+# ---------------------------------------------------------------------------
+
+
+def _require_finance(ctx, collections_ok=False):
+    role = getattr(ctx, "finance_role", None)
+    if role == "finance":
+        return
+    if collections_ok and role == "collections":
+        return
+    raise ToolError(
+        "El usuario no tiene acceso a los datos financieros de este espacio. "
+        "Dilo con claridad y no intentes deducir cifras por otra vía."
+    )
+
+
+def _money(mapping):
+    """{'MXN': Decimal} → {'MXN': float}, dropping the currencies at zero so a
+    two-currency workspace does not spend context on empty buckets."""
+    out = {}
+    for currency, amount in (mapping or {}).items():
+        value = float(amount or 0)
+        if value:
+            out[currency] = round(value, 2)
+    return out
+
+
+def finance_overview(ctx):
+    # Deliberately the same builder the finance dashboard calls, so the
+    # assistant and the screen can never disagree. Note it is not strictly
+    # read-only: like every dashboard load, it backfills missing client
+    # profiles and colours. That is idempotent housekeeping, not a change to
+    # anybody's data.
+    from plane.finance.services import build_dashboard
+
+    _require_finance(ctx)
+    data = build_dashboard(ctx.workspace)
+    clients = [
+        {
+            "client": row["project_name"],
+            "status": row["status"],
+            "revenue": _money(row.get("revenue")),
+            "outstanding": _money(row.get("outstanding")),
+            "next_due_date": row.get("next_due_date"),
+            "active_retainer": bool(row.get("active_retainer")),
+        }
+        for row in data.get("clients", [])
+    ]
+    alerts = [
+        {
+            "type": a.get("type"),
+            "client": a.get("project_name"),
+            "concept": a.get("concept"),
+            "amount": a.get("amount"),
+            "currency": a.get("currency"),
+            "due_date": a.get("due_date"),
+            "days_overdue": a.get("days"),
+        }
+        for a in data.get("alerts", [])[:25]
+    ]
+    totals = {k: _money(v) if isinstance(v, dict) else v for k, v in (data.get("totals") or {}).items()}
+    return {
+        "totals_by_currency": totals,
+        "clients": clients,
+        "alerts": alerts,
+        "client_count": len(clients),
+    }
+
+
+def finance_collections(ctx):
+    """Open charges: what is pending and what is already overdue."""
+    from plane.finance.models import Invoice, Payment
+
+    _require_finance(ctx, collections_ok=True)
+    today = timezone.localdate()
+    invoices = list(
+        Invoice.objects.filter(workspace=ctx.workspace, status="pending")
+        .select_related("project")
+        .order_by("due_date")[:MAX_LIMIT]
+    )
+    paid = {}
+    for row in (
+        Payment.objects.filter(invoice_id__in=[i.id for i in invoices])
+        .values("invoice_id")
+        .annotate(total=Sum("amount"))
+    ):
+        paid[row["invoice_id"]] = row["total"] or 0
+
+    rows = []
+    for inv in invoices:
+        remaining = float(inv.amount) - float(paid.get(inv.id, 0))
+        if remaining <= 0:
+            continue
+        overdue = inv.due_date < today
+        rows.append(
+            {
+                "client": inv.project.name,
+                "concept": inv.concept,
+                "remaining": round(remaining, 2),
+                "currency": inv.currency,
+                "due_date": inv.due_date.isoformat(),
+                "status": "vencido" if overdue else "pendiente",
+                "days_overdue": (today - inv.due_date).days if overdue else 0,
+            }
+        )
+    overdue_rows = [r for r in rows if r["status"] == "vencido"]
+    return {
+        "invoices": rows,
+        "count": len(rows),
+        "overdue_count": len(overdue_rows),
+        "overdue_total": _money(
+            {r["currency"]: sum(x["remaining"] for x in overdue_rows if x["currency"] == r["currency"])
+             for r in overdue_rows}
+        ),
+    }
+
+
+def finance_pnl(ctx, months=None):
+    """Monthly income vs expenses, from real payments and captured expenses."""
+    from plane.finance.analytics import build_pnl
+
+    _require_finance(ctx)
+    try:
+        months = max(1, min(int(months), 12)) if months is not None else 6
+    except (TypeError, ValueError):
+        months = 6
+    data = build_pnl(ctx.workspace, months=months)
+    return {"months": data.get("months", data), "month_count": months}
+
+
+def finance_forecast(ctx):
+    """Six-month projection, projected cash and runway, plus the rule-based
+    insights the finance dashboard shows."""
+    from plane.finance.analytics import build_forecast, build_insights
+
+    _require_finance(ctx)
+    forecast = build_forecast(ctx.workspace)
+    # build_insights returns {"insights": [...]}, not the bare list.
+    insights = (build_insights(ctx.workspace) or {}).get("insights") or []
+    return {
+        "forecast": forecast,
+        "insights": [
+            {
+                "kind": i.get("kind"),
+                "severity": i.get("severity"),
+                "data": i.get("data"),
+            }
+            for i in insights[:20]
+        ],
+    }

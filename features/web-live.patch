@@ -64721,7 +64721,7 @@ index d9c76f8..ec090ca 100644
  
 diff --git a/apps/web/app/(all)/[workspaceSlug]/(projects)/assistant/header.tsx b/apps/web/app/(all)/[workspaceSlug]/(projects)/assistant/header.tsx
 new file mode 100644
-index 0000000..d742f5c
+index 0000000..65892d4
 --- /dev/null
 +++ b/apps/web/app/(all)/[workspaceSlug]/(projects)/assistant/header.tsx
 @@ -0,0 +1,29 @@
@@ -64734,7 +64734,7 @@ index 0000000..d742f5c
 +// plane imports
 +import { Breadcrumbs, Header } from "@plane/ui";
 +// components
-+import { AgentAvatar } from "@/components/assistant/agent-avatar";
++import { AgentIcon } from "@/components/assistant/agent-icon";
 +import { BreadcrumbLink } from "@/components/common/breadcrumb-link";
 +
 +export const WorkspaceAssistantHeader = observer(function WorkspaceAssistantHeader() {
@@ -64745,7 +64745,7 @@ index 0000000..d742f5c
 +          <Breadcrumbs>
 +            <Breadcrumbs.Item
 +              component={
-+                <BreadcrumbLink label="Asistente" icon={<AgentAvatar state="plain" className="size-4" />} />
++                <BreadcrumbLink label="Asistente" icon={<AgentIcon className="size-4 text-tertiary" />} />
 +              }
 +            />
 +          </Breadcrumbs>
@@ -64783,7 +64783,7 @@ index 0000000..965ced4
 +}
 diff --git a/apps/web/app/(all)/[workspaceSlug]/(projects)/assistant/page.tsx b/apps/web/app/(all)/[workspaceSlug]/(projects)/assistant/page.tsx
 new file mode 100644
-index 0000000..79a715a
+index 0000000..e6cb24a
 --- /dev/null
 +++ b/apps/web/app/(all)/[workspaceSlug]/(projects)/assistant/page.tsx
 @@ -0,0 +1,41 @@
@@ -64820,8 +64820,8 @@ index 0000000..79a715a
 +  return (
 +    <>
 +      <PageHead title="Asistente" />
-+      <div className="mx-auto flex h-full w-full max-w-3xl flex-col overflow-hidden">
-+        <AssistantRoot workspaceSlug={slug} />
++      <div className="mx-auto flex h-full w-full max-w-4xl flex-col overflow-hidden">
++        <AssistantRoot workspaceSlug={slug} variant="page" />
 +      </div>
 +    </>
 +  );
@@ -110896,12 +110896,62 @@ index 0000000..523c079
 +    />
 +  );
 +}
+diff --git a/apps/web/core/components/assistant/agent-icon.tsx b/apps/web/core/components/assistant/agent-icon.tsx
+new file mode 100644
+index 0000000..a012ecf
+--- /dev/null
++++ b/apps/web/core/components/assistant/agent-icon.tsx
+@@ -0,0 +1,44 @@
++/**
++ * Sintergica CE extension: the assistant's glyph for UI chrome — sidebar,
++ * breadcrumb, panel header, topbar button.
++ *
++ * The brand character is a full-colour PNG (see agent-avatar.tsx); dropped
++ * among the sidebar's monochrome line icons it reads as a sticker, not as a
++ * nav item. This is the same face drawn as a stroke icon on lucide's grid
++ * (24x24, stroke 2, currentColor) so it sits at the same visual weight as
++ * Documentos / Canales / Finanzas. The colour character stays where it earns
++ * its keep: inside the conversation.
++ *
++ * Derived from Plane CE code (AGPL-3.0-only).
++ */
++
++import { cn } from "@plane/utils";
++
++type TAgentIconProps = {
++  className?: string;
++};
++
++export function AgentIcon(props: TAgentIconProps) {
++  const { className } = props;
++
++  return (
++    <svg
++      viewBox="0 0 24 24"
++      fill="none"
++      stroke="currentColor"
++      strokeWidth={2}
++      strokeLinecap="round"
++      strokeLinejoin="round"
++      aria-hidden
++      focusable="false"
++      className={cn("size-4 shrink-0", className)}
++    >
++      <rect x="3" y="3" width="18" height="18" rx="4" />
++      {/* the character's fringe: a shallow V hugging the top edge. Any deeper
++          and the whole glyph reads as an envelope flap. */}
++      <path d="M3.4 4.8 12 8.8l8.6-4" />
++      <circle cx="9" cy="14" r="1.35" fill="currentColor" stroke="none" />
++      <circle cx="15" cy="14" r="1.35" fill="currentColor" stroke="none" />
++    </svg>
++  );
++}
 diff --git a/apps/web/core/components/assistant/composer.tsx b/apps/web/core/components/assistant/composer.tsx
 new file mode 100644
-index 0000000..95b75a8
+index 0000000..6efe5cd
 --- /dev/null
 +++ b/apps/web/core/components/assistant/composer.tsx
-@@ -0,0 +1,104 @@
+@@ -0,0 +1,123 @@
 +/**
 + * Sintergica CE extension: the assistant's input box.
 + * Derived from Plane CE code (AGPL-3.0-only).
@@ -110922,10 +110972,27 @@ index 0000000..95b75a8
 +  placeholder?: string;
 +  onSubmit: (value: string) => void;
 +  onStop: () => void;
++  /**
++   * "docked" sits at the bottom of the panel, divided from the transcript by
++   * a rule. "hero" is the empty full page: the box IS the page's centre of
++   * gravity, so it drops the rule and grows.
++   */
++  variant?: "docked" | "hero";
++  autoFocus?: boolean;
 +};
 +
 +export function AssistantComposer(props: TAssistantComposerProps) {
-+  const { isStreaming, disabled, canWrite, placeholder, onSubmit, onStop } = props;
++  const {
++    isStreaming,
++    disabled,
++    canWrite,
++    placeholder,
++    onSubmit,
++    onStop,
++    variant = "docked",
++    autoFocus,
++  } = props;
++  const isHero = variant === "hero";
 +  const [value, setValue] = useState("");
 +  const textareaRef = useRef<HTMLTextAreaElement>(null);
 +
@@ -110946,11 +111013,12 @@ index 0000000..95b75a8
 +  };
 +
 +  return (
-+    <div className="border-t border-subtle bg-canvas p-3">
++    <div className={cn("bg-canvas p-3", !isHero && "border-t border-subtle")}>
 +      <div
 +        className={cn(
-+          "flex items-end gap-2 rounded-lg border border-subtle bg-layer-1 px-3 py-2 transition-colors",
++          "flex items-end gap-2 border border-subtle bg-layer-1 transition-colors",
 +          "focus-within:border-accent-strong",
++          isHero ? "rounded-2xl px-4 py-3 shadow-sm" : "rounded-lg px-3 py-2",
 +          disabled && "opacity-60"
 +        )}
 +      >
@@ -110959,6 +111027,7 @@ index 0000000..95b75a8
 +          rows={1}
 +          value={value}
 +          disabled={disabled}
++          autoFocus={autoFocus}
 +          maxLength={MAX_CHARS}
 +          placeholder={placeholder ?? "Pregunta sobre tus proyectos…"}
 +          onChange={(e) => setValue(e.target.value)}
@@ -111008,10 +111077,10 @@ index 0000000..95b75a8
 +}
 diff --git a/apps/web/core/components/assistant/conversation.tsx b/apps/web/core/components/assistant/conversation.tsx
 new file mode 100644
-index 0000000..9c45260
+index 0000000..fa18b43
 --- /dev/null
 +++ b/apps/web/core/components/assistant/conversation.tsx
-@@ -0,0 +1,141 @@
+@@ -0,0 +1,127 @@
 +/**
 + * Sintergica CE extension: the scrolling transcript.
 + * Derived from Plane CE code (AGPL-3.0-only).
@@ -111026,17 +111095,15 @@ index 0000000..9c45260
 +import type { TToolTraceEntry } from "@/store/assistant.store";
 +// local imports
 +import { AgentAvatar } from "./agent-avatar";
++import { AssistantEmptyState } from "./empty-state";
 +import { AssistantActionCard } from "./action-card";
 +import { AssistantMessage } from "./message";
 +import { AssistantToolTrace } from "./tool-trace";
 +
-+const SUGGESTIONS = [
-+  "¿Qué tengo asignado y va con retraso?",
-+  "¿Cómo va el ciclo actual?",
-+  "Resume los work items urgentes sin responsable",
-+];
-+
 +type TAssistantConversationProps = {
++  variant: "panel" | "page";
++  userName?: string;
++  financeRole?: string | null;
 +  messages: TAssistantMessage[];
 +  streamingContent: string;
 +  toolTrace: TToolTraceEntry[];
@@ -111053,6 +111120,9 @@ index 0000000..9c45260
 +  props: TAssistantConversationProps
 +) {
 +  const {
++    variant,
++    userName,
++    financeRole,
 +    messages,
 +    streamingContent,
 +    toolTrace,
@@ -111075,27 +111145,12 @@ index 0000000..9c45260
 +
 +  if (isEmpty) {
 +    return (
-+      <div className="flex flex-1 flex-col items-center justify-center gap-4 px-6 text-center">
-+        <AgentAvatar state="idle" className="size-12" />
-+        <div>
-+          <p className="text-13 font-medium text-primary">Pregunta sobre tu trabajo</p>
-+          <p className="mt-1 text-11 text-tertiary">
-+            Responde consultando tus proyectos, ciclos, work items y la wiki.
-+          </p>
-+        </div>
-+        <div className="flex w-full flex-col gap-1.5">
-+          {SUGGESTIONS.map((suggestion) => (
-+            <button
-+              key={suggestion}
-+              type="button"
-+              onClick={() => onSuggestion(suggestion)}
-+              className="rounded-md border border-subtle px-3 py-2 text-left text-11 text-secondary transition-colors hover:bg-layer-1"
-+            >
-+              {suggestion}
-+            </button>
-+          ))}
-+        </div>
-+      </div>
++      <AssistantEmptyState
++        variant={variant}
++        userName={userName}
++        financeRole={financeRole}
++        onSuggestion={onSuggestion}
++      />
 +    );
 +  }
 +
@@ -111153,9 +111208,180 @@ index 0000000..9c45260
 +    </div>
 +  );
 +});
+diff --git a/apps/web/core/components/assistant/empty-state.tsx b/apps/web/core/components/assistant/empty-state.tsx
+new file mode 100644
+index 0000000..57d13bf
+--- /dev/null
++++ b/apps/web/core/components/assistant/empty-state.tsx
+@@ -0,0 +1,165 @@
++/**
++ * Sintergica CE extension: what the assistant shows before the first message.
++ *
++ * Two shapes from one component. The docked panel is 320-720px wide, so it
++ * gets a compact stack. The full page has room to open with a greeting and
++ * suggestions grouped by area — which is also how the user finds out the
++ * assistant can read the wiki and the finance data at all: a chat box with no
++ * affordances looks like it only knows about work items.
++ *
++ * Finance suggestions appear only for someone whose role can actually get an
++ * answer; offering them to everyone would advertise a door that 403s.
++ *
++ * Derived from Plane CE code (AGPL-3.0-only).
++ */
++
++import { Banknote, BookText, FolderKanban, WalletCards } from "lucide-react";
++import type { LucideIcon } from "lucide-react";
++import { cn } from "@plane/utils";
++// local imports
++import { AgentAvatar } from "./agent-avatar";
++
++type TArea = {
++  key: string;
++  label: string;
++  Icon: LucideIcon;
++  prompts: string[];
++};
++
++const PROJECT_AREA: TArea = {
++  key: "projects",
++  label: "Proyectos",
++  Icon: FolderKanban,
++  prompts: [
++    "¿Qué tengo asignado y va con retraso?",
++    "¿Cómo va el ciclo actual?",
++    "Resume los work items urgentes sin responsable",
++    "¿En qué se avanzó esta semana?",
++  ],
++};
++
++const DOCS_AREA: TArea = {
++  key: "docs",
++  label: "Documentos",
++  Icon: BookText,
++  prompts: [
++    "¿Qué documentos hay sobre este proyecto?",
++    "Resume el documento de onboarding",
++    "¿Dónde está documentado nuestro proceso de despliegue?",
++  ],
++};
++
++const FINANCE_AREA: TArea = {
++  key: "finance",
++  label: "Finanzas",
++  Icon: Banknote,
++  prompts: [
++    "¿Cómo vamos de ingresos este mes?",
++    "¿Cuánto nos deben y quién está vencido?",
++    "¿Cuántos meses de runway tenemos?",
++  ],
++};
++
++const COLLECTIONS_AREA: TArea = {
++  key: "collections",
++  label: "Cobranza",
++  Icon: WalletCards,
++  prompts: ["¿Qué cobros están vencidos?", "¿A quién hay que cobrarle esta semana?"],
++};
++
++function areasFor(financeRole: string | null | undefined): TArea[] {
++  const areas = [PROJECT_AREA, DOCS_AREA];
++  if (financeRole === "finance") areas.push(FINANCE_AREA);
++  else if (financeRole === "collections") areas.push(COLLECTIONS_AREA);
++  return areas;
++}
++
++type TProps = {
++  variant: "panel" | "page";
++  /** First name only: "Hola, axel.mujica" reads like a log line, not a greeting. */
++  userName?: string;
++  financeRole?: string | null;
++  onSuggestion: (value: string) => void;
++};
++
++export function AssistantEmptyState(props: TProps) {
++  const { variant, userName, financeRole, onSuggestion } = props;
++  const areas = areasFor(financeRole);
++
++  if (variant === "panel") {
++    // One flat list: grouping into columns inside a narrow panel just adds
++    // headers nobody reads.
++    const prompts = areas.map((area) => area.prompts[0]);
++    return (
++      <div className="flex flex-1 flex-col items-center justify-center gap-4 px-6 text-center">
++        <AgentAvatar state="idle" className="size-12" />
++        <div>
++          <p className="text-13 font-medium text-primary">
++            {userName ? `Hola, ${userName}` : "Pregunta sobre tu trabajo"}
++          </p>
++          <p className="mt-1 text-11 text-tertiary">
++            Puedo consultar tus proyectos, la wiki
++            {financeRole ? " y las finanzas" : ""}.
++          </p>
++        </div>
++        <div className="flex w-full flex-col gap-1.5">
++          {prompts.map((prompt) => (
++            <button
++              key={prompt}
++              type="button"
++              onClick={() => onSuggestion(prompt)}
++              className="rounded-md border border-subtle px-3 py-2 text-left text-11 text-secondary transition-colors hover:bg-layer-1"
++            >
++              {prompt}
++            </button>
++          ))}
++        </div>
++      </div>
++    );
++  }
++
++  return (
++    <div className="flex flex-1 flex-col items-center justify-center gap-8 px-6 py-10">
++      <div className="flex flex-col items-center gap-4 text-center">
++        <AgentAvatar state="idle" className="size-16" />
++        <div>
++          <h1 className="text-2xl font-medium tracking-tight text-primary sm:text-3xl">
++            {userName ? `Pregunta lo que quieras, ${userName}` : "Pregunta lo que quieras"}
++          </h1>
++          <p className="mt-2 text-13 text-tertiary">
++            Respondo consultando tus proyectos, la wiki
++            {financeRole ? " y las finanzas del espacio" : ""} — sin inventar nada.
++          </p>
++        </div>
++      </div>
++
++      <div
++        className={cn(
++          "grid w-full max-w-3xl gap-3",
++          areas.length >= 3 ? "sm:grid-cols-3" : "sm:grid-cols-2"
++        )}
++      >
++        {areas.map((area) => (
++          <div key={area.key} className="rounded-lg border border-subtle bg-layer-1/50 p-3">
++            <div className="mb-2 flex items-center gap-1.5 text-11 font-medium text-tertiary">
++              <area.Icon className="size-3.5" />
++              <span className="uppercase tracking-wide">{area.label}</span>
++            </div>
++            <div className="flex flex-col gap-1">
++              {area.prompts.map((prompt) => (
++                <button
++                  key={prompt}
++                  type="button"
++                  onClick={() => onSuggestion(prompt)}
++                  className="rounded-md px-2 py-1.5 text-left text-12 text-secondary transition-colors hover:bg-layer-2 hover:text-primary"
++                >
++                  {prompt}
++                </button>
++              ))}
++            </div>
++          </div>
++        ))}
++      </div>
++    </div>
++  );
++}
 diff --git a/apps/web/core/components/assistant/header.tsx b/apps/web/core/components/assistant/header.tsx
 new file mode 100644
-index 0000000..4421fe7
+index 0000000..117c2f4
 --- /dev/null
 +++ b/apps/web/core/components/assistant/header.tsx
 @@ -0,0 +1,181 @@
@@ -111173,7 +111399,7 @@ index 0000000..4421fe7
 +// services
 +import type { TAssistantConfig, TAssistantConversation } from "@/services/assistant.service";
 +// local imports
-+import { AgentAvatar } from "./agent-avatar";
++import { AgentIcon } from "./agent-icon";
 +
 +type TAssistantHeaderProps = {
 +  config: TAssistantConfig | undefined;
@@ -111211,7 +111437,7 @@ index 0000000..4421fe7
 +
 +  return (
 +    <div className="flex h-11 shrink-0 items-center gap-1 border-b border-subtle px-3">
-+      <AgentAvatar state="plain" className="size-4" />
++      <AgentIcon className="size-4 text-secondary" />
 +      <span className="mr-auto truncate text-13 font-medium text-primary">Asistente</span>
 +
 +      {models.length > 1 && (
@@ -111752,10 +111978,10 @@ index 0000000..e2f5ec5
 +});
 diff --git a/apps/web/core/components/assistant/root.tsx b/apps/web/core/components/assistant/root.tsx
 new file mode 100644
-index 0000000..5067374
+index 0000000..edb7dd3
 --- /dev/null
 +++ b/apps/web/core/components/assistant/root.tsx
-@@ -0,0 +1,110 @@
+@@ -0,0 +1,163 @@
 +/**
 + * Sintergica CE extension: the assistant chat, shared by the docked panel and
 + * the full-page route.
@@ -111770,6 +111996,7 @@ index 0000000..5067374
 +// hooks
 +import { useAssistantContext } from "@/hooks/use-assistant-context";
 +import { useAssistant } from "@/hooks/store/use-assistant";
++import { useUser } from "@/hooks/store/user";
 +// local imports
 +import { AssistantComposer } from "./composer";
 +import { AssistantConversation } from "./conversation";
@@ -111781,12 +112008,15 @@ index 0000000..5067374
 +  onClose?: () => void;
 +  /** Present only in the docked panel: jumps to the full-page view. */
 +  onExpand?: () => void;
++  /** "page" gets the roomier greeting and the grouped suggestions. */
++  variant?: "panel" | "page";
 +};
 +
 +export const AssistantRoot = observer(function AssistantRoot(props: TAssistantRootProps) {
-+  const { workspaceSlug, className, onClose, onExpand } = props;
++  const { workspaceSlug, className, onClose, onExpand, variant = "panel" } = props;
 +  const assistant = useAssistant();
 +  const context = useAssistantContext();
++  const { data: currentUser } = useUser();
 +
 +  useSWR(workspaceSlug ? `ASSISTANT_CONFIG_${workspaceSlug}` : null, () =>
 +    assistant.fetchConfig(workspaceSlug)
@@ -111813,6 +112043,39 @@ index 0000000..5067374
 +    void assistant.sendMessage(workspaceSlug, value, context);
 +  };
 +
++  // First name only. Plane's display_name is often the email handle
++  // ("axel.mujica"), which reads like a log line rather than a greeting.
++  const firstName =
++    currentUser?.first_name?.trim() || currentUser?.display_name?.split(/[.@\s]/)[0] || "";
++  const greetingName = firstName
++    ? firstName.charAt(0).toUpperCase() + firstName.slice(1)
++    : undefined;
++
++  // Mirrors the check inside AssistantConversation: on the full page an empty
++  // conversation is laid out as one centred block (greeting + suggestions +
++  // input) instead of pinning the input to the bottom of an empty screen.
++  const isEmpty =
++    messages.length === 0 &&
++    !assistant.streamingContent &&
++    !assistant.isStreaming &&
++    assistant.pendingActions.length === 0;
++  const isHero = variant === "page" && isEmpty && !notConfigured;
++
++  const composer = (
++    <AssistantComposer
++      isStreaming={assistant.isStreaming}
++      disabled={disabled}
++      canWrite={config?.can_write ?? false}
++      variant={isHero ? "hero" : "docked"}
++      autoFocus={isHero}
++      placeholder={
++        quotaExhausted ? "Se alcanzó el tope de tokens del mes" : "Pregunta sobre tus proyectos…"
++      }
++      onSubmit={send}
++      onStop={() => assistant.stopStreaming()}
++    />
++  );
++
 +  return (
 +    <div className={cn("flex h-full min-h-0 w-full flex-col bg-canvas", className)}>
 +      <AssistantHeader
@@ -111836,8 +112099,32 @@ index 0000000..5067374
 +            <span className="font-medium text-secondary">/god-mode/ai/</span>.
 +          </p>
 +        </div>
++      ) : isHero ? (
++        <div className="flex flex-1 flex-col justify-center overflow-y-auto">
++          <AssistantConversation
++            variant={variant}
++            userName={greetingName}
++            financeRole={config?.finance_role}
++            messages={messages}
++            streamingContent={assistant.streamingContent}
++            toolTrace={assistant.toolTrace}
++            linkMap={assistant.linkMap}
++            isStreaming={assistant.isStreaming}
++            errorMessage={assistant.errorMessage}
++            pendingActions={assistant.pendingActions}
++            decidingActionId={assistant.decidingActionId}
++            onSuggestion={send}
++            onDecide={(actionId, decision) =>
++              void assistant.decideAction(workspaceSlug, actionId, decision)
++            }
++          />
++          <div className="mx-auto w-full max-w-2xl shrink-0">{composer}</div>
++        </div>
 +      ) : (
 +        <AssistantConversation
++          variant={variant}
++          userName={greetingName}
++          financeRole={config?.finance_role}
 +          messages={messages}
 +          streamingContent={assistant.streamingContent}
 +          toolTrace={assistant.toolTrace}
@@ -111853,22 +112140,14 @@ index 0000000..5067374
 +        />
 +      )}
 +
-+      <AssistantComposer
-+        isStreaming={assistant.isStreaming}
-+        disabled={disabled}
-+        canWrite={config?.can_write ?? false}
-+        placeholder={
-+          quotaExhausted ? "Se alcanzó el tope de tokens del mes" : "Pregunta sobre tus proyectos…"
-+        }
-+        onSubmit={send}
-+        onStop={() => assistant.stopStreaming()}
-+      />
++      {/* In hero mode the composer already rides with the greeting above. */}
++      {!isHero && composer}
 +    </div>
 +  );
 +});
 diff --git a/apps/web/core/components/assistant/toggle-button.tsx b/apps/web/core/components/assistant/toggle-button.tsx
 new file mode 100644
-index 0000000..2028dc2
+index 0000000..e3e7d47
 --- /dev/null
 +++ b/apps/web/core/components/assistant/toggle-button.tsx
 @@ -0,0 +1,45 @@
@@ -111886,7 +112165,7 @@ index 0000000..2028dc2
 +// hooks
 +import { useAssistant } from "@/hooks/store/use-assistant";
 +// local imports
-+import { AgentAvatar } from "./agent-avatar";
++import { AgentIcon } from "./agent-icon";
 +
 +export const AssistantToggleButton = observer(function AssistantToggleButton() {
 +  const { workspaceSlug } = useParams();
@@ -111912,7 +112191,7 @@ index 0000000..2028dc2
 +          assistant.isPanelOpen && "bg-layer-1 text-accent-primary"
 +        )}
 +      >
-+        <AgentAvatar state="plain" className="size-5" />
++        <AgentIcon className="size-5" />
 +      </button>
 +    </Tooltip>
 +  );
@@ -122189,7 +122468,7 @@ index d19b860..48abc34 100644
        </CustomMenu>
      </>
 diff --git a/apps/web/core/components/workspace/sidebar/helper.tsx b/apps/web/core/components/workspace/sidebar/helper.tsx
-index 9bf4a01..1e22ac4 100644
+index 9bf4a01..f08dd15 100644
 --- a/apps/web/core/components/workspace/sidebar/helper.tsx
 +++ b/apps/web/core/components/workspace/sidebar/helper.tsx
 @@ -4,6 +4,7 @@
@@ -122209,7 +122488,7 @@ index 9bf4a01..1e22ac4 100644
  } from "@plane/propel/icons";
  import { cn } from "@plane/utils";
 +// components
-+import { AgentAvatar } from "@/components/assistant/agent-avatar";
++import { AgentIcon } from "@/components/assistant/agent-icon";
  
  export const getSidebarNavigationItemIcon = (key: string, className: string = "") => {
    switch (key) {
@@ -122226,7 +122505,7 @@ index 9bf4a01..1e22ac4 100644
 +    case "channels":
 +      return <MessagesSquare className={cn("size-4 flex-shrink-0", className)} />;
 +    case "assistant":
-+      return <AgentAvatar state="plain" className={cn("size-4 flex-shrink-0", className)} />;
++      return <AgentIcon className={cn("size-4 flex-shrink-0", className)} />;
    }
  };
 diff --git a/apps/web/core/components/workspace/sidebar/project-navigation.tsx b/apps/web/core/components/workspace/sidebar/project-navigation.tsx
@@ -122838,10 +123117,10 @@ index e74dfd5..d582cb9 100644
              <p className="text-center text-13 text-secondary">
 diff --git a/apps/web/core/services/assistant.service.ts b/apps/web/core/services/assistant.service.ts
 new file mode 100644
-index 0000000..3c9e1d1
+index 0000000..7eea3ff
 --- /dev/null
 +++ b/apps/web/core/services/assistant.service.ts
-@@ -0,0 +1,259 @@
+@@ -0,0 +1,261 @@
 +/**
 + * Sintergica CE extension: AI assistant service.
 + *
@@ -122864,6 +123143,8 @@ index 0000000..3c9e1d1
 +  models: string[];
 +  tools: string[];
 +  can_write: boolean;
++  /** "finance" | "collections" | null — gates the money suggestions. */
++  finance_role: string | null;
 +  usage: {
 +    tokens_this_month: number;
 +    monthly_token_cap: number;

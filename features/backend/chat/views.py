@@ -49,6 +49,20 @@ def _parse_ts(raw):
     return parse_datetime(raw.replace(" ", "+"))
 
 
+# Nodos del editor que SON contenido aunque no aporten texto. Sin esto, un
+# mensaje cuya única carga es una imagen se vacía al pasar por strip_tags y se
+# rechaza como "vacío": enviar solo una foto era imposible en los dos clientes
+# (lo cazó la sesión del móvil al subir la primera imagen real; en la web esa
+# ruta nunca se había ejercitado porque el composer siempre mandaba texto).
+_MEDIA_TAGS = ("<image-component", "<img", "<video", "<file-component")
+
+
+def _has_content(message_html):
+    if strip_tags(message_html or "").strip():
+        return True
+    return any(tag in (message_html or "").lower() for tag in _MEDIA_TAGS)
+
+
 def _bad_request(detail):
     return Response({"error": detail}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -530,7 +544,7 @@ class ChatMessagesEndpoint(BaseAPIView):
         if len(message_html) > MAX_MESSAGE_CHARS:
             return _bad_request("Message is too long.")
         linked_ids = request.data.get("linked_work_item_ids") or []
-        if not strip_tags(message_html).strip() and not linked_ids:
+        if not _has_content(message_html) and not linked_ids:
             return _bad_request("Message is empty.")
 
         parent = None
@@ -604,7 +618,7 @@ class ChatMessageDetailEndpoint(BaseAPIView):
                 status=status.HTTP_403_FORBIDDEN,
             )
         message_html = request.data.get("message_html") or ""
-        if not strip_tags(message_html).strip():
+        if not _has_content(message_html):
             return _bad_request("Message is empty.")
         if len(message_html) > MAX_MESSAGE_CHARS:
             return _bad_request("Message is too long.")

@@ -388,6 +388,61 @@ membresía, y que las acciones de escritura no se ejecuten sin confirmación.
   la reabre con `openConversation`. Sin ese detalle, "Vista completa" abría
   siempre un chat vacío.
 
+## 8c. Documentos y finanzas en el asistente (31 Ago 2026)
+
+Hasta esta ronda el asistente sólo sabía de proyectos y work items: de la wiki
+podía *buscar* pero no *leer*, y de finanzas no sabía nada.
+
+- **Documentos**: `get_page(identifier)` devuelve el texto completo de una
+  página (wiki o de proyecto), por id o por nombre, truncado a 12k caracteres.
+  `search_pages` ahora incluye el `id` de cada resultado — sin él el modelo
+  encontraba una página y no podía abrirla. El prompt obliga a leer con
+  `get_page` antes de resumir, en vez de responder desde el extracto.
+- **Finanzas**: `finance_overview` (panorama, saldos por moneda, alertas),
+  `finance_collections` (cobros abiertos y vencidos), `finance_pnl(months)`
+  (mes a mes) y `finance_forecast` (proyección, runway e insights). Todas
+  reutilizan los MISMOS builders que pinta el panel de finanzas
+  (`build_dashboard`, `build_pnl`, `build_forecast`, `build_insights`), para
+  que asistente y pantalla no puedan discrepar.
+- **El gating es doble, y a propósito**: `ToolContext.finance_role` decide qué
+  schemas se le OFRECEN al modelo (`all_tool_schemas(can_write, finance_role)`)
+  y además cada herramienta vuelve a comprobar el rol. Ocultar el schema es
+  UX — que el modelo no proponga lo que va a fallar; negar el dato es la
+  frontera de seguridad. El rol de **cobranza** es subconjunto: sólo
+  `finance_collections`. Recordar que en finanzas los admins NO tienen acceso
+  implícito (finance.0005): el rol es siempre explícito.
+- El prompt gana una política de finanzas de tres estados (acceso completo /
+  sólo cobranza / sin acceso). La de "sin acceso" dice explícitamente que no
+  intente deducir cifras desde work items.
+- `finance_overview` NO es estrictamente de sólo lectura: `build_dashboard`
+  hace backfill idempotente de perfiles y colores, igual que cada carga del
+  panel. Documentado en el propio código para que no sorprenda.
+- El endpoint de configuración expone `finance_role` para que el frontend
+  sugiera preguntas de dinero sólo a quien puede obtener respuesta.
+
+## 8d. UI de la pantalla completa (31 Ago 2026)
+
+El panel acoplado y la página compartían un estado vacío pensado para 320px de
+ancho: en la página se veía diminuto y, peor, no daba ninguna pista de que el
+asistente puede leer la wiki o las finanzas.
+
+- `assistant/empty-state.tsx`: un componente, dos formas. `variant="panel"`
+  mantiene la pila compacta; `variant="page"` abre con saludo grande
+  ("Pregunta lo que quieras, <Nombre>") y sugerencias agrupadas por área
+  (Proyectos · Documentos · Finanzas/Cobranza).
+- **Las sugerencias de dinero se muestran según `config.finance_role`**, que
+  el endpoint de configuración ahora expone. Ofrecérselas a todo el mundo
+  sería anunciar una puerta que devuelve 403.
+- **Nombre de pila, no `display_name`**: en esta instancia el display_name es
+  el handle del correo ("axel.mujica"), que como saludo parece una línea de
+  log. Se usa `first_name` y, si falta, la primera partícula antes de `.`/`@`.
+- **Modo "hero"**: en la página, con la conversación vacía, el composer sube a
+  acompañar al saludo (bloque centrado) en vez de quedar clavado al fondo de
+  una pantalla vacía; al llegar el primer mensaje vuelve al layout normal.
+  `AssistantComposer` gana `variant="hero"` (sin regla superior, caja más
+  grande) y `autoFocus`.
+- El icono del chrome NO es el personaje: ver 8b.
+
 ## 9. Riesgos y decisiones abiertas
 
 | Riesgo | Mitigación |

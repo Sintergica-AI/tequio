@@ -10,7 +10,7 @@ from plane.utils.exception_logger import log_exception
 
 _PROJECT = {
     "type": "string",
-    "description": "Nombre o identificador del proyecto (p. ej. 'SIN' o 'Plane Sintergica'). Omitir para buscar en todos.",
+    "description": "Nombre o identificador del proyecto (p. ej. 'SIN' o el nombre completo). Omitir para buscar en todos.",
 }
 
 TOOL_SCHEMAS = [
@@ -149,7 +149,10 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "search_pages",
-            "description": "Busca en la wiki de la organización y en las páginas de proyecto.",
+            "description": (
+                "Busca en la wiki de la organización y en las páginas de proyecto. "
+                "Devuelve extractos y el id de cada página; para leerla entera usa get_page."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -161,7 +164,87 @@ TOOL_SCHEMAS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_page",
+            "description": (
+                "Contenido completo de una página de la wiki o de un proyecto. Úsala cuando "
+                "el usuario pregunte por lo que dice un documento, o para resumirlo o "
+                "compararlo. Antes localízala con search_pages."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "identifier": {
+                        "type": "string",
+                        "description": "El id que devolvió search_pages, o el nombre de la página.",
+                    }
+                },
+                "required": ["identifier"],
+            },
+        },
+    },
 ]
+
+# Sólo se ofrecen a quien tiene el rol correspondiente (ver all_tool_schemas).
+FINANCE_TOOL_SCHEMAS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "finance_overview",
+            "description": (
+                "Panorama financiero del espacio: ingresos y saldo pendiente por moneda, "
+                "situación de cada cliente y alertas de vencidos. Empieza por aquí para "
+                "'cómo vamos', 'cuánto nos deben' o cualquier pregunta general de dinero."
+            ),
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "finance_collections",
+            "description": (
+                "Cobros abiertos: qué está pendiente y qué ya venció, con días de retraso "
+                "y saldo por cobrar. Para 'a quién hay que cobrarle' o 'qué está vencido'."
+            ),
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "finance_pnl",
+            "description": (
+                "Estado mensual: ingresos reales (pagos cobrados) contra gastos capturados, "
+                "mes a mes. Para 'cómo cerró el mes', márgenes y comparaciones entre meses."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "months": {"type": "integer", "description": "Cuántos meses hacia atrás (1-12, por defecto 6)."}
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "finance_forecast",
+            "description": (
+                "Proyección a seis meses, caja proyectada y meses de runway por moneda, "
+                "más las señales automáticas (cobranza vencida, runway bajo, concentración "
+                "de clientes, renovaciones próximas, margen negativo)."
+            ),
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+]
+
+# Cobranza es un subconjunto: ve lo que necesita para perseguir pagos, no el
+# panorama completo ni las proyecciones.
+COLLECTIONS_TOOL_NAMES = {"finance_collections"}
 
 # Read-only, all of them: phase 1 cannot change anything in the workspace.
 HANDLERS = {
@@ -174,6 +257,14 @@ HANDLERS = {
     "list_members": tools.list_members,
     "work_item_stats": tools.work_item_stats,
     "search_pages": tools.search_pages,
+    "get_page": tools.get_page,
+    # Las de finanzas se despachan como cualquier otra: cada una vuelve a
+    # comprobar el rol por su cuenta (ocultar el schema es UX, la comprobación
+    # es la frontera de seguridad).
+    "finance_overview": tools.finance_overview,
+    "finance_collections": tools.finance_collections,
+    "finance_pnl": tools.finance_pnl,
+    "finance_forecast": tools.finance_forecast,
 }
 
 # Las de escritura no se despachan aquí: el loop crea una acción pendiente y
@@ -181,10 +272,24 @@ HANDLERS = {
 WRITE_TOOLS = actions.WRITE_TOOL_NAMES
 
 
-def all_tool_schemas(can_write):
+def finance_tool_schemas(finance_role):
+    """Nada para quien no tiene rol; el rol de cobranza sólo ve sus cobros."""
+    if finance_role == "finance":
+        return FINANCE_TOOL_SCHEMAS
+    if finance_role == "collections":
+        return [s for s in FINANCE_TOOL_SCHEMAS if s["function"]["name"] in COLLECTIONS_TOOL_NAMES]
+    return []
+
+
+def all_tool_schemas(can_write, finance_role=None):
     """Un usuario que no puede escribir en ningún proyecto no ve siquiera las
-    herramientas de escritura: así el modelo no propone algo que va a fallar."""
-    return TOOL_SCHEMAS + (actions.WRITE_TOOL_SCHEMAS if can_write else [])
+    herramientas de escritura: así el modelo no propone algo que va a fallar.
+    Lo mismo con finanzas, que además NO son visibles para todo el espacio."""
+    return (
+        TOOL_SCHEMAS
+        + (actions.WRITE_TOOL_SCHEMAS if can_write else [])
+        + finance_tool_schemas(finance_role)
+    )
 
 
 def preview_action(name, ctx, arguments):
