@@ -111014,10 +111014,10 @@ index 0000000..a012ecf
 +}
 diff --git a/apps/web/core/components/assistant/composer.tsx b/apps/web/core/components/assistant/composer.tsx
 new file mode 100644
-index 0000000..6efe5cd
+index 0000000..cc5227f
 --- /dev/null
 +++ b/apps/web/core/components/assistant/composer.tsx
-@@ -0,0 +1,123 @@
+@@ -0,0 +1,130 @@
 +/**
 + * Sintergica CE extension: the assistant's input box.
 + * Derived from Plane CE code (AGPL-3.0-only).
@@ -111045,6 +111045,9 @@ index 0000000..6efe5cd
 +   */
 +  variant?: "docked" | "hero";
 +  autoFocus?: boolean;
++  /** The "+" picker and its chip; absent where there is no workspace context. */
++  focusPicker?: React.ReactNode;
++  focusChip?: React.ReactNode;
 +};
 +
 +export function AssistantComposer(props: TAssistantComposerProps) {
@@ -111057,6 +111060,8 @@ index 0000000..6efe5cd
 +    onStop,
 +    variant = "docked",
 +    autoFocus,
++    focusPicker,
++    focusChip,
 +  } = props;
 +  const isHero = variant === "hero";
 +  const [value, setValue] = useState("");
@@ -111080,6 +111085,7 @@ index 0000000..6efe5cd
 +
 +  return (
 +    <div className={cn("bg-canvas p-3", !isHero && "border-t border-subtle")}>
++      {focusChip}
 +      <div
 +        className={cn(
 +          "flex items-end gap-2 border border-subtle bg-layer-1 transition-colors",
@@ -111088,6 +111094,7 @@ index 0000000..6efe5cd
 +          disabled && "opacity-60"
 +        )}
 +      >
++        {focusPicker}
 +        <textarea
 +          ref={textareaRef}
 +          rows={1}
@@ -111639,6 +111646,255 @@ index 0000000..d12862b
 +    </div>
 +  );
 +}
+diff --git a/apps/web/core/components/assistant/focus-picker.tsx b/apps/web/core/components/assistant/focus-picker.tsx
+new file mode 100644
+index 0000000..9a3a3cc
+--- /dev/null
++++ b/apps/web/core/components/assistant/focus-picker.tsx
+@@ -0,0 +1,243 @@
++/**
++ * Sintergica CE extension: the composer's "+" — pick what to work on.
++ *
++ * Without it the assistant only knew where you happened to be standing. This
++ * lets you say it outright: this project, this document, the finances. The
++ * choice rides in the conversation context, so the backend turns it into an
++ * instruction in the system prompt (see build_system_prompt) — it is not
++ * decoration.
++ *
++ * Finance only shows for someone whose role can actually get an answer.
++ *
++ * Derived from Plane CE code (AGPL-3.0-only).
++ */
++
++import { useEffect, useMemo, useRef, useState } from "react";
++import { observer } from "mobx-react";
++import { Banknote, BookText, FolderKanban, Loader2, Plus, Search } from "lucide-react";
++// plane imports
++import { CustomMenu } from "@plane/ui";
++import { cn } from "@plane/utils";
++// hooks
++import { useAssistant } from "@/hooks/store/use-assistant";
++import { useProject } from "@/hooks/store/use-project";
++// services
++import type { TAssistantPage } from "@/services/assistant.service";
++import { AssistantService } from "@/services/assistant.service";
++
++const assistantService = new AssistantService();
++
++type TProps = {
++  workspaceSlug: string;
++  financeRole?: string | null;
++  disabled?: boolean;
++};
++
++export const AssistantFocusPicker = observer(function AssistantFocusPicker(props: TProps) {
++  const { workspaceSlug, financeRole, disabled } = props;
++  const assistant = useAssistant();
++  const { joinedProjectIds, getProjectById } = useProject();
++  const [openPanel, setOpenPanel] = useState<null | "project" | "wiki">(null);
++
++  const projects = useMemo(
++    () =>
++      (joinedProjectIds ?? [])
++        .map((id) => getProjectById(id))
++        .filter((p): p is NonNullable<typeof p> => !!p),
++    [joinedProjectIds, getProjectById]
++  );
++
++  return (
++    <>
++      <CustomMenu
++        customButton={
++          <span
++            role="button"
++            tabIndex={0}
++            aria-label="Elegir sobre qué trabajar"
++            className={cn(
++              "grid size-7 shrink-0 place-items-center rounded-full text-tertiary transition-colors",
++              "hover:bg-layer-2 hover:text-primary",
++              disabled && "pointer-events-none opacity-50"
++            )}
++          >
++            <Plus className="size-4" />
++          </span>
++        }
++        placement="top-start"
++        maxHeight="lg"
++        closeOnSelect
++      >
++        <CustomMenu.MenuItem onClick={() => setOpenPanel("project")}>
++          <span className="flex items-center gap-2 text-12">
++            <FolderKanban className="size-3.5 text-tertiary" /> Un proyecto
++          </span>
++        </CustomMenu.MenuItem>
++        <CustomMenu.MenuItem onClick={() => setOpenPanel("wiki")}>
++          <span className="flex items-center gap-2 text-12">
++            <BookText className="size-3.5 text-tertiary" /> Un documento
++          </span>
++        </CustomMenu.MenuItem>
++        {financeRole && (
++          <CustomMenu.MenuItem
++            onClick={() => assistant.setFocus({ kind: "finance", label: "Finanzas" })}
++          >
++            <span className="flex items-center gap-2 text-12">
++              <Banknote className="size-3.5 text-tertiary" /> Finanzas
++            </span>
++          </CustomMenu.MenuItem>
++        )}
++      </CustomMenu>
++
++      {openPanel === "project" && (
++        <PickerDialog title="Trabajar sobre un proyecto" onClose={() => setOpenPanel(null)}>
++          {projects.length === 0 ? (
++            <p className="px-3 py-4 text-12 text-tertiary">No perteneces a ningún proyecto.</p>
++          ) : (
++            projects.map((project) => (
++              <button
++                key={project.id}
++                type="button"
++                onClick={() => {
++                  assistant.setFocus({ kind: "project", id: project.id, label: project.name });
++                  setOpenPanel(null);
++                }}
++                className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-12 text-secondary hover:bg-layer-1 hover:text-primary"
++              >
++                <FolderKanban className="size-3.5 shrink-0 text-tertiary" />
++                <span className="truncate">{project.name}</span>
++              </button>
++            ))
++          )}
++        </PickerDialog>
++      )}
++
++      {openPanel === "wiki" && (
++        <PagePicker
++          workspaceSlug={workspaceSlug}
++          onClose={() => setOpenPanel(null)}
++          onPick={(page) => {
++            assistant.setFocus({ kind: "wiki", id: page.id, label: page.name });
++            setOpenPanel(null);
++          }}
++        />
++      )}
++    </>
++  );
++});
++
++function PickerDialog(props: { title: string; onClose: () => void; children: React.ReactNode }) {
++  const { title, onClose, children } = props;
++  return (
++    <div className="fixed inset-0 z-30 flex items-start justify-center p-4 pt-[12vh]">
++      <button
++        type="button"
++        aria-label="Cerrar"
++        onClick={onClose}
++        className="absolute inset-0 cursor-default bg-black/40"
++      />
++      <div className="relative z-10 flex max-h-[60vh] w-full max-w-md flex-col overflow-hidden rounded-lg border border-subtle bg-canvas shadow-lg">
++        <p className="border-b border-subtle px-3 py-2.5 text-13 font-medium text-primary">{title}</p>
++        <div className="flex-1 overflow-y-auto p-1.5">{children}</div>
++      </div>
++    </div>
++  );
++}
++
++function PagePicker(props: {
++  workspaceSlug: string;
++  onClose: () => void;
++  onPick: (page: TAssistantPage) => void;
++}) {
++  const { workspaceSlug, onClose, onPick } = props;
++  const [query, setQuery] = useState("");
++  const [pages, setPages] = useState<TAssistantPage[]>([]);
++  const [isSearching, setIsSearching] = useState(false);
++  const inputRef = useRef<HTMLInputElement>(null);
++
++  useEffect(() => {
++    inputRef.current?.focus();
++  }, []);
++
++  useEffect(() => {
++    const needle = query.trim();
++    if (needle.length < 2) {
++      setPages([]);
++      return;
++    }
++    setIsSearching(true);
++    // Debounced: the picker searches the whole workspace on every keystroke
++    // otherwise.
++    const timer = setTimeout(() => {
++      assistantService
++        .searchPages(workspaceSlug, needle)
++        .then(setPages)
++        .catch(() => setPages([]))
++        .finally(() => setIsSearching(false));
++    }, 250);
++    return () => clearTimeout(timer);
++  }, [query, workspaceSlug]);
++
++  return (
++    <PickerDialog title="Trabajar sobre un documento" onClose={onClose}>
++      <div className="mb-1 flex items-center gap-2 rounded-md border border-subtle px-2.5 py-1.5">
++        <Search className="size-3.5 shrink-0 text-tertiary" />
++        <input
++          ref={inputRef}
++          value={query}
++          onChange={(e) => setQuery(e.target.value)}
++          placeholder="Buscar en la wiki y en las páginas de proyecto"
++          className="w-full bg-transparent text-12 text-primary outline-none placeholder:text-placeholder"
++        />
++        {isSearching && <Loader2 className="size-3.5 shrink-0 animate-spin text-tertiary" />}
++      </div>
++      {query.trim().length < 2 ? (
++        <p className="px-3 py-4 text-12 text-tertiary">Escribe al menos dos letras.</p>
++      ) : pages.length === 0 && !isSearching ? (
++        <p className="px-3 py-4 text-12 text-tertiary">Ningún documento coincide.</p>
++      ) : (
++        pages.map((page) => (
++          <button
++            key={page.id}
++            type="button"
++            onClick={() => onPick(page)}
++            className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-12 text-secondary hover:bg-layer-1 hover:text-primary"
++          >
++            <BookText className="size-3.5 shrink-0 text-tertiary" />
++            <span className="truncate">{page.name}</span>
++            <span className="ml-auto shrink-0 text-11 text-tertiary">{page.scope}</span>
++          </button>
++        ))
++      )}
++    </PickerDialog>
++  );
++}
++
++/** The chip above the composer showing what the conversation is focused on. */
++export const AssistantFocusChip = observer(function AssistantFocusChip() {
++  const assistant = useAssistant();
++  const focus = assistant.focus;
++  if (!focus) return null;
++
++  const Icon = focus.kind === "wiki" ? BookText : focus.kind === "finance" ? Banknote : FolderKanban;
++  const prefix =
++    focus.kind === "wiki" ? "Documento" : focus.kind === "finance" ? "Ámbito" : "Proyecto";
++
++  return (
++    <div className="flex items-center gap-2 px-1 pb-1.5">
++      <span className="flex max-w-full items-center gap-1.5 rounded-full border border-subtle bg-layer-1 px-2.5 py-1 text-11 text-secondary">
++        <Icon className="size-3 shrink-0 text-tertiary" />
++        <span className="text-tertiary">{prefix}:</span>
++        <span className="truncate text-primary">{focus.label}</span>
++        <button
++          type="button"
++          aria-label="Quitar el foco"
++          onClick={() => assistant.setFocus(null)}
++          className="ml-0.5 shrink-0 text-tertiary hover:text-primary"
++        >
++          ×
++        </button>
++      </span>
++    </div>
++  );
++});
 diff --git a/apps/web/core/components/assistant/header.tsx b/apps/web/core/components/assistant/header.tsx
 new file mode 100644
 index 0000000..3390434
@@ -112283,10 +112539,10 @@ index 0000000..20718f1
 +});
 diff --git a/apps/web/core/components/assistant/root.tsx b/apps/web/core/components/assistant/root.tsx
 new file mode 100644
-index 0000000..93dc932
+index 0000000..71e8f67
 --- /dev/null
 +++ b/apps/web/core/components/assistant/root.tsx
-@@ -0,0 +1,168 @@
+@@ -0,0 +1,191 @@
 +/**
 + * Sintergica CE extension: the assistant chat, shared by the docked panel and
 + * the full-page route.
@@ -112306,6 +112562,7 @@ index 0000000..93dc932
 +import { AssistantComposer } from "./composer";
 +import { AssistantConversation } from "./conversation";
 +import { AssistantGreeting, AssistantSuggestions } from "./empty-state";
++import { AssistantFocusChip, AssistantFocusPicker } from "./focus-picker";
 +import { AssistantHeader } from "./header";
 +
 +type TAssistantRootProps = {
@@ -112345,8 +112602,22 @@ index 0000000..93dc932
 +  const notConfigured = config ? !config.enabled || !config.configured : false;
 +  const disabled = notConfigured || quotaExhausted;
 +
++  // What the user picked with "+" wins over where they happen to be standing:
++  // it is an explicit instruction, the navigation context is just a guess.
++  const focus = assistant.focus;
++  const contextWithFocus = {
++    ...context,
++    ...(focus?.kind === "project" && focus.id
++      ? { scope: "project" as const, project_id: focus.id, project_name: focus.label }
++      : {}),
++    ...(focus?.kind === "wiki" && focus.id
++      ? { scope: "wiki" as const, page_id: focus.id, page_name: focus.label }
++      : {}),
++    ...(focus?.kind === "finance" ? { scope: "finance" as const } : {}),
++  };
++
 +  const send = (value: string) => {
-+    void assistant.sendMessage(workspaceSlug, value, context);
++    void assistant.sendMessage(workspaceSlug, value, contextWithFocus);
 +  };
 +
 +  // First name only. Plane's display_name is often the email handle
@@ -112374,6 +112645,14 @@ index 0000000..93dc932
 +      canWrite={config?.can_write ?? false}
 +      variant={isHero ? "hero" : "docked"}
 +      autoFocus={isHero}
++      focusPicker={
++        <AssistantFocusPicker
++          workspaceSlug={workspaceSlug}
++          financeRole={config?.finance_role}
++          disabled={disabled}
++        />
++      }
++      focusChip={<AssistantFocusChip />}
 +      placeholder={
 +        quotaExhausted ? "Se alcanzó el tope de tokens del mes" : "Pregunta sobre tus proyectos…"
 +      }
@@ -114108,26 +114387,31 @@ index 0000000..c80ccca
 +});
 diff --git a/apps/web/core/components/chat/composer.tsx b/apps/web/core/components/chat/composer.tsx
 new file mode 100644
-index 0000000..0da8c5c
+index 0000000..f263fa6
 --- /dev/null
 +++ b/apps/web/core/components/chat/composer.tsx
-@@ -0,0 +1,121 @@
+@@ -0,0 +1,272 @@
 +/**
 + * Sintergica CE extension: chat message composer.
 + *
-+ * LiteTextEditor in its lite variant: @mentions, emoji, Enter sends,
-+ * Shift+Enter breaks the line. Attachments stay out of v1, so the image
-+ * extension is disabled and the upload handler rejects.
++ * Slack/Glue-style composer: editor on top and an action bar below with a
++ * formatting toggle (Aa), an emoji picker, an @-mention shortcut, an
++ * attachment button and a send button. Enter sends, Shift+Enter breaks the
++ * line.
 + *
 + * Derived from Plane CE code (AGPL-3.0-only).
 + */
 +
-+import { useRef, useState } from "react";
++import { useCallback, useEffect, useRef, useState } from "react";
 +import { observer } from "mobx-react";
++import { ArrowUp, AtSign, CaseSensitive, Paperclip, Smile } from "lucide-react";
 +// plane imports
-+import type { EditorRefApi } from "@plane/editor";
++import type { EditorRefApi, ToolbarMenuItem } from "@plane/editor";
++import { IMAGE_ITEM, TOOLBAR_ITEMS } from "@plane/editor";
 +import { useTranslation } from "@plane/i18n";
-+import { isCommentEmpty } from "@plane/utils";
++import { EmojiReactionPicker } from "@plane/propel/emoji-reaction";
++import { Tooltip } from "@plane/propel/tooltip";
++import { cn, isCommentEmpty } from "@plane/utils";
 +// components
 +import { LiteTextEditor } from "@/components/editor/lite-text";
 +// hooks
@@ -114136,6 +114420,14 @@ index 0000000..0da8c5c
 +import { ChatService } from "@/services/chat.service";
 +
 +const chatService = new ChatService();
++
++// Formatting groups shown when the Aa toggle is active. Alignment is left out
++// on purpose: it makes no sense inside a chat message.
++const FORMATTING_GROUPS: ToolbarMenuItem[][] = [
++  TOOLBAR_ITEMS.lite.basic,
++  TOOLBAR_ITEMS.lite.list,
++  TOOLBAR_ITEMS.lite.userAction,
++];
 +
 +type TProps = {
 +  workspaceSlug: string;
@@ -114154,6 +114446,10 @@ index 0000000..0da8c5c
 +  const [html, setHtml] = useState("<p></p>");
 +  const [json, setJson] = useState<object | null>(null);
 +  const [isSubmitting, setIsSubmitting] = useState(false);
++  const [showFormatting, setShowFormatting] = useState(false);
++  const [isEmojiOpen, setIsEmojiOpen] = useState(false);
++  const [isEditorReady, setIsEditorReady] = useState(false);
++  const [activeStates, setActiveStates] = useState<Record<string, boolean>>({});
 +  // refs
 +  const editorRef = useRef<EditorRefApi>(null);
 +  // store hooks
@@ -114162,6 +114458,48 @@ index 0000000..0da8c5c
 +  // derived values
 +  const workspaceId = workspaceStore.getWorkspaceBySlug(workspaceSlug)?.id as string;
 +  const isEmpty = isCommentEmpty(html);
++
++  const executeCommand = useCallback((item: ToolbarMenuItem) => {
++    // TODO: update this while toolbar homogenization
++    // @ts-expect-error type mismatch here
++    editorRef.current?.executeMenuItemCommand({
++      itemKey: item.itemKey,
++      ...item.extraProps,
++    });
++  }, []);
++
++  // Track which formatting marks are active at the cursor so the Aa row can
++  // highlight them, mirroring IssueCommentToolbar.
++  const updateActiveStates = useCallback(() => {
++    const api = editorRef.current;
++    if (!api) return;
++    const newActiveStates: Record<string, boolean> = {};
++    FORMATTING_GROUPS.flat().forEach((item) => {
++      // TODO: update this while toolbar homogenization
++      // @ts-expect-error type mismatch here
++      newActiveStates[item.renderKey] = api.isMenuItemActive({
++        itemKey: item.itemKey,
++        ...item.extraProps,
++      });
++    });
++    setActiveStates(newActiveStates);
++  }, []);
++
++  useEffect(() => {
++    if (!isEditorReady) return;
++    const api = editorRef.current;
++    if (!api) return;
++    const unsubscribe = api.onStateChange(updateActiveStates);
++    updateActiveStates();
++    return () => unsubscribe();
++  }, [isEditorReady, updateActiveStates]);
++
++  // insertText() bails out when the selection is empty, so the emoji picker
++  // and the @ shortcut go through setEditorValueAtCursorPosition, which
++  // focuses and inserts at the cursor.
++  const insertAtCursor = useCallback((content: string) => {
++    editorRef.current?.setEditorValueAtCursorPosition(content);
++  }, []);
 +
 +  const submit = async () => {
 +    if (isEmpty || isSubmitting) return;
@@ -114181,6 +114519,8 @@ index 0000000..0da8c5c
 +      setIsSubmitting(false);
 +    }
 +  };
++
++  const actionButtonClass = "grid size-7 place-items-center rounded text-tertiary transition-colors hover:bg-layer-1 hover:text-secondary";
 +
 +  return (
 +    // Enter se maneja en el contenedor, como hace CommentCreate: el evento
@@ -114203,33 +114543,123 @@ index 0000000..0da8c5c
 +        }
 +      }}
 +    >
-+      <LiteTextEditor
-+        editable
-+        ref={editorRef}
-+        id={`chat-composer-${channelId}`}
-+        initialValue={html}
-+        value="<p></p>"
-+        workspaceId={workspaceId}
-+        workspaceSlug={workspaceSlug}
-+        projectId={projectId}
-+        variant="lite"
-+        placeholder={placeholder ?? t("chat.composer_placeholder")}
-+        onChange={(message_json, message_html) => {
-+          setJson(message_json as object);
-+          setHtml(message_html);
-+          onTyping?.(true);
-+        }}
-+        onEnterKeyPress={() => void submit()}
-+        isSubmitting={isSubmitting}
-+        showToolbarInitially={false}
-+        containerClassName="min-h-min"
-+        uploadFile={async (_blockId, file) =>
-+          await chatService.uploadChannelAsset(workspaceSlug, assetChannelId ?? channelId, file)
-+        }
-+        duplicateFile={async () => {
-+          throw new Error("Duplicating attachments is not supported in chat.");
-+        }}
-+      />
++      <div className="rounded-lg border border-subtle bg-surface-1 transition-colors focus-within:border-strong">
++        <LiteTextEditor
++          editable
++          ref={editorRef}
++          id={`chat-composer-${channelId}`}
++          initialValue={html}
++          value="<p></p>"
++          workspaceId={workspaceId}
++          workspaceSlug={workspaceSlug}
++          projectId={projectId}
++          variant="none"
++          parentClassName="border-none p-0"
++          placeholder={placeholder ?? t("chat.composer_placeholder")}
++          onChange={(message_json, message_html) => {
++            setJson(message_json as object);
++            setHtml(message_html);
++            onTyping?.(true);
++          }}
++          onEnterKeyPress={() => void submit()}
++          isSubmitting={isSubmitting}
++          handleEditorReady={(ready) => setIsEditorReady(ready)}
++          containerClassName="min-h-min px-2 pt-1.5"
++          uploadFile={async (_blockId, file) =>
++            await chatService.uploadChannelAsset(workspaceSlug, assetChannelId ?? channelId, file)
++          }
++          duplicateFile={async () => {
++            throw new Error("Duplicating attachments is not supported in chat.");
++          }}
++        />
++        {/* formatting row, toggled by Aa */}
++        {showFormatting && (
++          <div className="flex items-center gap-0.5 overflow-x-auto border-t border-subtle px-2 py-1">
++            {FORMATTING_GROUPS.map((group, groupIndex) => (
++              <div
++                key={groupIndex}
++                className={cn("flex items-center gap-0.5", {
++                  "border-l border-subtle pl-1.5 ml-1": groupIndex !== 0,
++                })}
++              >
++                {group.map((item) => {
++                  const isItemActive = activeStates[item.renderKey];
++                  return (
++                    <Tooltip
++                      key={item.renderKey}
++                      tooltipContent={
++                        <p className="flex flex-col gap-1 text-center text-11">
++                          <span className="font-medium">{item.name}</span>
++                          {item.shortcut && <kbd className="text-placeholder">{item.shortcut.join(" + ")}</kbd>}
++                        </p>
++                      }
++                    >
++                      <button
++                        type="button"
++                        onClick={() => executeCommand(item)}
++                        className={cn("grid size-6 place-items-center rounded text-tertiary hover:bg-layer-1", {
++                          "bg-layer-1 text-primary": isItemActive,
++                        })}
++                      >
++                        <item.icon className="size-3.5" strokeWidth={2.5} />
++                      </button>
++                    </Tooltip>
++                  );
++                })}
++              </div>
++            ))}
++          </div>
++        )}
++        {/* action row */}
++        <div className="flex items-center justify-between px-1.5 py-1">
++          <div className="flex items-center gap-0.5">
++            <Tooltip tooltipContent={t("chat.toolbar_format")}>
++              <button
++                type="button"
++                onClick={() => setShowFormatting((prev) => !prev)}
++                className={cn(actionButtonClass, {
++                  "bg-layer-1 text-primary": showFormatting,
++                })}
++              >
++                <CaseSensitive className="size-4.5" />
++              </button>
++            </Tooltip>
++            <EmojiReactionPicker
++              isOpen={isEmojiOpen}
++              handleToggle={setIsEmojiOpen}
++              onChange={(emoji) => insertAtCursor(emoji)}
++              placement="top-start"
++              label={
++                <Tooltip tooltipContent={t("chat.toolbar_emoji")}>
++                  <span className={actionButtonClass}>
++                    <Smile className="size-4" />
++                  </span>
++                </Tooltip>
++              }
++            />
++            <Tooltip tooltipContent={t("chat.toolbar_mention")}>
++              <button type="button" onClick={() => insertAtCursor("@")} className={actionButtonClass}>
++                <AtSign className="size-4" />
++              </button>
++            </Tooltip>
++            <Tooltip tooltipContent={t("common.attach")}>
++              <button type="button" onClick={() => executeCommand(IMAGE_ITEM)} className={actionButtonClass}>
++                <Paperclip className="size-4" />
++              </button>
++            </Tooltip>
++          </div>
++          <Tooltip tooltipContent={t("chat.send")}>
++            <button
++              type="button"
++              onClick={() => void submit()}
++              disabled={isEmpty || isSubmitting}
++              className="grid size-7 place-items-center rounded-full bg-accent-primary text-white transition-colors hover:bg-accent-primary/80 disabled:bg-layer-1 disabled:text-placeholder"
++            >
++              <ArrowUp className="size-4" />
++            </button>
++          </Tooltip>
++        </div>
++      </div>
 +    </div>
 +  );
 +});
@@ -123431,10 +123861,10 @@ index e74dfd5..d582cb9 100644
              <p className="text-center text-13 text-secondary">
 diff --git a/apps/web/core/services/assistant.service.ts b/apps/web/core/services/assistant.service.ts
 new file mode 100644
-index 0000000..7eea3ff
+index 0000000..7e91e5a
 --- /dev/null
 +++ b/apps/web/core/services/assistant.service.ts
-@@ -0,0 +1,261 @@
+@@ -0,0 +1,281 @@
 +/**
 + * Sintergica CE extension: AI assistant service.
 + *
@@ -123510,6 +123940,17 @@ index 0000000..7eea3ff
 +  project_name?: string;
 +  work_item_identifier?: string;
 +  view?: string;
++  /** Chosen by hand with the composer's "+", unlike the fields above. */
++  scope?: "project" | "wiki" | "finance";
++  page_id?: string;
++  page_name?: string;
++};
++
++/** One entry of the "+" picker's page list. */
++export type TAssistantPage = {
++  id: string;
++  name: string;
++  scope: string;
 +};
 +
 +/** One decoded SSE frame from the message endpoint. */
@@ -123543,6 +123984,15 @@ index 0000000..7eea3ff
 +  async fetchConfig(workspaceSlug: string): Promise<TAssistantConfig> {
 +    return this.get(`${this.base(workspaceSlug)}/config/`)
 +      .then((res) => res?.data)
++      .catch((error) => {
++        throw error?.response?.data;
++      });
++  }
++
++  /** Pages the user may read, for the "+" picker. Needs 2+ characters. */
++  async searchPages(workspaceSlug: string, query: string): Promise<TAssistantPage[]> {
++    return this.get(`${this.base(workspaceSlug)}/pages/?q=${encodeURIComponent(query)}`)
++      .then((res) => res?.data?.pages ?? [])
 +      .catch((error) => {
 +        throw error?.response?.data;
 +      });
@@ -125212,10 +125662,10 @@ index 0000000..88015cd
 +}
 diff --git a/apps/web/core/store/assistant.store.ts b/apps/web/core/store/assistant.store.ts
 new file mode 100644
-index 0000000..1bc5194
+index 0000000..b0b8ad9
 --- /dev/null
 +++ b/apps/web/core/store/assistant.store.ts
-@@ -0,0 +1,420 @@
+@@ -0,0 +1,444 @@
 +/**
 + * Sintergica CE extension: AI assistant store.
 + * Derived from Plane CE code (AGPL-3.0-only).
@@ -125234,6 +125684,18 @@ index 0000000..1bc5194
 +import { AssistantService } from "@/services/assistant.service";
 +// store
 +import type { CoreRootStore } from "./root.store";
++
++/**
++ * What the user picked with the composer's "+": a project to work inside, a
++ * wiki page to read, or the finance scope. It rides along with the automatic
++ * navigation context on every message of the conversation until it is cleared.
++ */
++export type TAssistantFocus = {
++  kind: "project" | "wiki" | "finance";
++  /** project id or page id; absent for the finance scope. */
++  id?: string;
++  label: string;
++};
 +
 +export type TToolTraceEntry = {
 +  name: string;
@@ -125257,8 +125719,10 @@ index 0000000..1bc5194
 +  errorMessage: string | null;
 +  pendingActions: TAssistantAction[];
 +  decidingActionId: string | null;
++  focus: TAssistantFocus | null;
 +  // actions
 +  togglePanel: (value?: boolean) => void;
++  setFocus: (focus: TAssistantFocus | null) => void;
 +  fetchConfig: (workspaceSlug: string) => Promise<TAssistantConfig | undefined>;
 +  fetchConversations: (workspaceSlug: string) => Promise<TAssistantConversation[]>;
 +  openConversation: (workspaceSlug: string, conversationId: string) => Promise<void>;
@@ -125288,6 +125752,7 @@ index 0000000..1bc5194
 +  /** Propuestas de escritura esperando un clic. Nada se escribe sin esto. */
 +  pendingActions: TAssistantAction[] = [];
 +  decidingActionId: string | null = null;
++  focus: TAssistantFocus | null = null;
 +
 +  // Not observable: an in-flight stream is machinery, not rendered state.
 +  private abortController: AbortController | null = null;
@@ -125309,7 +125774,9 @@ index 0000000..1bc5194
 +      errorMessage: observable,
 +      pendingActions: observable,
 +      decidingActionId: observable,
++      focus: observable,
 +      togglePanel: action,
++      setFocus: action,
 +      fetchConfig: action,
 +      fetchConversations: action,
 +      openConversation: action,
@@ -125328,12 +125795,19 @@ index 0000000..1bc5194
 +    this.isPanelOpen = value ?? !this.isPanelOpen;
 +  };
 +
++  setFocus = (focus: TAssistantFocus | null) => {
++    this.focus = focus;
++  };
++
 +  resetActive = () => {
 +    this.activeConversationId = null;
 +    this.streamingContent = "";
 +    this.toolTrace = [];
 +    this.errorMessage = null;
 +    this.pendingActions = [];
++    // A new conversation starts unfocused: carrying the previous one's
++    // attached document into a fresh thread would be a surprise.
++    this.focus = null;
 +  };
 +
 +  fetchConfig = async (workspaceSlug: string) => {
@@ -194716,7 +195190,7 @@ index 5aa7d2f..32afb6d 100644
        "fixed_schedule": "Pevný rozvrh",
        "schedule": {
 diff --git a/packages/i18n/src/locales/cs/common.json b/packages/i18n/src/locales/cs/common.json
-index c1e9372..907c46a 100644
+index c1e9372..e583126 100644
 --- a/packages/i18n/src/locales/cs/common.json
 +++ b/packages/i18n/src/locales/cs/common.json
 @@ -244,7 +244,7 @@
@@ -194746,7 +195220,7 @@ index c1e9372..907c46a 100644
    "in_app": "V aplikaci",
    "forms": "Formuláře",
    "milestones": "Milníky",
-@@ -867,5 +867,431 @@
+@@ -867,5 +867,435 @@
        "description": "Exportujte položky do JSON.",
        "short_description": "Exportovat jako JSON"
      }
@@ -195175,7 +195649,11 @@ index c1e9372..907c46a 100644
 +    "jump_failed": "Nelze přejít na zprávu",
 +    "copy_link": "Kopírovat odkaz",
 +    "link_copied": "Odkaz zkopírován",
-+    "mark_read": "Označit jako přečtené"
++    "mark_read": "Označit jako přečtené",
++    "toolbar_format": "Formátování",
++    "toolbar_emoji": "Emoji",
++    "toolbar_mention": "Zmínit někoho",
++    "send": "Odeslat"
    }
  }
 diff --git a/packages/i18n/src/locales/cs/empty-state.json b/packages/i18n/src/locales/cs/empty-state.json
@@ -195884,7 +196362,7 @@ index 66379d4..2c778e6 100644
        "fixed_schedule": "Fester Zeitplan",
        "schedule": {
 diff --git a/packages/i18n/src/locales/de/common.json b/packages/i18n/src/locales/de/common.json
-index 1e18d4e..75def64 100644
+index 1e18d4e..411f39e 100644
 --- a/packages/i18n/src/locales/de/common.json
 +++ b/packages/i18n/src/locales/de/common.json
 @@ -244,7 +244,7 @@
@@ -195905,7 +196383,7 @@ index 1e18d4e..75def64 100644
      "choose_view_logs_from_setup_sh_and_docker_logs_to_be_sure": "Wählen Sie View Logs aus setup.sh und Docker-Logs, um sicherzugehen."
    },
    "customize_navigation": "Navigation anpassen",
-@@ -867,5 +867,431 @@
+@@ -867,5 +867,435 @@
        "description": "Arbeitselemente in JSON exportieren.",
        "short_description": "Als JSON exportieren"
      }
@@ -196334,7 +196812,11 @@ index 1e18d4e..75def64 100644
 +    "jump_failed": "Konnte nicht zur Nachricht springen",
 +    "copy_link": "Link kopieren",
 +    "link_copied": "Link kopiert",
-+    "mark_read": "Als gelesen markieren"
++    "mark_read": "Als gelesen markieren",
++    "toolbar_format": "Formatierung",
++    "toolbar_emoji": "Emoji",
++    "toolbar_mention": "Jemanden erwähnen",
++    "send": "Senden"
    }
  }
 diff --git a/packages/i18n/src/locales/de/empty-state.json b/packages/i18n/src/locales/de/empty-state.json
@@ -197028,7 +197510,7 @@ index 64779c7..c549990 100644
        "fixed_schedule": "Fixed schedule",
        "schedule": {
 diff --git a/packages/i18n/src/locales/en/common.json b/packages/i18n/src/locales/en/common.json
-index a138304..8a97e3d 100644
+index a138304..e2d8bdb 100644
 --- a/packages/i18n/src/locales/en/common.json
 +++ b/packages/i18n/src/locales/en/common.json
 @@ -244,7 +244,7 @@
@@ -197058,7 +197540,7 @@ index a138304..8a97e3d 100644
    "in_app": "In-app",
    "forms": "Forms",
    "milestones": "Milestones",
-@@ -867,5 +867,431 @@
+@@ -867,5 +867,435 @@
        "description": "Export work items to a JSON file.",
        "short_description": "Export as json"
      }
@@ -197487,7 +197969,11 @@ index a138304..8a97e3d 100644
 +    "jump_failed": "Could not jump to the message",
 +    "copy_link": "Copy link",
 +    "link_copied": "Link copied",
-+    "mark_read": "Mark as read"
++    "mark_read": "Mark as read",
++    "toolbar_format": "Formatting",
++    "toolbar_emoji": "Emoji",
++    "toolbar_mention": "Mention someone",
++    "send": "Send"
    }
  }
 diff --git a/packages/i18n/src/locales/en/empty-state.json b/packages/i18n/src/locales/en/empty-state.json
@@ -198255,7 +198741,7 @@ index f49d529..b042251 100644
        "fixed_schedule": "Horario fijo",
        "schedule": {
 diff --git a/packages/i18n/src/locales/es/common.json b/packages/i18n/src/locales/es/common.json
-index 64440c9..b991d25 100644
+index 64440c9..731ec78 100644
 --- a/packages/i18n/src/locales/es/common.json
 +++ b/packages/i18n/src/locales/es/common.json
 @@ -145,7 +145,7 @@
@@ -198294,7 +198780,7 @@ index 64440c9..b991d25 100644
    "in_app": "En la aplicación",
    "forms": "Formularios",
    "milestones": "Hitos",
-@@ -867,5 +867,431 @@
+@@ -867,5 +867,435 @@
        "description": "Exporta elementos de trabajo a un archivo JSON.",
        "short_description": "Exportar como json"
      }
@@ -198723,7 +199209,11 @@ index 64440c9..b991d25 100644
 +    "jump_failed": "No se pudo saltar al mensaje",
 +    "copy_link": "Copiar enlace",
 +    "link_copied": "Enlace copiado",
-+    "mark_read": "Marcar como leído"
++    "mark_read": "Marcar como leído",
++    "toolbar_format": "Formato",
++    "toolbar_emoji": "Emoji",
++    "toolbar_mention": "Mencionar a alguien",
++    "send": "Enviar"
    }
  }
 diff --git a/packages/i18n/src/locales/es/empty-state.json b/packages/i18n/src/locales/es/empty-state.json
@@ -199482,7 +199972,7 @@ index 5343f12..1a31636 100644
        "fixed_schedule": "Horaire fixe",
        "schedule": {
 diff --git a/packages/i18n/src/locales/fr/common.json b/packages/i18n/src/locales/fr/common.json
-index a94ab8a..663060a 100644
+index a94ab8a..df628d4 100644
 --- a/packages/i18n/src/locales/fr/common.json
 +++ b/packages/i18n/src/locales/fr/common.json
 @@ -244,7 +244,7 @@
@@ -199512,7 +200002,7 @@ index a94ab8a..663060a 100644
    "in_app": "Dans l'application",
    "forms": "Formulaires",
    "milestones": "Jalons",
-@@ -867,5 +867,431 @@
+@@ -867,5 +867,435 @@
        "description": "Exportez les éléments de travail vers un fichier JSON.",
        "short_description": "Exporter en json"
      }
@@ -199941,7 +200431,11 @@ index a94ab8a..663060a 100644
 +    "jump_failed": "Impossible d'accéder au message",
 +    "copy_link": "Copier le lien",
 +    "link_copied": "Lien copié",
-+    "mark_read": "Marquer comme lu"
++    "mark_read": "Marquer comme lu",
++    "toolbar_format": "Mise en forme",
++    "toolbar_emoji": "Émoji",
++    "toolbar_mention": "Mentionner quelqu'un",
++    "send": "Envoyer"
    }
  }
 diff --git a/packages/i18n/src/locales/fr/empty-state.json b/packages/i18n/src/locales/fr/empty-state.json
@@ -200698,7 +201192,7 @@ index 2fd8636..c6ce762 100644
        "fixed_schedule": "Jadwal tetap",
        "schedule": {
 diff --git a/packages/i18n/src/locales/id/common.json b/packages/i18n/src/locales/id/common.json
-index 7d26685..b6a5c02 100644
+index 7d26685..5f8d345 100644
 --- a/packages/i18n/src/locales/id/common.json
 +++ b/packages/i18n/src/locales/id/common.json
 @@ -244,7 +244,7 @@
@@ -200719,7 +201213,7 @@ index 7d26685..b6a5c02 100644
      "choose_view_logs_from_setup_sh_and_docker_logs_to_be_sure": "Pilih View Logs dari setup.sh dan log Docker untuk memastikan."
    },
    "customize_navigation": "Sesuaikan navigasi",
-@@ -867,5 +867,431 @@
+@@ -867,5 +867,435 @@
        "description": "Ekspor item kerja ke file JSON.",
        "short_description": "Ekspor sebagai json"
      }
@@ -201148,7 +201642,11 @@ index 7d26685..b6a5c02 100644
 +    "jump_failed": "Tidak dapat melompat ke pesan",
 +    "copy_link": "Salin tautan",
 +    "link_copied": "Tautan disalin",
-+    "mark_read": "Tandai sudah dibaca"
++    "mark_read": "Tandai sudah dibaca",
++    "toolbar_format": "Pemformatan",
++    "toolbar_emoji": "Emoji",
++    "toolbar_mention": "Sebut seseorang",
++    "send": "Kirim"
    }
  }
 diff --git a/packages/i18n/src/locales/id/empty-state.json b/packages/i18n/src/locales/id/empty-state.json
@@ -201906,7 +202404,7 @@ index f279366..b302f18 100644
        "fixed_schedule": "Pianificazione fissa",
        "schedule": {
 diff --git a/packages/i18n/src/locales/it/common.json b/packages/i18n/src/locales/it/common.json
-index 6fda1b0..3652a01 100644
+index 6fda1b0..5fa1ab1 100644
 --- a/packages/i18n/src/locales/it/common.json
 +++ b/packages/i18n/src/locales/it/common.json
 @@ -244,7 +244,7 @@
@@ -201936,7 +202434,7 @@ index 6fda1b0..3652a01 100644
    "in_app": "In-app",
    "forms": "Moduli",
    "milestones": "Milestone",
-@@ -867,5 +867,431 @@
+@@ -867,5 +867,435 @@
        "description": "Esporta elementi di lavoro in un file JSON.",
        "short_description": "Esporta come JSON"
      }
@@ -202365,7 +202863,11 @@ index 6fda1b0..3652a01 100644
 +    "jump_failed": "Impossibile andare al messaggio",
 +    "copy_link": "Copia link",
 +    "link_copied": "Link copiato",
-+    "mark_read": "Segna come letto"
++    "mark_read": "Segna come letto",
++    "toolbar_format": "Formattazione",
++    "toolbar_emoji": "Emoji",
++    "toolbar_mention": "Menzionare qualcuno",
++    "send": "Invia"
    }
  }
 diff --git a/packages/i18n/src/locales/it/empty-state.json b/packages/i18n/src/locales/it/empty-state.json
@@ -203064,7 +203566,7 @@ index d3dd8d3..0f5426b 100644
            }
          }
 diff --git a/packages/i18n/src/locales/ja/common.json b/packages/i18n/src/locales/ja/common.json
-index 4899411..8ed7863 100644
+index 4899411..4618f1f 100644
 --- a/packages/i18n/src/locales/ja/common.json
 +++ b/packages/i18n/src/locales/ja/common.json
 @@ -244,7 +244,7 @@
@@ -203076,7 +203578,7 @@ index 4899411..8ed7863 100644
    "please_select_at_least_one_invitation": "少なくとも1つの招待を選択してください。",
    "please_select_at_least_one_invitation_description": "ワークスペースに参加するには少なくとも1つの招待を選択してください。",
    "we_see_that_someone_has_invited_you_to_join_a_workspace": "誰かがあなたをワークスペースに招待しています",
-@@ -867,5 +867,431 @@
+@@ -867,5 +867,435 @@
        "description": "作業項目をJSONファイルにエクスポートします。",
        "short_description": "JSONとしてエクスポート"
      }
@@ -203505,7 +204007,11 @@ index 4899411..8ed7863 100644
 +    "jump_failed": "メッセージに移動できませんでした",
 +    "copy_link": "リンクをコピー",
 +    "link_copied": "リンクをコピーしました",
-+    "mark_read": "既読にする"
++    "mark_read": "既読にする",
++    "toolbar_format": "書式設定",
++    "toolbar_emoji": "絵文字",
++    "toolbar_mention": "メンションする",
++    "send": "送信"
    }
  }
 diff --git a/packages/i18n/src/locales/ja/integration.json b/packages/i18n/src/locales/ja/integration.json
@@ -203748,7 +204254,7 @@ index 8d77f70..279ae09 100644
        "fixed_schedule": "고정 일정",
        "schedule": {
 diff --git a/packages/i18n/src/locales/ko/common.json b/packages/i18n/src/locales/ko/common.json
-index 73eea6b..82d59ab 100644
+index 73eea6b..e68eeec 100644
 --- a/packages/i18n/src/locales/ko/common.json
 +++ b/packages/i18n/src/locales/ko/common.json
 @@ -244,7 +244,7 @@
@@ -203769,7 +204275,7 @@ index 73eea6b..82d59ab 100644
      "choose_view_logs_from_setup_sh_and_docker_logs_to_be_sure": "확실히 하려면 setup.sh와 Docker 로그에서 View Logs를 선택하세요."
    },
    "customize_navigation": "내비게이션 사용자 지정",
-@@ -867,5 +867,431 @@
+@@ -867,5 +867,435 @@
        "description": "작업 항목을 JSON 파일로 내보냅니다.",
        "short_description": "JSON으로 내보내기"
      }
@@ -204198,7 +204704,11 @@ index 73eea6b..82d59ab 100644
 +    "jump_failed": "메시지로 이동할 수 없습니다",
 +    "copy_link": "링크 복사",
 +    "link_copied": "링크가 복사되었습니다",
-+    "mark_read": "읽음으로 표시"
++    "mark_read": "읽음으로 표시",
++    "toolbar_format": "서식",
++    "toolbar_emoji": "이모지",
++    "toolbar_mention": "멘션하기",
++    "send": "보내기"
    }
  }
 diff --git a/packages/i18n/src/locales/ko/empty-state.json b/packages/i18n/src/locales/ko/empty-state.json
@@ -204594,7 +205104,7 @@ index 0632d1f..6396693 100644
        "fixed_schedule": "Stały harmonogram",
        "schedule": {
 diff --git a/packages/i18n/src/locales/pl/common.json b/packages/i18n/src/locales/pl/common.json
-index 4c4850c..ec617ce 100644
+index 4c4850c..d50a494 100644
 --- a/packages/i18n/src/locales/pl/common.json
 +++ b/packages/i18n/src/locales/pl/common.json
 @@ -244,7 +244,7 @@
@@ -204615,7 +205125,7 @@ index 4c4850c..ec617ce 100644
      "choose_view_logs_from_setup_sh_and_docker_logs_to_be_sure": "Wybierz View Logs z setup.sh i logów Docker, aby mieć pewność."
    },
    "customize_navigation": "Dostosuj nawigację",
-@@ -867,5 +867,431 @@
+@@ -867,5 +867,435 @@
        "description": "Eksportuj elementy do pliku JSON.",
        "short_description": "Eksportuj jako JSON"
      }
@@ -205044,7 +205554,11 @@ index 4c4850c..ec617ce 100644
 +    "jump_failed": "Nie można przejść do wiadomości",
 +    "copy_link": "Kopiuj link",
 +    "link_copied": "Link skopiowany",
-+    "mark_read": "Oznacz jako przeczytane"
++    "mark_read": "Oznacz jako przeczytane",
++    "toolbar_format": "Formatowanie",
++    "toolbar_emoji": "Emoji",
++    "toolbar_mention": "Wspomnij o kimś",
++    "send": "Wyślij"
    }
  }
 diff --git a/packages/i18n/src/locales/pl/empty-state.json b/packages/i18n/src/locales/pl/empty-state.json
@@ -205747,7 +206261,7 @@ index 3eab73f..c2c7c08 100644
        "fixed_schedule": "Agendamento fixo",
        "schedule": {
 diff --git a/packages/i18n/src/locales/pt-BR/common.json b/packages/i18n/src/locales/pt-BR/common.json
-index 565e85d..f79a4a8 100644
+index 565e85d..162a35d 100644
 --- a/packages/i18n/src/locales/pt-BR/common.json
 +++ b/packages/i18n/src/locales/pt-BR/common.json
 @@ -244,7 +244,7 @@
@@ -205768,7 +206282,7 @@ index 565e85d..f79a4a8 100644
      "choose_view_logs_from_setup_sh_and_docker_logs_to_be_sure": "Escolha View Logs do setup.sh e logs do Docker para ter certeza."
    },
    "customize_navigation": "Personalizar navegação",
-@@ -867,5 +867,431 @@
+@@ -867,5 +867,435 @@
        "description": "Exporte itens de trabalho para um arquivo JSON.",
        "short_description": "Exportar como JSON"
      }
@@ -206197,7 +206711,11 @@ index 565e85d..f79a4a8 100644
 +    "jump_failed": "Não foi possível ir à mensagem",
 +    "copy_link": "Copiar link",
 +    "link_copied": "Link copiado",
-+    "mark_read": "Marcar como lido"
++    "mark_read": "Marcar como lido",
++    "toolbar_format": "Formatação",
++    "toolbar_emoji": "Emoji",
++    "toolbar_mention": "Mencionar alguém",
++    "send": "Enviar"
    }
  }
 diff --git a/packages/i18n/src/locales/pt-BR/empty-state.json b/packages/i18n/src/locales/pt-BR/empty-state.json
@@ -206950,7 +207468,7 @@ index 509bbb1..0c56d9c 100644
        "fixed_schedule": "Program fix",
        "schedule": {
 diff --git a/packages/i18n/src/locales/ro/common.json b/packages/i18n/src/locales/ro/common.json
-index e2b44ce..d2e48d9 100644
+index e2b44ce..a9b7718 100644
 --- a/packages/i18n/src/locales/ro/common.json
 +++ b/packages/i18n/src/locales/ro/common.json
 @@ -244,7 +244,7 @@
@@ -206980,7 +207498,7 @@ index e2b44ce..d2e48d9 100644
    "in_app": "În-app",
    "forms": "Formulare",
    "milestones": "Jaloane",
-@@ -867,5 +867,431 @@
+@@ -867,5 +867,435 @@
        "description": "Exportă activitățile într-un fișier JSON.",
        "short_description": "Exportă ca JSON"
      }
@@ -207409,7 +207927,11 @@ index e2b44ce..d2e48d9 100644
 +    "jump_failed": "Nu s-a putut sări la mesaj",
 +    "copy_link": "Copiază linkul",
 +    "link_copied": "Link copiat",
-+    "mark_read": "Marchează ca citit"
++    "mark_read": "Marchează ca citit",
++    "toolbar_format": "Formatare",
++    "toolbar_emoji": "Emoji",
++    "toolbar_mention": "Menționați pe cineva",
++    "send": "Trimite"
    }
  }
 diff --git a/packages/i18n/src/locales/ro/empty-state.json b/packages/i18n/src/locales/ro/empty-state.json
@@ -208160,7 +208682,7 @@ index a97e9e6..7ce3fde 100644
        "fixed_schedule": "Фиксированное расписание",
        "schedule": {
 diff --git a/packages/i18n/src/locales/ru/common.json b/packages/i18n/src/locales/ru/common.json
-index c2881e5..62fdd6c 100644
+index c2881e5..20abfe8 100644
 --- a/packages/i18n/src/locales/ru/common.json
 +++ b/packages/i18n/src/locales/ru/common.json
 @@ -244,7 +244,7 @@
@@ -208181,7 +208703,7 @@ index c2881e5..62fdd6c 100644
      "choose_view_logs_from_setup_sh_and_docker_logs_to_be_sure": "Выберите View Logs из setup.sh и логов Docker, чтобы убедиться."
    },
    "customize_navigation": "Настроить навигацию",
-@@ -867,5 +867,431 @@
+@@ -867,5 +867,435 @@
        "description": "Экспорт рабочих элементов в JSON-файл.",
        "short_description": "Экспорт в json"
      }
@@ -208610,7 +209132,11 @@ index c2881e5..62fdd6c 100644
 +    "jump_failed": "Не удалось перейти к сообщению",
 +    "copy_link": "Скопировать ссылку",
 +    "link_copied": "Ссылка скопирована",
-+    "mark_read": "Отметить прочитанным"
++    "mark_read": "Отметить прочитанным",
++    "toolbar_format": "Форматирование",
++    "toolbar_emoji": "Эмодзи",
++    "toolbar_mention": "Упомянуть участника",
++    "send": "Отправить"
    }
  }
 diff --git a/packages/i18n/src/locales/ru/empty-state.json b/packages/i18n/src/locales/ru/empty-state.json
@@ -209350,7 +209876,7 @@ index 3e7dbc5..27f375f 100644
        "fixed_schedule": "Pevný rozvrh",
        "schedule": {
 diff --git a/packages/i18n/src/locales/sk/common.json b/packages/i18n/src/locales/sk/common.json
-index 4fc339c..f392b67 100644
+index 4fc339c..edd8caa 100644
 --- a/packages/i18n/src/locales/sk/common.json
 +++ b/packages/i18n/src/locales/sk/common.json
 @@ -244,7 +244,7 @@
@@ -209371,7 +209897,7 @@ index 4fc339c..f392b67 100644
      "choose_view_logs_from_setup_sh_and_docker_logs_to_be_sure": "Vyberte View Logs z setup.sh a Docker logov, aby ste si boli istí."
    },
    "customize_navigation": "Prispôsobiť navigáciu",
-@@ -867,5 +867,431 @@
+@@ -867,5 +867,435 @@
        "description": "Exportujte položky do JSON.",
        "short_description": "Exportovať ako JSON"
      }
@@ -209800,7 +210326,11 @@ index 4fc339c..f392b67 100644
 +    "jump_failed": "Nedá sa prejsť na správu",
 +    "copy_link": "Kopírovať odkaz",
 +    "link_copied": "Odkaz skopírovaný",
-+    "mark_read": "Označiť ako prečítané"
++    "mark_read": "Označiť ako prečítané",
++    "toolbar_format": "Formátovanie",
++    "toolbar_emoji": "Emoji",
++    "toolbar_mention": "Spomenúť niekoho",
++    "send": "Odoslať"
    }
  }
 diff --git a/packages/i18n/src/locales/sk/empty-state.json b/packages/i18n/src/locales/sk/empty-state.json
@@ -210492,7 +211022,7 @@ index 5d44f94..bd09842 100644
        "fixed_schedule": "Sabit zamanlama",
        "schedule": {
 diff --git a/packages/i18n/src/locales/tr-TR/common.json b/packages/i18n/src/locales/tr-TR/common.json
-index 74bd5cb..6d0d355 100644
+index 74bd5cb..35a65e6 100644
 --- a/packages/i18n/src/locales/tr-TR/common.json
 +++ b/packages/i18n/src/locales/tr-TR/common.json
 @@ -244,7 +244,7 @@
@@ -210522,7 +211052,7 @@ index 74bd5cb..6d0d355 100644
    "in_app": "Uygulama İçi",
    "forms": "Formlar",
    "milestones": "Kilometre taşları",
-@@ -867,5 +867,431 @@
+@@ -867,5 +867,435 @@
        "description": "İş öğelerini JSON dosyasına aktarın.",
        "short_description": "JSON olarak aktar"
      }
@@ -210951,7 +211481,11 @@ index 74bd5cb..6d0d355 100644
 +    "jump_failed": "Mesaja gidilemedi",
 +    "copy_link": "Bağlantıyı kopyala",
 +    "link_copied": "Bağlantı kopyalandı",
-+    "mark_read": "Okundu olarak işaretle"
++    "mark_read": "Okundu olarak işaretle",
++    "toolbar_format": "Biçimlendirme",
++    "toolbar_emoji": "Emoji",
++    "toolbar_mention": "Birinden bahsedin",
++    "send": "Gönder"
    }
  }
 diff --git a/packages/i18n/src/locales/tr-TR/empty-state.json b/packages/i18n/src/locales/tr-TR/empty-state.json
@@ -211675,7 +212209,7 @@ index 25a1f98..64286c8 100644
        "fixed_schedule": "Фіксований розклад",
        "schedule": {
 diff --git a/packages/i18n/src/locales/ua/common.json b/packages/i18n/src/locales/ua/common.json
-index 89bd906..284beff 100644
+index 89bd906..87a1806 100644
 --- a/packages/i18n/src/locales/ua/common.json
 +++ b/packages/i18n/src/locales/ua/common.json
 @@ -244,7 +244,7 @@
@@ -211696,7 +212230,7 @@ index 89bd906..284beff 100644
      "choose_view_logs_from_setup_sh_and_docker_logs_to_be_sure": "Виберіть View Logs з setup.sh та логів Docker, щоб переконатися."
    },
    "customize_navigation": "Налаштувати навігацію",
-@@ -867,5 +867,431 @@
+@@ -867,5 +867,435 @@
        "description": "Експортуйте одиниці у формат JSON.",
        "short_description": "Експортувати як JSON"
      }
@@ -212125,7 +212659,11 @@ index 89bd906..284beff 100644
 +    "jump_failed": "Не вдалося перейти до повідомлення",
 +    "copy_link": "Скопіювати посилання",
 +    "link_copied": "Посилання скопійовано",
-+    "mark_read": "Позначити прочитаним"
++    "mark_read": "Позначити прочитаним",
++    "toolbar_format": "Форматування",
++    "toolbar_emoji": "Емодзі",
++    "toolbar_mention": "Згадати учасника",
++    "send": "Надіслати"
    }
  }
 diff --git a/packages/i18n/src/locales/ua/empty-state.json b/packages/i18n/src/locales/ua/empty-state.json
@@ -212680,7 +213218,7 @@ index 8dec0fb..fd3adb2 100644
        "fixed_schedule": "Lịch trình cố định",
        "schedule": {
 diff --git a/packages/i18n/src/locales/vi-VN/common.json b/packages/i18n/src/locales/vi-VN/common.json
-index f9aae43..cf66ec2 100644
+index f9aae43..ca8e66b 100644
 --- a/packages/i18n/src/locales/vi-VN/common.json
 +++ b/packages/i18n/src/locales/vi-VN/common.json
 @@ -244,7 +244,7 @@
@@ -212710,7 +213248,7 @@ index f9aae43..cf66ec2 100644
    "in_app": "Trong ứng dụng",
    "forms": "Biểu mẫu",
    "milestones": "Cột mốc",
-@@ -867,5 +867,431 @@
+@@ -867,5 +867,435 @@
        "description": "Xuất mục công việc thành tệp JSON.",
        "short_description": "Xuất sang JSON"
      }
@@ -213139,7 +213677,11 @@ index f9aae43..cf66ec2 100644
 +    "jump_failed": "Không thể chuyển đến tin nhắn",
 +    "copy_link": "Sao chép liên kết",
 +    "link_copied": "Đã sao chép liên kết",
-+    "mark_read": "Đánh dấu đã đọc"
++    "mark_read": "Đánh dấu đã đọc",
++    "toolbar_format": "Định dạng",
++    "toolbar_emoji": "Biểu tượng cảm xúc",
++    "toolbar_mention": "Nhắc đến ai đó",
++    "send": "Gửi"
    }
  }
 diff --git a/packages/i18n/src/locales/vi-VN/empty-state.json b/packages/i18n/src/locales/vi-VN/empty-state.json
@@ -213896,7 +214438,7 @@ index 3f057bd..9322b6f 100644
        "fixed_schedule": "固定计划",
        "schedule": {
 diff --git a/packages/i18n/src/locales/zh-CN/common.json b/packages/i18n/src/locales/zh-CN/common.json
-index dd67d92..83c50ba 100644
+index dd67d92..1fa6652 100644
 --- a/packages/i18n/src/locales/zh-CN/common.json
 +++ b/packages/i18n/src/locales/zh-CN/common.json
 @@ -820,7 +820,7 @@
@@ -213908,7 +214450,7 @@ index dd67d92..83c50ba 100644
      "choose_view_logs_from_setup_sh_and_docker_logs_to_be_sure": "请选择“查看日志”来查看 setup.sh 和 Docker 日志，以确认问题。"
    },
    "customize_navigation": "自定义导航",
-@@ -867,5 +867,431 @@
+@@ -867,5 +867,435 @@
        "description": "将工作项导出为 JSON 文件。",
        "short_description": "导出为 JSON"
      }
@@ -214337,7 +214879,11 @@ index dd67d92..83c50ba 100644
 +    "jump_failed": "无法跳转到该消息",
 +    "copy_link": "复制链接",
 +    "link_copied": "链接已复制",
-+    "mark_read": "标为已读"
++    "mark_read": "标为已读",
++    "toolbar_format": "格式",
++    "toolbar_emoji": "表情符号",
++    "toolbar_mention": "提及某人",
++    "send": "发送"
    }
  }
 diff --git a/packages/i18n/src/locales/zh-CN/empty-state.json b/packages/i18n/src/locales/zh-CN/empty-state.json
@@ -214945,7 +215491,7 @@ index 27b9a4b..c71e752 100644
        "fixed_schedule": "固定排程",
        "schedule": {
 diff --git a/packages/i18n/src/locales/zh-TW/common.json b/packages/i18n/src/locales/zh-TW/common.json
-index 834a2d9..05f7dfe 100644
+index 834a2d9..3455e62 100644
 --- a/packages/i18n/src/locales/zh-TW/common.json
 +++ b/packages/i18n/src/locales/zh-TW/common.json
 @@ -244,7 +244,7 @@
@@ -214966,7 +215512,7 @@ index 834a2d9..05f7dfe 100644
      "choose_view_logs_from_setup_sh_and_docker_logs_to_be_sure": "從 setup.sh 和 Docker 日誌中選擇 View Logs 來確認。"
    },
    "customize_navigation": "自訂導覽",
-@@ -867,5 +867,431 @@
+@@ -867,5 +867,435 @@
        "description": "將工作事項匯出為 JSON 檔案。",
        "short_description": "匯出為 JSON"
      }
@@ -215395,7 +215941,11 @@ index 834a2d9..05f7dfe 100644
 +    "jump_failed": "無法跳至該訊息",
 +    "copy_link": "複製連結",
 +    "link_copied": "連結已複製",
-+    "mark_read": "標為已讀"
++    "mark_read": "標為已讀",
++    "toolbar_format": "格式",
++    "toolbar_emoji": "表情符號",
++    "toolbar_mention": "提及某人",
++    "send": "傳送"
    }
  }
 diff --git a/packages/i18n/src/locales/zh-TW/empty-state.json b/packages/i18n/src/locales/zh-TW/empty-state.json
