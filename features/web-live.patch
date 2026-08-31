@@ -197147,10 +197147,10 @@ index fedd09f..e96717c 100644
      "invalid_base_url_error": "Neplatná základní URL",
      "client_id_title": "ID klienta",
 diff --git a/packages/i18n/src/locales/cs/navigation.json b/packages/i18n/src/locales/cs/navigation.json
-index d340abf..de5069f 100644
+index d340abf..917b84f 100644
 --- a/packages/i18n/src/locales/cs/navigation.json
 +++ b/packages/i18n/src/locales/cs/navigation.json
-@@ -25,10 +25,13 @@
+@@ -25,10 +25,15 @@
      "favorites": "Oblíbené",
      "pro": "Pro",
      "upgrade": "Upgrade",
@@ -197162,6 +197162,8 @@ index d340abf..de5069f 100644
 -    "business": "Byznys"
 +    "plane_pro": "Tequio Pro",
 +    "business": "Byznys",
++    "wiki": "Wiki",
++    "drive": "Soubory",
 +    "finance": "Finance",
 +    "channels": "Kanály",
 +    "assistant": "Asistent"
@@ -198366,10 +198368,10 @@ index a9b4d58..c22ef84 100644
      "invalid_base_url_error": "Ungültige Basis-URL",
      "client_id_title": "Client-ID",
 diff --git a/packages/i18n/src/locales/de/navigation.json b/packages/i18n/src/locales/de/navigation.json
-index bf22b25..a65237e 100644
+index bf22b25..5eea191 100644
 --- a/packages/i18n/src/locales/de/navigation.json
 +++ b/packages/i18n/src/locales/de/navigation.json
-@@ -25,10 +25,13 @@
+@@ -25,10 +25,15 @@
      "favorites": "Favoriten",
      "pro": "Pro",
      "upgrade": "Upgrade",
@@ -198381,6 +198383,8 @@ index bf22b25..a65237e 100644
 -    "business": "Business"
 +    "plane_pro": "Tequio Pro",
 +    "business": "Business",
++    "wiki": "Wiki",
++    "drive": "Dateien",
 +    "finance": "Finance",
 +    "channels": "Kanäle",
 +    "assistant": "Assistent"
@@ -202153,10 +202157,10 @@ index e7f9702..647c77f 100644
      "invalid_base_url_error": "URL de base invalide",
      "client_id_title": "ID client",
 diff --git a/packages/i18n/src/locales/fr/navigation.json b/packages/i18n/src/locales/fr/navigation.json
-index 2c77344..d61de1b 100644
+index 2c77344..ebd37b0 100644
 --- a/packages/i18n/src/locales/fr/navigation.json
 +++ b/packages/i18n/src/locales/fr/navigation.json
-@@ -25,10 +25,13 @@
+@@ -25,10 +25,15 @@
      "favorites": "Favoris",
      "pro": "Pro",
      "upgrade": "Mettre à niveau",
@@ -202168,6 +202172,8 @@ index 2c77344..d61de1b 100644
 -    "business": "Business"
 +    "plane_pro": "Tequio Pro",
 +    "business": "Business",
++    "wiki": "Wiki",
++    "drive": "Fichiers",
 +    "finance": "Finance",
 +    "channels": "Canaux",
 +    "assistant": "Assistant"
@@ -203421,10 +203427,10 @@ index 62cd968..222eb88 100644
      "invalid_base_url_error": "URL dasar tidak valid",
      "client_id_title": "ID Klien",
 diff --git a/packages/i18n/src/locales/id/navigation.json b/packages/i18n/src/locales/id/navigation.json
-index 4a77755..1614ecf 100644
+index 4a77755..e274d61 100644
 --- a/packages/i18n/src/locales/id/navigation.json
 +++ b/packages/i18n/src/locales/id/navigation.json
-@@ -25,10 +25,13 @@
+@@ -25,10 +25,15 @@
      "favorites": "Favorit",
      "pro": "Pro",
      "upgrade": "Upgrade",
@@ -203436,6 +203442,8 @@ index 4a77755..1614ecf 100644
 -    "business": "Bisnis"
 +    "plane_pro": "Tequio Pro",
 +    "business": "Bisnis",
++    "wiki": "Wiki",
++    "drive": "File",
 +    "finance": "Finance",
 +    "channels": "Saluran",
 +    "assistant": "Asisten"
@@ -204697,10 +204705,10 @@ index 36520b8..51893ae 100644
      "invalid_base_url_error": "URL base non valido",
      "client_id_title": "ID Client",
 diff --git a/packages/i18n/src/locales/it/navigation.json b/packages/i18n/src/locales/it/navigation.json
-index db31c30..4453380 100644
+index db31c30..7384834 100644
 --- a/packages/i18n/src/locales/it/navigation.json
 +++ b/packages/i18n/src/locales/it/navigation.json
-@@ -25,10 +25,13 @@
+@@ -25,10 +25,15 @@
      "favorites": "Preferiti",
      "pro": "Pro",
      "upgrade": "Aggiorna",
@@ -204712,6 +204720,8 @@ index db31c30..4453380 100644
 -    "business": "Business"
 +    "plane_pro": "Tequio Pro",
 +    "business": "Business",
++    "wiki": "Wiki",
++    "drive": "File",
 +    "finance": "Finance",
 +    "channels": "Canali",
 +    "assistant": "Assistente"
@@ -205684,10 +205694,10 @@ index e238e33..669d30c 100644
      "invalid_base_url_error": "Base URLが無効です",
      "client_id_title": "Client ID",
 diff --git a/packages/i18n/src/locales/ja/navigation.json b/packages/i18n/src/locales/ja/navigation.json
-index 207ec74..bfda320 100644
+index 207ec74..80df23d 100644
 --- a/packages/i18n/src/locales/ja/navigation.json
 +++ b/packages/i18n/src/locales/ja/navigation.json
-@@ -28,7 +28,10 @@
+@@ -28,7 +28,12 @@
      "pi_chat": "AIチャット",
      "epics": "エピック",
      "upgrade_plan": "プランをアップグレード",
@@ -205695,6 +205705,8 @@ index 207ec74..bfda320 100644
 -    "business": "ビジネス"
 +    "plane_pro": "Tequio Pro",
 +    "business": "ビジネス",
++    "wiki": "Wiki",
++    "drive": "ファイル",
 +    "finance": "Finance",
 +    "channels": "チャンネル",
 +    "assistant": "アシスタント"
@@ -206476,15 +206488,17 @@ index cb7e6ad..347a697 100644
      "invalid_base_url_error": "Base URL이 유효하지 않습니다",
      "client_id_title": "Client ID",
 diff --git a/packages/i18n/src/locales/ko/navigation.json b/packages/i18n/src/locales/ko/navigation.json
-index 86ba3b7..a751cc1 100644
+index 86ba3b7..a1c25a0 100644
 --- a/packages/i18n/src/locales/ko/navigation.json
 +++ b/packages/i18n/src/locales/ko/navigation.json
-@@ -29,6 +29,9 @@
+@@ -29,6 +29,11 @@
      "epics": "에픽스",
      "upgrade_plan": "업그레이드 플랜",
      "plane_pro": "플레인 프로",
 -    "business": "비즈니스"
 +    "business": "비즈니스",
++    "wiki": "위키",
++    "drive": "파일",
 +    "finance": "Finance",
 +    "channels": "채널",
 +    "assistant": "어시스턴트"
@@ -207556,15 +207570,17 @@ index 67c05cc..a5904b5 100644
      "invalid_base_url_error": "Nieprawidłowy URL bazowy",
      "client_id_title": "ID klienta",
 diff --git a/packages/i18n/src/locales/pl/navigation.json b/packages/i18n/src/locales/pl/navigation.json
-index 3089b6d..1ce4b8b 100644
+index 3089b6d..eaf61f7 100644
 --- a/packages/i18n/src/locales/pl/navigation.json
 +++ b/packages/i18n/src/locales/pl/navigation.json
-@@ -29,6 +29,9 @@
+@@ -29,6 +29,11 @@
      "epics": "Epiki",
      "upgrade_plan": "Apgrejduj plan",
      "plane_pro": "Plejn Pro",
 -    "business": "Biznes"
 +    "business": "Biznes",
++    "wiki": "Wiki",
++    "drive": "Pliki",
 +    "finance": "Finance",
 +    "channels": "Kanały",
 +    "assistant": "Asystent"
@@ -208769,10 +208785,10 @@ index b094ffa..53819ed 100644
      "invalid_base_url_error": "URL base inválida",
      "client_id_title": "ID do Cliente",
 diff --git a/packages/i18n/src/locales/pt-BR/navigation.json b/packages/i18n/src/locales/pt-BR/navigation.json
-index c2a2d62..2ec8d74 100644
+index c2a2d62..3e0b15e 100644
 --- a/packages/i18n/src/locales/pt-BR/navigation.json
 +++ b/packages/i18n/src/locales/pt-BR/navigation.json
-@@ -28,7 +28,10 @@
+@@ -28,7 +28,12 @@
      "pi_chat": "Chat AI",
      "epics": "Épicos",
      "upgrade_plan": "Atualizar plano",
@@ -208780,6 +208796,8 @@ index c2a2d62..2ec8d74 100644
 -    "business": "Business"
 +    "plane_pro": "Tequio Pro",
 +    "business": "Business",
++    "wiki": "Wiki",
++    "drive": "Arquivos",
 +    "finance": "Finance",
 +    "channels": "Canais",
 +    "assistant": "Assistente"
@@ -210041,10 +210059,10 @@ index b6b92f4..d604ce5 100644
      "invalid_base_url_error": "URL-ul de bază este invalid",
      "client_id_title": "ID Client",
 diff --git a/packages/i18n/src/locales/ro/navigation.json b/packages/i18n/src/locales/ro/navigation.json
-index e56d5aa..126bb62 100644
+index e56d5aa..ad97c06 100644
 --- a/packages/i18n/src/locales/ro/navigation.json
 +++ b/packages/i18n/src/locales/ro/navigation.json
-@@ -25,10 +25,13 @@
+@@ -25,10 +25,15 @@
      "favorites": "Favorite",
      "pro": "Pro",
      "upgrade": "Treci la versiunea superioară",
@@ -210056,6 +210074,8 @@ index e56d5aa..126bb62 100644
 -    "business": "Business"
 +    "plane_pro": "Tequio Pro",
 +    "business": "Business",
++    "wiki": "Wiki",
++    "drive": "Fișiere",
 +    "finance": "Finance",
 +    "channels": "Canale",
 +    "assistant": "Asistent"
@@ -211302,15 +211322,17 @@ index 2ca6489..317d892 100644
      "invalid_base_url_error": "Неверная базовая URL",
      "client_id_title": "ID клиента",
 diff --git a/packages/i18n/src/locales/ru/navigation.json b/packages/i18n/src/locales/ru/navigation.json
-index 80bbdd8..ff43519 100644
+index 80bbdd8..5f9d1a7 100644
 --- a/packages/i18n/src/locales/ru/navigation.json
 +++ b/packages/i18n/src/locales/ru/navigation.json
-@@ -29,6 +29,9 @@
+@@ -29,6 +29,11 @@
      "epics": "Эпики",
      "upgrade_plan": "Апгрейд план",
      "plane_pro": "Плейн Про",
 -    "business": "Бизнес"
 +    "business": "Бизнес",
++    "wiki": "Вики",
++    "drive": "Файлы",
 +    "finance": "Finance",
 +    "channels": "Каналы",
 +    "assistant": "Ассистент"
@@ -212552,15 +212574,17 @@ index 79689a4..1284028 100644
      "invalid_base_url_error": "Neplatná základná URL",
      "client_id_title": "ID klienta",
 diff --git a/packages/i18n/src/locales/sk/navigation.json b/packages/i18n/src/locales/sk/navigation.json
-index 0d09286..aeee75d 100644
+index 0d09286..00f2456 100644
 --- a/packages/i18n/src/locales/sk/navigation.json
 +++ b/packages/i18n/src/locales/sk/navigation.json
-@@ -29,6 +29,9 @@
+@@ -29,6 +29,11 @@
      "epics": "Epiky",
      "upgrade_plan": "Apgrejd plán",
      "plane_pro": "Plejn Pro",
 -    "business": "Biznis"
 +    "business": "Biznis",
++    "wiki": "Wiki",
++    "drive": "Súbory",
 +    "finance": "Finance",
 +    "channels": "Kanály",
 +    "assistant": "Asistent"
@@ -213763,15 +213787,17 @@ index 0d9074f..beb01ba 100644
      "invalid_base_url_error": "Geçersiz base URL",
      "client_id_title": "Client ID",
 diff --git a/packages/i18n/src/locales/tr-TR/navigation.json b/packages/i18n/src/locales/tr-TR/navigation.json
-index f347e01..28d4ae0 100644
+index f347e01..bcef0ec 100644
 --- a/packages/i18n/src/locales/tr-TR/navigation.json
 +++ b/packages/i18n/src/locales/tr-TR/navigation.json
-@@ -29,6 +29,9 @@
+@@ -29,6 +29,11 @@
      "epics": "Epiks",
      "upgrade_plan": "Apgreyd plen",
      "plane_pro": "Pleyn Pro",
 -    "business": "Biznis"
 +    "business": "Biznis",
++    "wiki": "Wiki",
++    "drive": "Dosyalar",
 +    "finance": "Finance",
 +    "channels": "Kanallar",
 +    "assistant": "Asistan"
@@ -214895,15 +214921,17 @@ index df88777..0f72823 100644
      "invalid_base_url_error": "Недійсна базова URL",
      "client_id_title": "ID Клієнта",
 diff --git a/packages/i18n/src/locales/ua/navigation.json b/packages/i18n/src/locales/ua/navigation.json
-index 742ef12..c4dbc54 100644
+index 742ef12..8450c0a 100644
 --- a/packages/i18n/src/locales/ua/navigation.json
 +++ b/packages/i18n/src/locales/ua/navigation.json
-@@ -29,6 +29,9 @@
+@@ -29,6 +29,11 @@
      "epics": "Епікс",
      "upgrade_plan": "Апгрейд план",
      "plane_pro": "Плейн Про",
 -    "business": "Бізнес"
 +    "business": "Бізнес",
++    "wiki": "Вікі",
++    "drive": "Файли",
 +    "finance": "Finance",
 +    "channels": "Канали",
 +    "assistant": "Асистент"
@@ -216071,10 +216099,10 @@ index b884fb2..ab73943 100644
      "invalid_base_url_error": "URL cơ bản không hợp lệ",
      "client_id_title": "ID Khách Hàng",
 diff --git a/packages/i18n/src/locales/vi-VN/navigation.json b/packages/i18n/src/locales/vi-VN/navigation.json
-index 1e5d213..bdff0c2 100644
+index 1e5d213..9648778 100644
 --- a/packages/i18n/src/locales/vi-VN/navigation.json
 +++ b/packages/i18n/src/locales/vi-VN/navigation.json
-@@ -25,10 +25,13 @@
+@@ -25,10 +25,15 @@
      "favorites": "Yêu thích",
      "pro": "Phiên bản Pro",
      "upgrade": "Nâng cấp",
@@ -216086,6 +216114,8 @@ index 1e5d213..bdff0c2 100644
 -    "business": "Doanh nghiệp"
 +    "plane_pro": "Tequio Pro",
 +    "business": "Doanh nghiệp",
++    "wiki": "Wiki",
++    "drive": "Tệp",
 +    "finance": "Finance",
 +    "channels": "Kênh",
 +    "assistant": "Trợ lý"
@@ -217289,10 +217319,10 @@ index 3ea1da4..773a93e 100644
      "invalid_base_url_error": "无效的基 URL",
      "client_id_title": "Client ID",
 diff --git a/packages/i18n/src/locales/zh-CN/navigation.json b/packages/i18n/src/locales/zh-CN/navigation.json
-index 0fe15a3..f6f4167 100644
+index 0fe15a3..61ffb87 100644
 --- a/packages/i18n/src/locales/zh-CN/navigation.json
 +++ b/packages/i18n/src/locales/zh-CN/navigation.json
-@@ -28,7 +28,10 @@
+@@ -28,7 +28,12 @@
      "pi_chat": "AI 聊天",
      "epics": "史诗",
      "upgrade_plan": "升级计划",
@@ -217300,6 +217330,8 @@ index 0fe15a3..f6f4167 100644
 -    "business": "商业版"
 +    "plane_pro": "Tequio Pro",
 +    "business": "商业版",
++    "wiki": "Wiki",
++    "drive": "文件",
 +    "finance": "Finance",
 +    "channels": "频道",
 +    "assistant": "助手"
@@ -218438,15 +218470,17 @@ index fa9fac6..baaf89c 100644
      "invalid_base_url_error": "無效的基礎 URL",
      "client_id_title": "Client ID",
 diff --git a/packages/i18n/src/locales/zh-TW/navigation.json b/packages/i18n/src/locales/zh-TW/navigation.json
-index 93bd736..2d55e0f 100644
+index 93bd736..fd79cf1 100644
 --- a/packages/i18n/src/locales/zh-TW/navigation.json
 +++ b/packages/i18n/src/locales/zh-TW/navigation.json
-@@ -29,6 +29,9 @@
+@@ -29,6 +29,11 @@
      "epics": "史詩",
      "upgrade_plan": "升級方案",
      "plane_pro": "平面專業版",
 -    "business": "商業"
 +    "business": "商業",
++    "wiki": "Wiki",
++    "drive": "檔案",
 +    "finance": "Finance",
 +    "channels": "頻道",
 +    "assistant": "助理"
