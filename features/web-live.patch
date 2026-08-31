@@ -110296,6 +110296,32 @@ z87hTQz@a%q5$`8u%kv8+zq197Zl6iKnBKQE_L+s{GDTojw#H3tqCLpaCnr`$PW@3H
 zA3r}NG}P1IzrR-JV|n|(wf66V>Zcxm+}GFB)1&Tt`0(MNn3$aZb2Wn*N;nzL*z4`T
 gFTZN-+T8#D89TfA#7fSexC}DQ)78&qol`;+0NvF(UH||9
 
+diff --git a/apps/web/app/entry.client.tsx b/apps/web/app/entry.client.tsx
+index 1092f6e..3dde3e2 100644
+--- a/apps/web/app/entry.client.tsx
++++ b/apps/web/app/entry.client.tsx
+@@ -34,7 +34,20 @@ startTransition(() => {
+   hydrateRoot(
+     document,
+     <StrictMode>
+-      <HydratedRouter />
++      {/* Sintergica: useTransitions={false} evita la navegación congelada.
++          Por defecto react-router envuelve el reparto de la location nueva en
++          React.startTransition (chunk-KS7C4IRE, setStateImpl bajo
++          startTransition). Con React 18 y consumidores de
++          useSyncExternalStore por todas partes (SWR v2, useEditorState de
++          tiptap en cada mensaje del chat), esa transición puede no
++          confirmarse nunca: la URL cambia (pushState ya ocurrió) pero la
++          pantalla vieja queda montada y viva hasta recargar. Medido el
++          31 Ago 2026: pushState a /wiki/ sin re-render, sidebar con la ruta
++          vieja activa, y reproducible tras enviar un mensaje en Canales —
++          justo cuando tiptap agita sus stores. La propia doc de react-router
++          señala useSyncExternalStore como motivo para desactivarlo. Con
++          false, el estado del router se aplica con un setState normal. */}
++      <HydratedRouter useTransitions={false} />
+     </StrictMode>
+   );
+ });
 diff --git a/apps/web/app/error/prod.tsx b/apps/web/app/error/prod.tsx
 index a8d6182..9dece70 100644
 --- a/apps/web/app/error/prod.tsx
