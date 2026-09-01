@@ -1,6 +1,10 @@
-# Sintergica features: Wiki por organización + Gestor de archivos (Drive)
+# Funciones propias de Tequio
 
-Paquete listo para desplegar en el Plane self-hosted (plane.sintergica.ai).
+Paquete listo para desplegar en el Tequio self-hosted
+([tequio.sintergica.ai](https://tequio.sintergica.ai)), la versión modificada
+de Plane CE v1.4.2 de Sintergica AI. Módulos: wiki por organización, gestor de
+archivos (Drive), finanzas, asistente de IA, canales de chat y correos con
+identidad Tequio.
 
 ## Qué agrega
 
@@ -53,7 +57,7 @@ en JSON en lugar de redirigir, de modo que el endpoint nunca sea un open redirec
 **Caveat de Google Drive**: la vista previa incrustada solo se ve si el archivo
 está compartido de forma que el visor pueda abrirlo (p. ej. "cualquiera con el
 enlace"); si no, Google muestra su propia pantalla de permisos dentro del marco.
-El sitio no envía CSP y su `X-Frame-Options: DENY` solo impide que a Plane lo
+El sitio no envía CSP y su `X-Frame-Options: DENY` solo impide que a Tequio lo
 incrusten otros, así que no bloquea estos iframes salientes.
 
 **Módulo de Finanzas** (`/<slug>/finance` y pestaña Finanzas en cada proyecto)
@@ -161,6 +165,23 @@ al escribir otro mensaje ignorando el botón) se cierran **todos** los
 `tool_calls` sin resolver. Escribir exige rol ≥ 15 en el proyecto; a quien no
 puede escribir no se le ofrecen siquiera esas herramientas.
 
+**Canales de chat** (`plane.chat`) — *F1–F4, v2 y rondas 3–10 desplegadas*
+- Canales por proyecto (`#general` automático) y de workspace, canales
+  privados, DMs canónicos, hilos de un nivel, reacciones, menciones con
+  notificación, pins, búsqueda y silenciar por usuario.
+- Adjuntos de cualquier tipo (25 MB, presign a MinIO), enlazar documentos del
+  wiki/drive desde el composer, previsualización de enlaces con guardas SSRF,
+  composer estilo Slack (formato, emojis, menciones), notificaciones de
+  escritorio + toast en la app para DMs y menciones, y deep-links a mensajes
+  (`?message=`).
+- Arquitectura: app Django `plane.chat` (5 tablas `chat_*`, REST bajo
+  `/api/workspaces/<slug>/chat/`) como fuente de verdad; el servidor live
+  transporta eventos JSON stateless (documentType `"channel"`) y el cliente
+  cae a polling si el websocket falla. Migraciones `chat.0001`–`0003`,
+  aditivas.
+- Traducido a los 19 locales. Diseño completo, decisiones y trampas en
+  [`CHANNELS-DESIGN.md`](CHANNELS-DESIGN.md).
+
 ### Tres trampas del streaming (documentadas para no repetirlas)
 
 1. **Un generador síncrono NO se transmite.** Django lo materializa entero con
@@ -175,26 +196,31 @@ puede escribir no se le ofrecen siquiera esas herramientas.
 ## Contenido
 
 ```
-backend/               → archivos python + patcher (imagen derivada de la actual del api)
-backend/assistant/     → app Django del asistente de IA (modelos, herramientas, loop SSE)
+backend/               → apps Django propias + patcher (imagen derivada de la oficial del api)
+backend/assistant/     → asistente de IA (modelos, herramientas, loop SSE)
                          frontend en plane-src: core/components/assistant/, store, servicio
+backend/chat/          → canales de chat (modelos, REST, realtime, link previews)
+backend/finance/       → módulo de finanzas (modelos, analítica, CFO IA)
 backend/emails/        → las 16 plantillas de correo con identidad Tequio; pisan por COPY
                          a las de fábrica en /code/templates/emails/
-regen-issue-updates.py → regenera backend/emails/notifications/issue-updates.html desde la
-                         plantilla de plane-src (la única que no usa la maqueta común);
-                         cada sustitución lleva aserción, así que un cambio de upstream
-                         falla en vez de dejar texto en inglés
-web-live.patch         → git diff con 58 archivos (frontend web + servidor live + i18n)
-remote-deploy.sh       → se ejecuta en el VPS: build de 3 imágenes + actualización del compose
-deploy.sh              → sube el paquete por scp y ejecuta remote-deploy.sh
-sync-web.sh            → sólo frontend: copia archivos, reconstruye la imagen web y la recrea
-sync-admin.sh          → lo mismo para apps/admin (god-mode); sync-web.sh no lo cubre
-fix-live-image.sh      → parche puntual del compose para el servicio live
-verify*.py             → pruebas funcionales que se ejecutan dentro del contenedor api
-                         (verify5.py = asistente, 100 comprobaciones, sin llamar al proveedor)
-                         verify13.py = correos; es la excepción, corre EN LOCAL con Django
-                         instalado y no toca la base ni la red
+live/                  → parche del servidor live (documentTypes workspace_page y channel)
+web-live.patch         → git diff --binary (~626 diffs: apps web/admin/space, live, i18n,
+                         propel y los assets del rebranding); se regenera con
+                         scripts/regen-patch.sh, que trae aserciones de completitud
+scripts/               → deploy.sh (paquete completo), remote-deploy.sh (corre en el VPS),
+                         sync-web/admin/live/space/backend.sh (sync incremental por app),
+                         backend-rebuild.sh (respaldo BD + migrator + recreación),
+                         regen-issue-updates.py (regenera la plantilla issue-updates con
+                         aserciones), fix-live-image.sh
+verify/                → verify*.py, pruebas funcionales que se ejecutan dentro del
+                         contenedor api (verify5.py = asistente; verify10-12 = chat;
+                         verify13.py = correos, la excepción: corre EN LOCAL con Django
+                         instalado y no toca la base ni la red)
+source-offer/          → generación del tarball AGPL §13 que la instancia sirve en /source/
 ```
+
+(En la copia de trabajo local `sintergica-features/` los scripts y verify
+viven planos en la raíz; el contenido es el mismo.)
 
 ## Notas de mantenimiento
 
@@ -240,7 +266,7 @@ tiene que partirla; mandarla entera como nombre de modelo es un 404.
 ## Desplegar
 
 ```bash
-bash sintergica-features/deploy.sh
+bash scripts/deploy.sh          # (bash sintergica-features/deploy.sh en la copia local)
 ```
 
 Tarda ~10–20 min (builds de web y live en el VPS). La BD, redis, minio y rabbitmq

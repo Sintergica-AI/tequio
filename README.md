@@ -1,21 +1,23 @@
-# plane-ce-api-extension
+# Tequio
 
-Extensiones para **Plane Community Edition v1.4.2** self-hosted. Dos capas
-independientes que se apilan sobre las imágenes oficiales, **sin migraciones de
-base de datos**:
+**Tequio** es el gestor de proyectos self-hosted de Sintergica AI: una versión
+modificada de **Plane Community Edition v1.4.2** (ver [`NOTICE`](NOTICE)).
+Este repositorio contiene todo lo que se apila sobre las imágenes oficiales de
+Plane CE para producir Tequio, en dos capas independientes:
 
 | Capa | Carpeta | Qué añade |
 |---|---|---|
-| 1 · API pública | [`patch/`](patch/) | *Pages* y *features* en el API `X-API-Key` + fix del asistente de IA |
-| 2 · Wiki y archivos | [`features/`](features/) | Wiki por organización y gestor de archivos, con su interfaz web |
+| 1 · API pública | [`patch/`](patch/) | *Pages* y *features* en el API `X-API-Key` + fix del asistente de IA de fábrica |
+| 2 · Funciones Tequio | [`features/`](features/) | Wiki por organización, gestor de archivos (Drive), finanzas, asistente de IA, canales de chat, correos e identidad Tequio — con su interfaz web |
 
 La capa 1 hace que el
 [servidor MCP oficial de Plane](https://github.com/makeplane/plane-mcp-server)
 pueda gestionar páginas contra una instancia self-hosted de CE, algo que de
 fábrica solo funciona contra Plane Cloud / Commercial.
 
-La capa 2 añade dos funciones completas que en Plane son de la edición
-Commercial, incluyendo el frontend. Ver [`features/README.md`](features/README.md).
+La capa 2 añade funciones completas que en Plane son de la edición Commercial
+(o no existen en ninguna), incluyendo el frontend, además del rebranding
+Plane → Tequio. Ver [`features/README.md`](features/README.md).
 
 ---
 
@@ -106,8 +108,8 @@ fuente y **no requiere migraciones de base de datos**, lo que mantiene el riesgo
 al mínimo y permite revertir en un comando.
 
 ```bash
-git clone git@github.com:Sintergica-AI/plane-ce-api-extension.git
-cd plane-ce-api-extension/patch
+git clone git@github.com:Sintergica-AI/plane-ce-sintergica.git
+cd plane-ce-sintergica/patch
 docker build -t plane-backend-custom:v1.4.2-mcp .
 ```
 

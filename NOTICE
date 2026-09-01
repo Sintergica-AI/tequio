@@ -15,8 +15,11 @@ Community Edition v1.4.2 (agosto de 2026):
   - API pública: endpoints de páginas y features (patch/page_ext_*.py,
     patch/patch_ce.py).
   - Funciones nuevas: wiki por organización, gestor de archivos (Drive),
-    módulo de finanzas y asistente conversacional
+    módulo de finanzas, asistente conversacional y canales de chat
     (features/backend/**, features/live/**, features/web-live.patch).
+  - Plantillas de correo transaccional con identidad Tequio
+    (features/backend/emails/**) y español como idioma por defecto de la
+    interfaz.
 
 "Plane" es una marca de Plane Software, Inc. Tequio no está afiliado a
 Plane Software, Inc. ni cuenta con su respaldo o patrocinio. El nombre y
