@@ -67132,6 +67132,100 @@ index 0000000..ba59f6c
 +}
 +
 +export default observer(WorkspacePagesPage);
+diff --git a/apps/web/app/(all)/[workspaceSlug]/(settings)/settings/(workspace)/billing/header.tsx b/apps/web/app/(all)/[workspaceSlug]/(settings)/settings/(workspace)/billing/header.tsx
+deleted file mode 100644
+index 6172567..0000000
+--- a/apps/web/app/(all)/[workspaceSlug]/(settings)/settings/(workspace)/billing/header.tsx
++++ /dev/null
+@@ -1,42 +0,0 @@
+-/**
+- * Copyright (c) 2023-present Plane Software, Inc. and contributors
+- * SPDX-License-Identifier: AGPL-3.0-only
+- * See the LICENSE file for details.
+- */
+-
+-import { observer } from "mobx-react";
+-// plane imports
+-import { WORKSPACE_SETTINGS } from "@plane/constants";
+-import { useTranslation } from "@plane/i18n";
+-import { Breadcrumbs } from "@plane/ui";
+-// components
+-import { BreadcrumbLink } from "@/components/common/breadcrumb-link";
+-import { SettingsPageHeader } from "@/components/settings/page-header";
+-import { WORKSPACE_SETTINGS_ICONS } from "@/components/settings/workspace/sidebar/item-icon";
+-
+-export const BillingWorkspaceSettingsHeader = observer(function BillingWorkspaceSettingsHeader() {
+-  // translation
+-  const { t } = useTranslation();
+-  // derived values
+-  const settingsDetails = WORKSPACE_SETTINGS["billing-and-plans"];
+-  const Icon = WORKSPACE_SETTINGS_ICONS["billing-and-plans"];
+-
+-  return (
+-    <SettingsPageHeader
+-      leftItem={
+-        <div className="flex items-center gap-2">
+-          <Breadcrumbs>
+-            <Breadcrumbs.Item
+-              component={
+-                <BreadcrumbLink
+-                  label={t(settingsDetails.i18n_label)}
+-                  icon={<Icon className="size-4 text-tertiary" />}
+-                />
+-              }
+-            />
+-          </Breadcrumbs>
+-        </div>
+-      }
+-    />
+-  );
+-});
+diff --git a/apps/web/app/(all)/[workspaceSlug]/(settings)/settings/(workspace)/billing/page.tsx b/apps/web/app/(all)/[workspaceSlug]/(settings)/settings/(workspace)/billing/page.tsx
+deleted file mode 100644
+index 3f9383f..0000000
+--- a/apps/web/app/(all)/[workspaceSlug]/(settings)/settings/(workspace)/billing/page.tsx
++++ /dev/null
+@@ -1,40 +0,0 @@
+-/**
+- * Copyright (c) 2023-present Plane Software, Inc. and contributors
+- * SPDX-License-Identifier: AGPL-3.0-only
+- * See the LICENSE file for details.
+- */
+-
+-import { observer } from "mobx-react";
+-// component
+-import { EUserPermissions, EUserPermissionsLevel } from "@plane/constants";
+-import { NotAuthorizedView } from "@/components/auth-screens/not-authorized-view";
+-import { PageHead } from "@/components/core/page-title";
+-import { SettingsContentWrapper } from "@/components/settings/content-wrapper";
+-// hooks
+-import { useWorkspace } from "@/hooks/store/use-workspace";
+-import { useUserPermissions } from "@/hooks/store/user";
+-// local imports
+-import { BillingWorkspaceSettingsHeader } from "./header";
+-import { BillingRoot } from "@/components/workspace/billing";
+-
+-function BillingSettingsPage() {
+-  // store hooks
+-  const { workspaceUserInfo, allowPermissions } = useUserPermissions();
+-  const { currentWorkspace } = useWorkspace();
+-  // derived values
+-  const canPerformWorkspaceAdminActions = allowPermissions([EUserPermissions.ADMIN], EUserPermissionsLevel.WORKSPACE);
+-  const pageTitle = currentWorkspace?.name ? `${currentWorkspace.name} - Billing & Plans` : undefined;
+-
+-  if (workspaceUserInfo && !canPerformWorkspaceAdminActions) {
+-    return <NotAuthorizedView section="settings" className="h-auto" />;
+-  }
+-
+-  return (
+-    <SettingsContentWrapper header={<BillingWorkspaceSettingsHeader />} hugging>
+-      <PageHead title={pageTitle} />
+-      <BillingRoot />
+-    </SettingsContentWrapper>
+-  );
+-}
+-
+-export default observer(BillingSettingsPage);
 diff --git a/apps/web/app/(all)/[workspaceSlug]/(settings)/settings/projects/page.tsx b/apps/web/app/(all)/[workspaceSlug]/(settings)/settings/projects/page.tsx
 index 86bd9f8..a3686ad 100644
 --- a/apps/web/app/(all)/[workspaceSlug]/(settings)/settings/projects/page.tsx
@@ -112004,6 +112098,21 @@ index 08a38e6..c602e51 100644
  ];
  
  export default function Root() {
+diff --git a/apps/web/app/routes/core.ts b/apps/web/app/routes/core.ts
+index c9c82bd..9453062 100644
+--- a/apps/web/app/routes/core.ts
++++ b/apps/web/app/routes/core.ts
+@@ -266,10 +266,6 @@ export const coreRoutes: RouteConfigEntry[] = [
+             ":workspaceSlug/settings/members",
+             "./(all)/[workspaceSlug]/(settings)/settings/(workspace)/members/page.tsx"
+           ),
+-          route(
+-            ":workspaceSlug/settings/billing",
+-            "./(all)/[workspaceSlug]/(settings)/settings/(workspace)/billing/page.tsx"
+-          ),
+           route(
+             ":workspaceSlug/settings/exports",
+             "./(all)/[workspaceSlug]/(settings)/settings/(workspace)/exports/page.tsx"
 diff --git a/apps/web/app/routes/extended.ts b/apps/web/app/routes/extended.ts
 index 452d214..9d47454 100644
 --- a/apps/web/app/routes/extended.ts
@@ -124583,6 +124692,19 @@ index ed0a185..a5fb5c6 100644
      </div>
    );
  }
+diff --git a/apps/web/core/components/home/user-greetings.tsx b/apps/web/core/components/home/user-greetings.tsx
+index 8d5d6cc..9ce893d 100644
+--- a/apps/web/core/components/home/user-greetings.tsx
++++ b/apps/web/core/components/home/user-greetings.tsx
+@@ -48,7 +48,7 @@ export function UserGreetingsView(props: IUserGreetingsView) {
+   return (
+     <div className="my-6 flex flex-col items-center">
+       <h2 className="text-center text-20 font-semibold">
+-        {t("good")} {t(greeting)}, {user?.first_name} {user?.last_name}
++        {t(`greeting_${greeting}`)}, {user?.first_name} {user?.last_name}
+       </h2>
+       <h5 className="flex items-center gap-2 font-medium text-placeholder">
+         <div>{greeting === "morning" ? "🌤️" : greeting === "afternoon" ? "🌥️" : "🌙️"}</div>
 diff --git a/apps/web/core/components/inbox/sidebar/inbox-list-item.tsx b/apps/web/core/components/inbox/sidebar/inbox-list-item.tsx
 index 22503e8..45da521 100644
 --- a/apps/web/core/components/inbox/sidebar/inbox-list-item.tsx
@@ -125385,7 +125507,7 @@ index aa80f8e..fc40e68 100644
                  </div>
                </Dialog.Panel>
 diff --git a/apps/web/core/components/onboarding/tour/root.tsx b/apps/web/core/components/onboarding/tour/root.tsx
-index db87b71..e9f8f05 100644
+index db87b71..6387972 100644
 --- a/apps/web/core/components/onboarding/tour/root.tsx
 +++ b/apps/web/core/components/onboarding/tour/root.tsx
 @@ -1,5 +1,5 @@
@@ -125395,41 +125517,258 @@ index db87b71..e9f8f05 100644
   * SPDX-License-Identifier: AGPL-3.0-only
   * See the LICENSE file for details.
   */
-@@ -39,7 +39,7 @@ const TOUR_STEPS: {
-     key: "work-items",
-     title: "Plan with work items",
-     description:
+@@ -7,14 +7,9 @@
+ import { useState } from "react";
+ import { observer } from "mobx-react";
+ // plane imports
++import { useTranslation } from "@plane/i18n";
+ import { Button } from "@plane/propel/button";
+ import { CloseIcon, PlaneLockup } from "@plane/propel/icons";
+-// assets
+-import CyclesTour from "@/app/assets/onboarding/cycles.webp?url";
+-import IssuesTour from "@/app/assets/onboarding/issues.webp?url";
+-import ModulesTour from "@/app/assets/onboarding/modules.webp?url";
+-import PagesTour from "@/app/assets/onboarding/pages.webp?url";
+-import ViewsTour from "@/app/assets/onboarding/views.webp?url";
+ // hooks
+ import { useCommandPalette } from "@/hooks/store/use-command-palette";
+ import { useUser } from "@/hooks/store/user";
+@@ -27,55 +22,27 @@ export type TOnboardingTourProps = {
+ 
+ export type TTourSteps = "welcome" | "work-items" | "cycles" | "modules" | "views" | "pages";
+ 
++/**
++ * Decorado del onboarding: la misma imagen que ilustra la pantalla de acceso.
++ *
++ * Antes iban aquí cinco capturas de marketing de Plane —con nombres de
++ * proyectos ajenos y una tarjeta que decía literalmente "Plane integration"—,
++ * que es lo último que debería ver alguien en su primer minuto de Tequio. Se
++ * sirve desde public/, igual que en el acceso, así que no se duplica el peso.
++ */
++const DECOR_SRC = "/media/login-sintergica.jpg";
++
+ const TOUR_STEPS: {
+   key: TTourSteps;
+-  title: string;
+-  description: string;
+-  image: string;
++  i18nKey: string;
+   prevStep?: TTourSteps;
+   nextStep?: TTourSteps;
+ }[] = [
+-  {
+-    key: "work-items",
+-    title: "Plan with work items",
+-    description:
 -      "The work item is the building block of the Plane. Most concepts in Plane are either associated with work items and their properties.",
-+      "The work item is the building block of Tequio. Most concepts in Tequio are either associated with work items and their properties.",
-     image: IssuesTour,
-     nextStep: "cycles",
-   },
-@@ -99,10 +99,10 @@ export const TourRoot = observer(function TourRoot(props: TOnboardingTourProps)
+-    image: IssuesTour,
+-    nextStep: "cycles",
+-  },
+-  {
+-    key: "cycles",
+-    title: "Move with cycles",
+-    description:
+-      "Cycles help you and your team to progress faster, similar to the sprints commonly used in agile development.",
+-    image: CyclesTour,
+-    prevStep: "work-items",
+-    nextStep: "modules",
+-  },
+-  {
+-    key: "modules",
+-    title: "Break into modules",
+-    description: "Modules break your big thing into Projects or Features, to help you organize better.",
+-    image: ModulesTour,
+-    prevStep: "cycles",
+-    nextStep: "views",
+-  },
+-  {
+-    key: "views",
+-    title: "Views",
+-    description:
+-      "Create custom filters to display only the work items that matter to you. Save and share your filters in just a few clicks.",
+-    image: ViewsTour,
+-    prevStep: "modules",
+-    nextStep: "pages",
+-  },
+-  {
+-    key: "pages",
+-    title: "Document with pages",
+-    description: "Use Pages to quickly jot down work items when you're in a meeting or starting a day.",
+-    image: PagesTour,
+-    prevStep: "views",
+-  },
++  { key: "work-items", i18nKey: "work_items", nextStep: "cycles" },
++  { key: "cycles", i18nKey: "cycles", prevStep: "work-items", nextStep: "modules" },
++  { key: "modules", i18nKey: "modules", prevStep: "cycles", nextStep: "views" },
++  { key: "views", i18nKey: "views", prevStep: "modules", nextStep: "pages" },
++  { key: "pages", i18nKey: "pages", prevStep: "views" },
+ ];
+ 
+ export const TourRoot = observer(function TourRoot(props: TOnboardingTourProps) {
+@@ -85,6 +52,7 @@ export const TourRoot = observer(function TourRoot(props: TOnboardingTourProps)
+   // store hooks
+   const { toggleCreateProjectModal } = useCommandPalette();
+   const { data: currentUser } = useUser();
++  const { t } = useTranslation();
+ 
+   const currentStepIndex = TOUR_STEPS.findIndex((tourStep) => tourStep.key === step);
+   const currentStep = TOUR_STEPS[currentStepIndex];
+@@ -94,17 +62,20 @@ export const TourRoot = observer(function TourRoot(props: TOnboardingTourProps)
+       {step === "welcome" ? (
+         <div className="w-4/5 overflow-hidden rounded-[10px] bg-surface-1 md:w-1/2 lg:w-2/5">
+           <div className="h-full overflow-hidden">
+-            <div className="grid h-64 place-items-center bg-accent-primary">
+-              <PlaneLockup className="h-10 w-auto text-on-color" />
++            <div className="relative grid h-64 place-items-center overflow-hidden bg-accent-primary">
++              <img src={DECOR_SRC} alt="" aria-hidden="true" className="absolute inset-0 h-full w-full object-cover" />
++              {/* Velo: el logotipo tiene que leerse encima de la imagen pase lo
++                  que pase con el material que se ponga detrás. */}
++              <div className="absolute inset-0 bg-black/45" aria-hidden="true" />
++              <PlaneLockup className="relative h-10 w-auto text-white" />
              </div>
              <div className="flex flex-col overflow-y-auto p-6">
                <h3 className="font-semibold sm:text-18">
 -                Welcome to Plane, {currentUser?.first_name} {currentUser?.last_name}
-+                Welcome to Tequio, {currentUser?.first_name} {currentUser?.last_name}
++                {t("product_tour.onboarding.welcome_title", {
++                  name: `${currentUser?.first_name ?? ""} ${currentUser?.last_name ?? ""}`.trim(),
++                })}
                </h3>
-               <p className="mt-3 text-13 text-secondary">
+-              <p className="mt-3 text-13 text-secondary">
 -                We{"'"}re glad that you decided to try out Plane. You can now manage your projects with ease. Get
-+                We{"'"}re glad that you decided to try out Tequio. You can now manage your projects with ease. Get
-                 started by creating a project.
-               </p>
+-                started by creating a project.
+-              </p>
++              <p className="mt-3 text-13 text-secondary">{t("product_tour.onboarding.welcome_body")}</p>
                <div className="flex h-full items-end">
+                 <div className="mt-12 flex items-center gap-6">
+                   <Button
+@@ -113,7 +84,7 @@ export const TourRoot = observer(function TourRoot(props: TOnboardingTourProps)
+                       setStep("work-items");
+                     }}
+                   >
+-                    Take a Product Tour
++                    {t("product_tour.onboarding.take_tour")}
+                   </Button>
+                   <button
+                     type="button"
+@@ -122,7 +93,7 @@ export const TourRoot = observer(function TourRoot(props: TOnboardingTourProps)
+                       onComplete();
+                     }}
+                   >
+-                    No thanks, I will explore it myself
++                    {t("product_tour.onboarding.skip")}
+                   </button>
+                 </div>
+               </div>
+@@ -145,21 +116,25 @@ export const TourRoot = observer(function TourRoot(props: TOnboardingTourProps)
+                 currentStepIndex % 2 === 0 ? "justify-end" : "justify-start"
+               }`}
+             >
+-              <img src={currentStep?.image} className="h-full w-full object-cover" alt={currentStep?.title} />
++              <img src={DECOR_SRC} className="h-full w-full object-cover" alt="" aria-hidden="true" />
+             </div>
+             <div className="flex h-1/2 flex-col overflow-y-auto p-4 sm:h-2/5">
+-              <h3 className="font-semibold sm:text-18">{currentStep?.title}</h3>
+-              <p className="mt-3 text-13 text-secondary">{currentStep?.description}</p>
++              <h3 className="font-semibold sm:text-18">
++                {currentStep ? t(`product_tour.onboarding.steps.${currentStep.i18nKey}.title`) : ""}
++              </h3>
++              <p className="mt-3 text-13 text-secondary">
++                {currentStep ? t(`product_tour.onboarding.steps.${currentStep.i18nKey}.description`) : ""}
++              </p>
+               <div className="mt-3 flex h-full items-end justify-between gap-4">
+                 <div className="flex items-center gap-4">
+                   {currentStep?.prevStep && (
+                     <Button variant="secondary" onClick={() => setStep(currentStep.prevStep ?? "welcome")}>
+-                      Back
++                      {t("product_tour.onboarding.back")}
+                     </Button>
+                   )}
+                   {currentStep?.nextStep && (
+                     <Button variant="primary" onClick={() => setStep(currentStep.nextStep ?? "work-items")}>
+-                      Next
++                      {t("product_tour.onboarding.next")}
+                     </Button>
+                   )}
+                 </div>
+@@ -171,7 +146,7 @@ export const TourRoot = observer(function TourRoot(props: TOnboardingTourProps)
+                       toggleCreateProjectModal(true);
+                     }}
+                   >
+-                    Create your first project
++                    {t("product_tour.onboarding.create_project")}
+                   </Button>
+                 )}
+               </div>
 diff --git a/apps/web/core/components/onboarding/tour/sidebar.tsx b/apps/web/core/components/onboarding/tour/sidebar.tsx
-index 898159f..f304a07 100644
+index 898159f..931befb 100644
 --- a/apps/web/core/components/onboarding/tour/sidebar.tsx
 +++ b/apps/web/core/components/onboarding/tour/sidebar.tsx
-@@ -53,7 +53,7 @@ export function TourSidebar({ step, setStep }: Props) {
+@@ -5,6 +5,7 @@
+  */
+ 
+ // plane imports
++import { useTranslation } from "@plane/i18n";
+ import { CycleIcon, ModuleIcon, PageIcon, ViewsIcon, WorkItemsIcon } from "@plane/propel/icons";
+ import type { ISvgIcons } from "@plane/propel/icons";
+ // types
+@@ -17,27 +18,27 @@ const sidebarOptions: {
+ }[] = [
+   {
+     key: "work-items",
+-    label: "Work items",
++    label: "product_tour.onboarding.steps.work_items.title",
+     Icon: WorkItemsIcon,
+   },
+   {
+     key: "cycles",
+-    label: "Cycles",
++    label: "product_tour.onboarding.steps.cycles.title",
+     Icon: CycleIcon,
+   },
+   {
+     key: "modules",
+-    label: "Modules",
++    label: "product_tour.onboarding.steps.modules.title",
+     Icon: ModuleIcon,
+   },
+   {
+     key: "views",
+-    label: "Views",
++    label: "product_tour.onboarding.steps.views.title",
+     Icon: ViewsIcon,
+   },
+   {
+     key: "pages",
+-    label: "Pages",
++    label: "product_tour.onboarding.steps.pages.title",
+     Icon: PageIcon,
+   },
+ ];
+@@ -48,12 +49,13 @@ type Props = {
+ };
+ 
+ export function TourSidebar({ step, setStep }: Props) {
++  const { t } = useTranslation();
+   return (
+     <div className="col-span-3 hidden bg-surface-2 p-8 lg:block">
        <h3 className="text-16 font-medium">
-         Let{"'"}s get started!
+-        Let{"'"}s get started!
++        {t("product_tour.onboarding.sidebar_title")}
          <br />
 -        Get more out of Plane.
-+        Get more out of Tequio.
++        {t("product_tour.onboarding.sidebar_subtitle")}
        </h3>
        <div className="mt-8 space-y-5">
          {sidebarOptions.map((option) => (
+@@ -68,7 +70,7 @@ export function TourSidebar({ step, setStep }: Props) {
+             role="button"
+           >
+             <option.Icon className="h-4 w-4" aria-hidden="true" />
+-            {option.label}
++            {t(option.label)}
+           </h5>
+         ))}
+       </div>
 diff --git a/apps/web/core/components/pages/workspace/pages-list-view.tsx b/apps/web/core/components/pages/workspace/pages-list-view.tsx
 new file mode 100644
 index 0000000..ab90633
@@ -125729,6 +126068,19 @@ index 064270b..e564e9e 100644
                              ) : activityItem.actor_detail.is_bot ? (
                                <span className="text-gray font-medium">{activityItem.actor_detail.first_name} Bot</span>
                              ) : (
+diff --git a/apps/web/core/components/user/user-greetings.tsx b/apps/web/core/components/user/user-greetings.tsx
+index ff00a23..78a34f4 100644
+--- a/apps/web/core/components/user/user-greetings.tsx
++++ b/apps/web/core/components/user/user-greetings.tsx
+@@ -48,7 +48,7 @@ export function UserGreetingsView(props: IUserGreetingsView) {
+   return (
+     <div className="my-6 flex flex-col items-center">
+       <h2 className="text-center text-20 font-semibold">
+-        {t("good")} {t(greeting)}, {user?.first_name} {user?.last_name}
++        {t(`greeting_${greeting}`)}, {user?.first_name} {user?.last_name}
+       </h2>
+       <h5 className="flex items-center gap-2 font-medium text-placeholder">
+         <div>{greeting === "morning" ? "🌤️" : greeting === "afternoon" ? "🌥️" : "🌙️"}</div>
 diff --git a/apps/web/core/components/workspace-notifications/sidebar/notification-card/item.tsx b/apps/web/core/components/workspace-notifications/sidebar/notification-card/item.tsx
 index 859070c..7e7ee60 100644
 --- a/apps/web/core/components/workspace-notifications/sidebar/notification-card/item.tsx
@@ -125753,6 +126105,1852 @@ index 859070c..7e7ee60 100644
    if (!workspaceSlug || !notificationId || !notification?.id || !notificationField || !workspace?.id || !projectId)
      return <></>;
  
+diff --git a/apps/web/core/components/workspace/billing/comparison/base.tsx b/apps/web/core/components/workspace/billing/comparison/base.tsx
+deleted file mode 100644
+index b09965a..0000000
+--- a/apps/web/core/components/workspace/billing/comparison/base.tsx
++++ /dev/null
+@@ -1,141 +0,0 @@
+-/**
+- * Copyright (c) 2023-present Plane Software, Inc. and contributors
+- * SPDX-License-Identifier: AGPL-3.0-only
+- * See the LICENSE file for details.
+- */
+-
+-import { observer } from "mobx-react";
+-import { ArrowDown, ArrowUp } from "lucide-react";
+-// plane imports
+-import { Button } from "@plane/propel/button";
+-import { cn } from "@plane/utils";
+-// constants
+-import type { TPlanePlans } from "@/components/workspace/billing/comparison/plans";
+-import { ComingSoonBadge, PLANE_PLANS, PLANS_LIST } from "@/components/workspace/billing/comparison/plans";
+-// local imports
+-import { PlanFeatureDetail } from "./feature-detail";
+-
+-type TPlansComparisonBaseProps = {
+-  planeDetails: React.ReactNode;
+-  isSelfManaged: boolean;
+-  isCompareAllFeaturesSectionOpen: boolean;
+-  setIsCompareAllFeaturesSectionOpen: React.Dispatch<React.SetStateAction<boolean>>;
+-};
+-
+-export const shouldRenderPlanDetail = (planKey: TPlanePlans) => {
+-  // Free plan is not required to be shown in the comparison
+-  if (planKey === "free") return false;
+-  // Plane one plan is not longer available
+-  if (planKey === "one") return false;
+-  return true;
+-};
+-
+-export const PlansComparisonBase = observer(function PlansComparisonBase(props: TPlansComparisonBaseProps) {
+-  const { planeDetails, isSelfManaged, isCompareAllFeaturesSectionOpen, setIsCompareAllFeaturesSectionOpen } = props;
+-  // plan details
+-  const { planDetails, planHighlights, planComparison } = PLANE_PLANS;
+-  const numberOfPlansToRender = Object.keys(planDetails).filter((planKey) =>
+-    shouldRenderPlanDetail(planKey as TPlanePlans)
+-  ).length;
+-
+-  const getSubscriptionType = (planKey: TPlanePlans) => planDetails[planKey].id;
+-
+-  return (
+-    <div className="horizontal-scrollbar scrollbar-sm size-full overflow-x-auto">
+-      <div className="max-w-full" style={{ minWidth: `${numberOfPlansToRender * 280}px` }}>
+-        <div className="flex h-full flex-col gap-y-10">
+-          <div
+-            className={cn("sticky top-2 z-10 grid flex-shrink-0 gap-3 bg-layer-1 text-caption-md-medium")}
+-            style={{
+-              gridTemplateColumns: `repeat(${numberOfPlansToRender + 1}, minmax(0, 1fr))`,
+-            }}
+-          >
+-            <div className="col-span-1 space-y-0.5 p-3 text-body-sm-medium" />
+-            {planeDetails}
+-          </div>
+-          {/* Plan Headers */}
+-          <section className="flex-shrink-0">
+-            {/* Plan Highlights */}
+-            <div
+-              className="text-caption-md grid gap-3 rounded-xs py-1 text-secondary even:bg-surface-2"
+-              style={{ gridTemplateColumns: `repeat(${numberOfPlansToRender + 1}, minmax(0, 1fr))` }}
+-            >
+-              <div className="col-span-1 p-3 text-body-sm-medium">Highlights</div>
+-              {Object.entries(planHighlights).map(
+-                ([planKey, highlights]) =>
+-                  shouldRenderPlanDetail(planKey as TPlanePlans) && (
+-                    <div key={planKey} className="col-span-1 p-3">
+-                      <ul className="list-disc space-y-1 text-body-xs-regular">
+-                        {highlights.map((highlight, index) => (
+-                          <li key={index}>{highlight}</li>
+-                        ))}
+-                      </ul>
+-                    </div>
+-                  )
+-              )}
+-            </div>
+-          </section>
+-
+-          {/* Feature Comparison */}
+-          {isCompareAllFeaturesSectionOpen && (
+-            <>
+-              {planComparison.map((section, sectionIdx) => (
+-                <section key={sectionIdx} className="flex-shrink-0">
+-                  <h2 className="mb-2 flex items-start gap-2 pl-2 text-h5-semibold text-secondary">
+-                    {section.title} {section.comingSoon && <ComingSoonBadge />}
+-                  </h2>
+-                  <div className="border-t border-subtle">
+-                    {section.features.map((feature, featureIdx) => (
+-                      <div
+-                        key={featureIdx}
+-                        className="text-caption-md grid gap-3 rounded-xs bg-layer-transparent text-secondary even:bg-layer-1"
+-                        style={{ gridTemplateColumns: `repeat(${numberOfPlansToRender + 1}, minmax(0, 1fr))` }}
+-                      >
+-                        <div className="col-span-1 flex items-center p-3 text-body-sm-medium">
+-                          <div className="flex w-full items-start justify-between gap-2">
+-                            {feature.title} {feature.comingSoon && <ComingSoonBadge />}
+-                          </div>
+-                        </div>
+-                        {PLANS_LIST.map(
+-                          (planKey) =>
+-                            shouldRenderPlanDetail(planKey) && (
+-                              <div
+-                                key={planKey}
+-                                className="col-span-1 flex items-center justify-center p-3 text-center text-body-xs-regular"
+-                              >
+-                                <PlanFeatureDetail
+-                                  subscriptionType={getSubscriptionType(planKey)}
+-                                  data={
+-                                    isSelfManaged
+-                                      ? (feature["self-hosted"]?.[planKey] ?? feature.cloud[planKey])
+-                                      : feature.cloud[planKey]
+-                                  }
+-                                />
+-                              </div>
+-                            )
+-                        )}
+-                      </div>
+-                    ))}
+-                  </div>
+-                </section>
+-              ))}
+-            </>
+-          )}
+-        </div>
+-
+-        {/* Toggle Button */}
+-        <div className="my-4 flex items-center justify-center gap-1 pb-2">
+-          <Button
+-            variant="ghost"
+-            onClick={() => {
+-              setIsCompareAllFeaturesSectionOpen(!isCompareAllFeaturesSectionOpen);
+-            }}
+-            appendIcon={isCompareAllFeaturesSectionOpen ? <ArrowUp /> : <ArrowDown />}
+-          >
+-            {isCompareAllFeaturesSectionOpen ? "Collapse comparison" : "Compare all features"}
+-          </Button>
+-        </div>
+-      </div>
+-    </div>
+-  );
+-});
+diff --git a/apps/web/core/components/workspace/billing/comparison/feature-detail.tsx b/apps/web/core/components/workspace/billing/comparison/feature-detail.tsx
+deleted file mode 100644
+index b8bcadc..0000000
+--- a/apps/web/core/components/workspace/billing/comparison/feature-detail.tsx
++++ /dev/null
+@@ -1,31 +0,0 @@
+-/**
+- * Copyright (c) 2023-present Plane Software, Inc. and contributors
+- * SPDX-License-Identifier: AGPL-3.0-only
+- * See the LICENSE file for details.
+- */
+-
+-import { CheckCircle2, Minus, MinusCircle } from "lucide-react";
+-import type { EProductSubscriptionEnum } from "@plane/types";
+-// plane imports
+-// constants
+-import type { TPlanFeatureData } from "@/components/workspace/billing/comparison/plans";
+-
+-type TPlanFeatureDetailProps = {
+-  subscriptionType: EProductSubscriptionEnum;
+-  data: TPlanFeatureData;
+-};
+-
+-export function PlanFeatureDetail(props: TPlanFeatureDetailProps) {
+-  const { data } = props;
+-
+-  if (data === null || data === undefined) {
+-    return <Minus className="size-4 text-placeholder" />;
+-  }
+-  if (data === true) {
+-    return <CheckCircle2 className="size-4 text-accent-primary" />;
+-  }
+-  if (data === false) {
+-    return <MinusCircle className="size-4 text-placeholder" />;
+-  }
+-  return <>{data}</>;
+-}
+diff --git a/apps/web/core/components/workspace/billing/comparison/frequency-toggle.tsx b/apps/web/core/components/workspace/billing/comparison/frequency-toggle.tsx
+deleted file mode 100644
+index da81c45..0000000
+--- a/apps/web/core/components/workspace/billing/comparison/frequency-toggle.tsx
++++ /dev/null
+@@ -1,60 +0,0 @@
+-/**
+- * Copyright (c) 2023-present Plane Software, Inc. and contributors
+- * SPDX-License-Identifier: AGPL-3.0-only
+- * See the LICENSE file for details.
+- */
+-
+-// plane imports
+-import { observer } from "mobx-react";
+-import type { EProductSubscriptionEnum, TBillingFrequency } from "@plane/types";
+-import { calculateYearlyDiscount, cn } from "@plane/utils";
+-
+-type TPlanFrequencyToggleProps = {
+-  subscriptionType: EProductSubscriptionEnum;
+-  monthlyPrice: number;
+-  yearlyPrice: number;
+-  selectedFrequency: TBillingFrequency;
+-  setSelectedFrequency: (frequency: TBillingFrequency) => void;
+-};
+-
+-export const PlanFrequencyToggle = observer(function PlanFrequencyToggle(props: TPlanFrequencyToggleProps) {
+-  const { monthlyPrice, yearlyPrice, selectedFrequency, setSelectedFrequency } = props;
+-  // derived values
+-  const yearlyDiscount = calculateYearlyDiscount(monthlyPrice, yearlyPrice);
+-
+-  return (
+-    <div className="flex w-full cursor-pointer items-center py-1">
+-      <div className="flex w-full space-x-1 rounded-md bg-layer-3 p-0.5">
+-        <button
+-          type="button"
+-          onClick={() => setSelectedFrequency("month")}
+-          className={cn(
+-            "w-full rounded-sm px-1 py-0.5 text-center text-caption-sm-medium leading-5",
+-            selectedFrequency === "month"
+-              ? "border border-subtle-1 bg-layer-2 text-primary shadow-raised-100"
+-              : "text-tertiary hover:text-secondary"
+-          )}
+-        >
+-          Monthly
+-        </button>
+-        <button
+-          type="button"
+-          onClick={() => setSelectedFrequency("year")}
+-          className={cn(
+-            "w-full rounded-sm px-1 py-0.5 text-center text-caption-sm-medium leading-5",
+-            selectedFrequency === "year"
+-              ? "border border-subtle-1 bg-layer-2 text-primary shadow-raised-100"
+-              : "text-tertiary hover:text-secondary"
+-          )}
+-        >
+-          Yearly
+-          {yearlyDiscount > 0 && (
+-            <span className="ml-1.5 rounded-full bg-accent-primary px-1 py-0.5 text-caption-xs-regular text-on-color">
+-              -{yearlyDiscount}%
+-            </span>
+-          )}
+-        </button>
+-      </div>
+-    </div>
+-  );
+-});
+diff --git a/apps/web/core/components/workspace/billing/comparison/index.ts b/apps/web/core/components/workspace/billing/comparison/index.ts
+deleted file mode 100644
+index df6fd75..0000000
+--- a/apps/web/core/components/workspace/billing/comparison/index.ts
++++ /dev/null
+@@ -1,8 +0,0 @@
+-/**
+- * Copyright (c) 2023-present Plane Software, Inc. and contributors
+- * SPDX-License-Identifier: AGPL-3.0-only
+- * See the LICENSE file for details.
+- */
+-
+-export * from "./base";
+-export * from "./plans";
+diff --git a/apps/web/core/components/workspace/billing/comparison/plan-detail.tsx b/apps/web/core/components/workspace/billing/comparison/plan-detail.tsx
+deleted file mode 100644
+index 27d2b8c..0000000
+--- a/apps/web/core/components/workspace/billing/comparison/plan-detail.tsx
++++ /dev/null
+@@ -1,109 +0,0 @@
+-/**
+- * Copyright (c) 2023-present Plane Software, Inc. and contributors
+- * SPDX-License-Identifier: AGPL-3.0-only
+- * See the LICENSE file for details.
+- */
+-
+-import { observer } from "mobx-react";
+-// plane imports
+-import {
+-  SUBSCRIPTION_REDIRECTION_URLS,
+-  SUBSCRIPTION_WITH_BILLING_FREQUENCY,
+-  TALK_TO_SALES_URL,
+-} from "@plane/constants";
+-import { useTranslation } from "@plane/i18n";
+-import { Button } from "@plane/propel/button";
+-import type { TBillingFrequency } from "@plane/types";
+-import { EProductSubscriptionEnum } from "@plane/types";
+-import { getSubscriptionName } from "@plane/utils";
+-// components
+-import { DiscountInfo } from "@/components/license/modal/card/discount-info";
+-import type { TPlanDetail } from "@/components/workspace/billing/comparison/plans";
+-// local imports
+-import { PlanFrequencyToggle } from "./frequency-toggle";
+-
+-type TPlanDetailProps = {
+-  subscriptionType: EProductSubscriptionEnum;
+-  planDetail: TPlanDetail;
+-  billingFrequency: TBillingFrequency | undefined;
+-  setBillingFrequency: (frequency: TBillingFrequency) => void;
+-};
+-
+-export const PlanDetail = observer(function PlanDetail(props: TPlanDetailProps) {
+-  const { subscriptionType, planDetail, billingFrequency, setBillingFrequency } = props;
+-  // plane hooks
+-  const { t } = useTranslation();
+-  // subscription details
+-  const subscriptionName = getSubscriptionName(subscriptionType);
+-  const isSubscriptionActive = planDetail.isActive;
+-  // pricing details
+-  const displayPrice = billingFrequency === "month" ? planDetail.monthlyPrice : planDetail.yearlyPrice;
+-  const pricingDescription = isSubscriptionActive ? "a user per month" : "Quote on request";
+-  const pricingSecondaryDescription =
+-    billingFrequency === "month"
+-      ? planDetail.monthlyPriceSecondaryDescription
+-      : planDetail.yearlyPriceSecondaryDescription;
+-
+-  const handleRedirection = () => {
+-    const frequency = billingFrequency ?? "year";
+-    // Get the redirection URL based on the subscription type and billing frequency
+-    const redirectUrl = SUBSCRIPTION_REDIRECTION_URLS[subscriptionType][frequency] ?? TALK_TO_SALES_URL;
+-    // Open the URL in a new tab
+-    window.open(redirectUrl, "_blank");
+-  };
+-
+-  return (
+-    <div className="col-span-1 flex flex-col justify-between space-y-0.5 p-3">
+-      {/* Plan name and pricing section */}
+-      <div className="flex flex-col items-start">
+-        <div className="flex w-full items-center gap-2 text-h4-semibold">
+-          <span>{subscriptionName}</span>
+-          {subscriptionType === EProductSubscriptionEnum.PRO && (
+-            <span className="rounded-sm bg-accent-primary px-2 py-0.5 text-caption-sm-medium text-on-color">
+-              Popular
+-            </span>
+-          )}
+-        </div>
+-        <div className="flex items-start gap-x-2 pb-1 text-tertiary">
+-          {isSubscriptionActive && displayPrice !== undefined && (
+-            <div className="flex items-center gap-1 text-h3-semibold text-primary">
+-              <DiscountInfo
+-                currency="$"
+-                frequency={billingFrequency ?? "month"}
+-                price={displayPrice}
+-                subscriptionType={subscriptionType}
+-                className="mr-1.5"
+-              />
+-            </div>
+-          )}
+-          <div className="pt-1">
+-            {pricingDescription && <div>{pricingDescription}</div>}
+-            {pricingSecondaryDescription && (
+-              <div className="text-caption-xs text-placeholder">{pricingSecondaryDescription}</div>
+-            )}
+-          </div>
+-        </div>
+-      </div>
+-
+-      {/* Billing frequency toggle */}
+-      {SUBSCRIPTION_WITH_BILLING_FREQUENCY.includes(subscriptionType) && billingFrequency && (
+-        <div className="h-8 py-0.5">
+-          <PlanFrequencyToggle
+-            subscriptionType={subscriptionType}
+-            monthlyPrice={planDetail.monthlyPrice || 0}
+-            yearlyPrice={planDetail.yearlyPrice || 0}
+-            selectedFrequency={billingFrequency}
+-            setSelectedFrequency={setBillingFrequency}
+-          />
+-        </div>
+-      )}
+-
+-      {/* Subscription button */}
+-      <div className="flex flex-col items-start gap-1 py-3">
+-        <Button variant="primary" size="lg" onClick={handleRedirection} className="w-full">
+-          {isSubscriptionActive ? `Upgrade to ${subscriptionName}` : t("common.upgrade_cta.talk_to_sales")}
+-        </Button>
+-      </div>
+-    </div>
+-  );
+-});
+diff --git a/apps/web/core/components/workspace/billing/comparison/plans.tsx b/apps/web/core/components/workspace/billing/comparison/plans.tsx
+deleted file mode 100644
+index a51afb5..0000000
+--- a/apps/web/core/components/workspace/billing/comparison/plans.tsx
++++ /dev/null
+@@ -1,1311 +0,0 @@
+-/**
+- * Copyright (c) 2023-present Plane Software, Inc. and contributors
+- * SPDX-License-Identifier: AGPL-3.0-only
+- * See the LICENSE file for details.
+- */
+-
+-import { Mail, MessageCircle, MessageSquare } from "lucide-react";
+-import { EProductSubscriptionEnum } from "@plane/types";
+-// plane imports
+-import { cn } from "@plane/utils";
+-
+-export type TPlanFeatureData = React.ReactNode | boolean | null;
+-
+-// TODO: we should change this type and use TProductSubscriptionType instead. Need changes in common constants.
+-export type TPlanePlans = "free" | "one" | "pro" | "business" | "enterprise";
+-
+-export type TPlanDetail = {
+-  id: EProductSubscriptionEnum;
+-  name: React.ReactNode;
+-  monthlyPrice?: number;
+-  yearlyPrice?: number;
+-  monthlyPriceSecondaryDescription?: React.ReactNode;
+-  yearlyPriceSecondaryDescription?: React.ReactNode;
+-  buttonCTA?: React.ReactNode;
+-  isActive: boolean;
+-};
+-
+-type TPlanFeatureDetails = {
+-  title: React.ReactNode;
+-  description?: React.ReactNode;
+-  selfHostedDescription?: React.ReactNode;
+-  comingSoon?: boolean;
+-  selfHostedOnly?: boolean;
+-  cloud: Record<TPlanePlans, TPlanFeatureData>;
+-  "self-hosted"?: Record<TPlanePlans, TPlanFeatureData>;
+-};
+-
+-type TPlansComparisonDetails = {
+-  id: string;
+-  title: React.ReactNode;
+-  comingSoon?: boolean;
+-  cloudOnly?: boolean;
+-  selfHostedOnly?: boolean;
+-  features: TPlanFeatureDetails[];
+-};
+-
+-type PlanePlans = {
+-  planDetails: Record<TPlanePlans, TPlanDetail>;
+-  planHighlights: Record<TPlanePlans, string[]>;
+-  planComparison: TPlansComparisonDetails[];
+-};
+-
+-function ForumIcon({ className }: { className?: string }) {
+-  return <MessageSquare className={cn(className, "size-5 text-secondary")} />;
+-}
+-
+-export function ComingSoonBadge({ className }: { className?: string }) {
+-  return (
+-    <span
+-      className={cn(
+-        "w-fit rounded-sm bg-accent-primary px-1.5 py-0.5 text-9 font-semibold whitespace-nowrap text-on-color",
+-        className
+-      )}
+-    >
+-      COMING SOON
+-    </span>
+-  );
+-}
+-
+-export const PLANS_LIST: TPlanePlans[] = ["free", "one", "pro", "business", "enterprise"];
+-
+-export const PLANS_COMPARISON_LIST: TPlansComparisonDetails[] = [
+-  {
+-    id: "project-work-tracking",
+-    title: "Project + work tracking",
+-    features: [
+-      {
+-        title: "Projects",
+-        description: "Add projects to house work items, cycles, and modules.",
+-        cloud: {
+-          free: true,
+-          one: true,
+-          pro: true,
+-          business: true,
+-          enterprise: true,
+-        },
+-      },
+-      {
+-        title: "Work items",
+-        description: "Add work via work items, set properties for tracking, and add to\ncycles or modules.",
+-        cloud: {
+-          free: true,
+-          one: true,
+-          pro: true,
+-          business: true,
+-          enterprise: true,
+-        },
+-      },
+-      {
+-        title: "Comments",
+-        description: "Respond to work items, @mention members, and brainstorm\ntogether without leaving Plane.",
+-        cloud: {
+-          free: true,
+-          one: true,
+-          pro: true,
+-          business: true,
+-          enterprise: true,
+-        },
+-      },
+-      {
+-        title: "Cycles",
+-        description: "Track work in timeboxes with differing frequency.",
+-        cloud: {
+-          free: true,
+-          one: true,
+-          pro: true,
+-          business: true,
+-          enterprise: true,
+-        },
+-      },
+-      {
+-        title: "Modules",
+-        description: "Group replicable work in modules with their own\nleads.",
+-        cloud: {
+-          free: true,
+-          one: true,
+-          pro: true,
+-          business: true,
+-          enterprise: true,
+-        },
+-      },
+-      {
+-        title: "Intake",
+-        description:
+-          "See suggestions and feedback from viewers and\nguests before you decide to add them to your\nproject.",
+-        cloud: {
+-          free: true,
+-          one: true,
+-          pro: true,
+-          business: true,
+-          enterprise: true,
+-        },
+-      },
+-      {
+-        title: "Estimates",
+-        description: "Measure effort in points in a system that works for\nyou.",
+-        cloud: {
+-          free: "Basic",
+-          one: "Basic",
+-          pro: "Advanced",
+-          business: "Advanced",
+-          enterprise: "Advanced",
+-        },
+-      },
+-    ],
+-  },
+-  {
+-    id: "project-work-management",
+-    title: "Project + work management",
+-    features: [
+-      {
+-        title: "Bulk Ops",
+-        description: "Add several work items to cycles or modules, transfer\nthem, or edit their properties.",
+-        cloud: {
+-          free: false,
+-          one: "Limited props",
+-          pro: "All props",
+-          business: (
+-            <span className="flex flex-col items-end gap-1 lg:items-center">
+-              <ComingSoonBadge />
+-              Work item transfers and conversions
+-            </span>
+-          ),
+-          enterprise: (
+-            <span className="flex flex-col items-end gap-1 lg:items-center">
+-              <ComingSoonBadge />
+-              Work item transfers and conversions
+-            </span>
+-          ),
+-        },
+-      },
+-      {
+-        title: "Time Tracking + Worklogs",
+-        description: "Track time per work item, see aggregated reports, and\nfilter by need.",
+-        cloud: {
+-          free: false,
+-          one: "Basic",
+-          pro: "Historical timesheets",
+-          business: "Historical timesheets\nand approvals",
+-          enterprise: "Historical timesheets\nand approvals",
+-        },
+-      },
+-      {
+-        title: "Active Cycles",
+-        description: "See all running cycles across all projects, or soon, in\na single project.",
+-        cloud: {
+-          free: false,
+-          one: true,
+-          pro: true,
+-          business: true,
+-          enterprise: true,
+-        },
+-      },
+-      {
+-        title: "Work item Types",
+-        description: "Create your own work item types with your own\nproperties.",
+-        cloud: {
+-          free: false,
+-          one: false,
+-          pro: true,
+-          business: true,
+-          enterprise: true,
+-        },
+-      },
+-      {
+-        title: "Custom Properties",
+-        description: "Create your own properties and apply them to your\nworkspace or project.",
+-        cloud: {
+-          free: false,
+-          one: false,
+-          pro: "Project-level\ncustom properties",
+-          business: "Workspace-level\nproperties and roll-ups",
+-          enterprise: "Workspace-level\nproperties and roll-ups",
+-        },
+-      },
+-      {
+-        title: "Dependencies in Gantt",
+-        description: "Adjust timelines for dependent work items visually on\nour Gantt layout.",
+-        cloud: {
+-          free: false,
+-          one: false,
+-          pro: true,
+-          business: true,
+-          enterprise: true,
+-        },
+-      },
+-      {
+-        title: "Work item Transfers",
+-        description: "Move a work item from a project or a cycle to\nanother.",
+-        cloud: {
+-          free: false,
+-          one: false,
+-          pro: true,
+-          business: true,
+-          enterprise: true,
+-        },
+-      },
+-      {
+-        title: "Auto-transfer Cycle Work items",
+-        description:
+-          "Transfer incomplete work items from a completed cycle\nto the next cycle or to the default project state. ",
+-        cloud: {
+-          free: false,
+-          one: false,
+-          pro: true,
+-          business: true,
+-          enterprise: true,
+-        },
+-      },
+-      {
+-        title: "Epics",
+-        description: "Organize long-term work in epics that house work items,\ncycles, and modules.",
+-        cloud: {
+-          free: false,
+-          one: false,
+-          pro: true,
+-          business: true,
+-          enterprise: true,
+-        },
+-      },
+-      {
+-        title: "Initiatives",
+-        description: "Create initiatives to roll up several epics.",
+-        comingSoon: true,
+-        cloud: {
+-          free: false,
+-          one: false,
+-          pro: true,
+-          business: true,
+-          enterprise: true,
+-        },
+-      },
+-      {
+-        title: "Checkpoints",
+-        description:
+-          "Add markers to Projects, Epics and Initiatives to keep your\nteam on track and report on progress.",
+-        comingSoon: true,
+-        cloud: {
+-          free: false,
+-          one: false,
+-          pro: true,
+-          business: true,
+-          enterprise: true,
+-        },
+-      },
+-      {
+-        title: "Module Overview",
+-        description: "Like Cycle Overviews, see relevant details and\nprogress charts for each module.",
+-        cloud: {
+-          free: false,
+-          one: false,
+-          pro: true,
+-          business: true,
+-          enterprise: true,
+-        },
+-      },
+-      {
+-        title: "Auto-assignment In Modules",
+-        description: "Choose assignment rules for work items in a\nmodule including Linear, Round Robin, or Capacity.",
+-        cloud: {
+-          free: false,
+-          one: false,
+-          pro: "Linear",
+-          business: "Round-robin and Capacity",
+-          enterprise: "Round-robin and Capacity",
+-        },
+-      },
+-      // {
+-      //   title: "Project Overview",
+-      //   description: "See just-in-time snapshots of your project with\nessential metrics.",
+-      //   comingSoon: true,
+-      //   cloud: {
+-      //     free: false,
+-      //     one: false,
+-      //     pro: true,
+-      //     business: true,
+-      //     enterprise: true,
+-      //   },
+-      // },
+-      {
+-        title: "Public, Private, and Secret projects",
+-        description:
+-          "Public projects are visible and accessible to\neveryone. Private ones are visible but need approval\nto join. Secret projects aren't visible or accessible.",
+-        cloud: {
+-          free: false,
+-          one: false,
+-          pro: true,
+-          business: true,
+-          enterprise: true,
+-        },
+-      },
+-      {
+-        title: "State Of Projects",
+-        description:
+-          "See all projects laid across states that highlight\nthose that need attention and those on track.",
+-        cloud: {
+-          free: false,
+-          one: false,
+-          pro: true,
+-          business: true,
+-          enterprise: true,
+-        },
+-      },
+-      // {
+-      //   title: "Project Updates",
+-      //   description:
+-      //     "Keep stakeholders in the loop with a dedicated\nspace for updates that everyone in the project can\nsee.",
+-      //   comingSoon: true,
+-      //   cloud: {
+-      //     free: false,
+-      //     one: false,
+-      //     pro: true,
+-      //     business: true,
+-      //     enterprise: true,
+-      //   },
+-      // },
+-      {
+-        title: "Pre-defined work item Templates",
+-        description:
+-          "Choose from our available work item templates that\ncustomize work item types and properties for several\nuse cases.",
+-        comingSoon: true,
+-        cloud: {
+-          free: false,
+-          one: false,
+-          pro: true,
+-          business: true,
+-          enterprise: true,
+-        },
+-      },
+-      {
+-        title: "Teamspace Cycles",
+-        description: "See multiple cycles in multiple projects at once.",
+-        cloud: {
+-          free: false,
+-          one: false,
+-          pro: false,
+-          business: true,
+-          enterprise: true,
+-        },
+-      },
+-      {
+-        title: "Project Templates",
+-        description: "Save states, workflows, automation, and other project\nsettings into templates.",
+-        cloud: {
+-          free: false,
+-          one: false,
+-          pro: false,
+-          business: true,
+-          enterprise: true,
+-        },
+-      },
+-      {
+-        title: "Baselines And Deviations",
+-        description: "Declare baselines for how your projects progress\nand zoom in on deviations.",
+-        cloud: {
+-          free: false,
+-          one: false,
+-          pro: false,
+-          business: true,
+-          enterprise: true,
+-        },
+-      },
+-      {
+-        title: "Scheduled Comms",
+-        description: "Schedule reports, notifications, and messages to\nthird-party tools.",
+-        cloud: {
+-          free: false,
+-          one: false,
+-          pro: false,
+-          business: true,
+-          enterprise: true,
+-        },
+-      },
+-      {
+-        title: "Intake Assignees",
+-        description: "Assign approved Intake work items to a member by\ndefault.",
+-        cloud: {
+-          free: false,
+-          one: false,
+-          pro: false,
+-          business: true,
+-          enterprise: true,
+-        },
+-      },
+-      {
+-        title: "Custom SLAs",
+-        description: "Set SLA matrices for time-sensitive work items.",
+-        cloud: {
+-          free: false,
+-          one: false,
+-          pro: false,
+-          business: true,
+-          enterprise: true,
+-        },
+-      },
+-      {
+-        title: "Intake Forms",
+-        description: "Take Intake work items from externally accessible web\nforms.",
+-        cloud: {
+-          free: false,
+-          one: false,
+-          pro: false,
+-          business: true,
+-          enterprise: true,
+-        },
+-      },
+-      {
+-        title: "Emails For Intake",
+-        description: "Get an email address for reporting work items\ndirectly into a project's Intake.",
+-        comingSoon: true,
+-        cloud: {
+-          free: false,
+-          one: false,
+-          pro: false,
+-          business: true,
+-          enterprise: true,
+-        },
+-      },
+-    ],
+-  },
+-  {
+-    id: "visualization",
+-    title: "Visualization",
+-    features: [
+-      {
+-        title: "Layouts",
+-        description:
+-          "Choose from the List, the Board, the Calendar, the\nGantt, or the Spreadsheet layout for your work items.",
+-        cloud: {
+-          free: true,
+-          one: true,
+-          pro: true,
+-          business: true,
+-          enterprise: true,
+-        },
+-      },
+-      {
+-        title: "Views",
+-        description: "Save sort, filter, and display options on a layout to a\nview.",
+-        cloud: {
+-          free: true,
+-          one: true,
+-          pro: true,
+-          business: true,
+-          enterprise: true,
+-        },
+-      },
+-      {
+-        title: "Shared Views",
+-        description: "Choose a few members to share a view with.",
+-        cloud: {
+-          free: false,
+-          one: false,
+-          pro: true,
+-          business: true,
+-          enterprise: true,
+-        },
+-      },
+-      {
+-        title: "Publish Views",
+-        description: "Put a view on the Internet and let your customers\ninteract with them.",
+-        cloud: {
+-          free: false,
+-          one: false,
+-          pro: true,
+-          business: true,
+-          enterprise: true,
+-        },
+-      },
+-      {
+-        title: "Dashboards and Widgets",
+-        description: "Create your own dashboards with custom widgets\nand data types.",
+-        cloud: {
+-          free: false,
+-          one: false,
+-          pro: true,
+-          business: true,
+-          enterprise: true,
+-        },
+-      },
+-    ],
+-  },
+-  {
+-    id: "analytics-reports",
+-    title: "Analytics + reports",
+-    features: [
+-      {
+-        title: "Progress Charts",
+-        description:
+-          "Track progress in cycles, modules, and overviews\nthroughout Plane without switching to dashboards\nor Analytics.",
+-        cloud: {
+-          free: false,
+-          one: false,
+-          pro: true,
+-          business: true,
+-          enterprise: true,
+-        },
+-      },
+-      {
+-        title: "Cycle Reports",
+-        description: "Get on-demand cycle reports during and after a\ncycle. Revisit reports anytime from permalinks.",
+-        cloud: {
+-          free: false,
+-          one: false,
+-          pro: true,
+-          business: true,
+-          enterprise: true,
+-        },
+-      },
+-      {
+-        title: "Insights",
+-        description: "Hindsight, On-demand insights, Foresights.",
+-        comingSoon: true,
+-        cloud: {
+-          free: false,
+-          one: false,
+-          pro: true,
+-          business: true,
+-          enterprise: true,
+-        },
+-      },
+-      // {
+-      //   title: "Time Capsule",
+-      //   description: "Go back in your project's timeline and see point-in-\ntime snapshots.",
+-      //   comingSoon: true,
+-      //   cloud: {
+-      //     free: false,
+-      //     one: false,
+-      //     pro: false,
+-      //     business: true,
+-      //     enterprise: true,
+-      //   },
+-      // },
+-      {
+-        title: "Advanced Pages Analytics",
+-        description: "See who's viewing, sharing, and commenting on\nyour pages along with other useful info.",
+-        comingSoon: true,
+-        cloud: {
+-          free: false,
+-          one: false,
+-          pro: false,
+-          business: true,
+-          enterprise: true,
+-        },
+-      },
+-      {
+-        title: "Custom Reports",
+-        description: "Generate reports by any dimension and metric\nacross your project or workspace.",
+-        comingSoon: true,
+-        cloud: {
+-          free: false,
+-          one: false,
+-          pro: false,
+-          business: true,
+-          enterprise: true,
+-        },
+-      },
+-    ],
+-  },
+-  {
+-    id: "navigation",
+-    title: "Navigation",
+-    features: [
+-      {
+-        title: "Power K",
+-        description: "Access a keyboard-first gateway to almost anything\nin Plane.",
+-        cloud: {
+-          free: true,
+-          one: true,
+-          pro: true,
+-          business: true,
+-          enterprise: true,
+-        },
+-      },
+-      // {
+-      //   title: "Search",
+-      //   description: "Search via natural-language queries, operators, or\nPQL",
+-      //   cloud: {
+-      //     free: "Basic text search",
+-      //     one: "Basic text search",
+-      //     pro: (
+-      //       <span className="flex flex-col items-end lg:items-center gap-1">
+-      //         <span className="bg-[#3f76ff] text-on-color font-semibold text-9 p-0.5 w-fit whitespace-nowrap rounded-xs">
+-      //           COMING SOON
+-      //         </span>
+-      //         Operator capsules from text or PQL
+-      //       </span>
+-      //     ),
+-      //     business: (
+-      //       <span className="flex flex-col items-end lg:items-center gap-1">
+-      //         <span className="bg-[#3f76ff] text-on-color font-semibold text-9 p-0.5 w-fit whitespace-nowrap rounded-xs">
+-      //           COMING SOON
+-      //         </span>
+-      //         Operator capsules from text or PQL
+-      //       </span>
+-      //     ),
+-      //     enterprise: (
+-      //       <span className="flex flex-col items-end lg:items-center gap-1">
+-      //         <span className="bg-[#3f76ff] text-on-color font-semibold text-9 p-0.5 w-fit whitespace-nowrap rounded-xs">
+-      //           COMING SOON
+-      //         </span>
+-      //         Operator capsules from text or PQL
+-      //       </span>
+-      //     ),
+-      //   },
+-      // },
+-      {
+-        title: "PQL",
+-        description:
+-          "Write Plane Query Language in search with support\nfor Boolean operators. Soon, you can write natural\nlanguage queries.",
+-        cloud: {
+-          free: false,
+-          one: false,
+-          pro: true,
+-          business: true,
+-          enterprise: true,
+-        },
+-      },
+-    ],
+-  },
+-  {
+-    id: "workspace-user-management",
+-    title: "Workspace and user management",
+-    features: [
+-      {
+-        title: "Member limit",
+-        description: "Number of seats that can use project and work management features",
+-        selfHostedDescription: "Number of users that our standard infra supports\nIncrease infra to get more users",
+-        cloud: {
+-          free: "12",
+-          one: "",
+-          pro: "Unlimited",
+-          business: "Unlimited",
+-          enterprise: "Unlimited",
+-        },
+-        "self-hosted": {
+-          free: "~50",
+-          one: "~50",
+-          pro: "~200",
+-          business: "~200",
+-          enterprise: "Unlimited",
+-        },
+-      },
+-      {
+-        title: "Roles",
+-        description: "Choose from one of four pre-defined roles or create\ncustom ones with RBAC.",
+-        cloud: {
+-          free: "Basic",
+-          one: "Basic",
+-          pro: "Pre-defined roles",
+-          business: "RBAC",
+-          enterprise: "GAC",
+-        },
+-      },
+-      {
+-        title: "Guests",
+-        description: "Let some users see everything or just their work items in\na project.",
+-        cloud: {
+-          free: false,
+-          one: "5 per paid member",
+-          pro: "5 per paid member",
+-          business: "5 per paid member",
+-          enterprise: "5 per paid member",
+-        },
+-      },
+-      {
+-        title: "Approvals",
+-        description: "Set workspace, project, and work item type approvals to\ndesignated admins.",
+-        comingSoon: true,
+-        cloud: {
+-          free: false,
+-          one: false,
+-          pro: false,
+-          business: true,
+-          enterprise: true,
+-        },
+-      },
+-      {
+-        title: "Admin Interface",
+-        description: "Get an admin overview to manage workspace and\nproject settings.",
+-        cloud: {
+-          free: false,
+-          one: false,
+-          pro: false,
+-          business: true,
+-          enterprise: true,
+-        },
+-      },
+-      {
+-        title: "Workspace Activity Logs",
+-        description: "See filterable activity logs for your entire\nworkspace.",
+-        cloud: {
+-          free: false,
+-          one: false,
+-          pro: false,
+-          business: true,
+-          enterprise: true,
+-        },
+-      },
+-      {
+-        title: "API-enabled Audit Logs",
+-        description: "See a full-workspace audit log and use APIs to flag\nPlane activity in compliance systems.",
+-        comingSoon: true,
+-        cloud: {
+-          free: false,
+-          one: false,
+-          pro: false,
+-          business: true,
+-          enterprise: true,
+-        },
+-      },
+-    ],
+-  },
+-  {
+-    id: "automations-workflows",
+-    title: "Automations and workflows",
+-    features: [
+-      {
+-        title: "Trigger And Action",
+-        description: "Choose a trigger and a corresponding action per\nautomation flow.",
+-        cloud: {
+-          free: false,
+-          one: false,
+-          pro: true,
+-          business: true,
+-          enterprise: true,
+-        },
+-      },
+-      {
+-        title: "Decisions And Loops Automation",
+-        description: "Use actions as triggers indefinitely in an\nautomation flow.",
+-        comingSoon: true,
+-        cloud: {
+-          free: false,
+-          one: false,
+-          pro: false,
+-          business: true,
+-          enterprise: true,
+-        },
+-      },
+-      {
+-        title: "Number of automations",
+-        description: "Total number of automation flows in your\nworkspace",
+-        cloud: {
+-          free: false,
+-          one: false,
+-          pro: "5,000",
+-          business: "10,000",
+-          enterprise: "Unlimited",
+-        },
+-      },
+-    ],
+-  },
+-  {
+-    id: "knowledge-management",
+-    title: "Knowledge management",
+-    features: [
+-      {
+-        title: "Pages",
+-        description: "Build knowledge bases for your teams which are\naccessible & shareable.",
+-        cloud: {
+-          free: true,
+-          one: true,
+-          pro: true,
+-          business: true,
+-          enterprise: true,
+-        },
+-      },
+-      {
+-        title: "Real-time Collab",
+-        description: "Edit a page together with members in your project,\nteam, or workspace.",
+-        cloud: {
+-          free: false,
+-          one: true,
+-          pro: true,
+-          business: true,
+-          enterprise: true,
+-        },
+-      },
+-      {
+-        title: "Work item Embeds",
+-        description: "Embed work items from any project you are a member\nof.",
+-        cloud: {
+-          free: false,
+-          one: true,
+-          pro: true,
+-          business: true,
+-          enterprise: true,
+-        },
+-      },
+-      {
+-        title: "Link-to-work items",
+-        description: "Link pages in work items in a separate section in work item\ndetails.",
+-        cloud: {
+-          free: false,
+-          one: true,
+-          pro: true,
+-          business: true,
+-          enterprise: true,
+-        },
+-      },
+-      {
+-        title: "Publish",
+-        description:
+-          "Put your pages on the web for external users and let\nthem comment without signing into your workspace.",
+-        cloud: {
+-          free: false,
+-          one: true,
+-          pro: true,
+-          business: true,
+-          enterprise: true,
+-        },
+-      },
+-      {
+-        title: "Wiki",
+-        description: "Create company-wide wikis or knowledge bases\nwithout creating a project.",
+-        cloud: {
+-          free: false,
+-          one: true,
+-          pro: true,
+-          business: true,
+-          enterprise: true,
+-        },
+-      },
+-      {
+-        title: "Exports",
+-        description: "Export page content into PDFs or Word-compatible\ndocs.",
+-        cloud: {
+-          free: false,
+-          one: false,
+-          pro: "One download\nat a time",
+-          business: "Queued downloads",
+-          enterprise: "Queued downloads",
+-        },
+-      },
+-      {
+-        title: "Templates",
+-        description: "Use pages as templates for your project, team, or\nworkspace.",
+-        cloud: {
+-          free: false,
+-          one: false,
+-          pro: true,
+-          business: true,
+-          enterprise: true,
+-        },
+-      },
+-      {
+-        title: "Versions",
+-        description: "See restorable version of edits to your pages.",
+-        cloud: {
+-          free: false,
+-          one: false,
+-          pro: "2 days",
+-          business: "3 months",
+-          enterprise: "Unlimited",
+-        },
+-      },
+-      {
+-        title: "Databases + Formulas",
+-        description:
+-          "Put databases and formulas into a page without\nworrying about losing text, images, or other content\ntypes.",
+-        comingSoon: true,
+-        cloud: {
+-          free: false,
+-          one: false,
+-          pro: false,
+-          business: true,
+-          enterprise: true,
+-        },
+-      },
+-      {
+-        title: "Nested Pages",
+-        description: "Pages inside a page, organize your pages\nas you see fit for the progressive\ndisclosure.",
+-        comingSoon: true,
+-        cloud: {
+-          free: false,
+-          one: false,
+-          pro: false,
+-          business: "Word-compatible + other format downloads",
+-          enterprise: "Word-compatible + other format downloads",
+-        },
+-      },
+-    ],
+-  },
+-  {
+-    id: "importers",
+-    title: "Importers",
+-    features: [
+-      {
+-        title: "Jira",
+-        description: "Import your work items and members from Jira.",
+-        cloud: {
+-          free: "Without custom props",
+-          one: "Without custom props",
+-          pro: "With custom props",
+-          business: "With custom props",
+-          enterprise: "With custom props",
+-        },
+-      },
+-      {
+-        title: "GitHub",
+-        description: "Import your work items and members from GitHub.",
+-        cloud: {
+-          free: "Without custom props",
+-          one: "Without custom props",
+-          pro: "With custom props",
+-          business: "With custom props",
+-          enterprise: "With custom props",
+-        },
+-      },
+-    ],
+-  },
+-  {
+-    id: "integrations",
+-    title: "Integrations",
+-    comingSoon: true,
+-    features: [
+-      {
+-        title: "GitHub",
+-        description:
+-          "Sync Plane work items and states to GitHub work items and\nstates. Update GitHub automatically with activity\nfrom Plane and vice-versa.",
+-        cloud: {
+-          free: false,
+-          one: false,
+-          pro: true,
+-          business: true,
+-          enterprise: true,
+-        },
+-      },
+-      {
+-        title: "Slack",
+-        description: "Get Plane activity in Slack and use / commands in\nSlack to make changes in Plane.",
+-        cloud: {
+-          free: false,
+-          one: false,
+-          pro: true,
+-          business: true,
+-          enterprise: true,
+-        },
+-      },
+-      {
+-        title: "Zapier",
+-        description: "Run if-then-else automations using Zapier.",
+-        cloud: {
+-          free: false,
+-          one: false,
+-          pro: true,
+-          business: true,
+-          enterprise: true,
+-        },
+-      },
+-      {
+-        title: "Zendesk",
+-        description: "Create Plane work items from Zendesk tickets.",
+-        cloud: {
+-          free: false,
+-          one: false,
+-          pro: true,
+-          business: true,
+-          enterprise: true,
+-        },
+-      },
+-      {
+-        title: "Freshdesk",
+-        description: "Create Plane work items from Freshdesk tickets.",
+-        cloud: {
+-          free: false,
+-          one: false,
+-          pro: true,
+-          business: true,
+-          enterprise: true,
+-        },
+-      },
+-    ],
+-  },
+-  {
+-    id: "storage",
+-    title: "Storage",
+-    cloudOnly: true,
+-    features: [
+-      {
+-        title: "Space",
+-        description: "Total storage allowed per workspace",
+-        cloud: {
+-          free: "5GB",
+-          one: false,
+-          pro: "1 TB",
+-          business: "5 TB",
+-          enterprise: "Custom",
+-        },
+-      },
+-      {
+-        title: "Max file size",
+-        description: "Limit for uploads to your workspace",
+-        cloud: {
+-          free: "5 MB",
+-          one: false,
+-          pro: "100 MB",
+-          business: "200 MB",
+-          enterprise: "Custom",
+-        },
+-      },
+-    ],
+-  },
+-  {
+-    id: "security",
+-    title: "Security",
+-    features: [
+-      {
+-        title: "SAML",
+-        description: "Get the officially supported SAML implementation\nand make Plane secure with any IdP.",
+-        cloud: {
+-          free: false,
+-          one: true,
+-          pro: true,
+-          business: true,
+-          enterprise: true,
+-        },
+-      },
+-      {
+-        title: "OIDC",
+-        description: "Get the officially supported OIDC implementation\nand make Plane secure with any IdP.",
+-        selfHostedOnly: true,
+-        cloud: {
+-          free: false,
+-          one: true,
+-          pro: true,
+-          business: true,
+-          enterprise: true,
+-        },
+-      },
+-      {
+-        title: "Domain Security",
+-        description:
+-          "Choose other domains that can authenticate into\nyour Plane workspace or restrict all but one domain.",
+-        cloud: {
+-          free: false,
+-          one: false,
+-          pro: true,
+-          business: true,
+-          enterprise: true,
+-        },
+-      },
+-      {
+-        title: "Two-factor authentication and passkeys",
+-        description: "Secure your Plane workspace with device-\ndependent two-factor authentication and passkeys. ",
+-        cloud: {
+-          free: false,
+-          one: false,
+-          pro: true,
+-          business: true,
+-          enterprise: true,
+-        },
+-      },
+-      {
+-        title: "Password Policy",
+-        description: "Set custom password policies in line with your\ncompliance requirements.",
+-        cloud: {
+-          free: false,
+-          one: false,
+-          pro: true,
+-          business: true,
+-          enterprise: true,
+-        },
+-      },
+-      {
+-        title: "LDAP",
+-        description: "Get our official LDAP implementation and secure\nyour Plane workspace with your LDAP server.",
+-        comingSoon: true,
+-        cloud: {
+-          free: false,
+-          one: false,
+-          pro: false,
+-          business: false,
+-          enterprise: true,
+-        },
+-      },
+-    ],
+-  },
+-  {
+-    id: "self-hosted",
+-    title: "Self-hosted",
+-    selfHostedOnly: true,
+-    features: [
+-      {
+-        title: "God Mode",
+-        description: "Manage your self-hosted Plane instance better with\nan instance admin interface.",
+-        cloud: {
+-          free: true,
+-          one: true,
+-          pro: true,
+-          business: true,
+-          enterprise: true,
+-        },
+-      },
+-      {
+-        title: "One-click Deployment",
+-        description: "Install and deploy your self-hosted Plane to any\nprivate cloud with a single-line command.",
+-        cloud: {
+-          free: false,
+-          one: true,
+-          pro: true,
+-          business: true,
+-          enterprise: true,
+-        },
+-      },
+-      {
+-        title: "Digital Ocean Marketplace app",
+-        description: "Get our Digital Ocean-compatible app on their\nmarketplace.",
+-        cloud: {
+-          free: false,
+-          one: true,
+-          pro: true,
+-          business: true,
+-          enterprise: true,
+-        },
+-      },
+-      {
+-        title: "Heroku Platform app",
+-        description: "Get our Heroku Platform-compatible app and deploy\nto Heroku easily.",
+-        cloud: {
+-          free: false,
+-          one: true,
+-          pro: true,
+-          business: true,
+-          enterprise: true,
+-        },
+-      },
+-      {
+-        title: "AWS AMI",
+-        description: "Get our AMI-compatible app from the AWS\nmarketplace.",
+-        cloud: {
+-          free: false,
+-          one: true,
+-          pro: true,
+-          business: true,
+-          enterprise: true,
+-        },
+-      },
+-      {
+-        title: "Private deployments",
+-        description: "Get our hosted Cloud app on a private Cloud\nmanaged by us.",
+-        comingSoon: true,
+-        cloud: {
+-          free: false,
+-          one: false,
+-          pro: false,
+-          business: false,
+-          enterprise: true,
+-        },
+-      },
+-    ],
+-  },
+-  {
+-    id: "support",
+-    title: "Support",
+-    features: [
+-      {
+-        title: "Channels",
+-        description: "Get access to one or more Support channels\nby your plan.",
+-        cloud: {
+-          free: (
+-            <>
+-              <ForumIcon className="size-4" />
+-            </>
+-          ),
+-          one: (
+-            <div className="flex items-center gap-1">
+-              <Mail className="size-4 flex-shrink-0" />
+-              <ForumIcon className="size-4 flex-shrink-0" />
+-            </div>
+-          ),
+-          pro: (
+-            <div className="flex items-center gap-1">
+-              <Mail className="size-4 flex-shrink-0" />
+-              <ForumIcon className="size-4 flex-shrink-0" />
+-              <MessageCircle className="size-4 flex-shrink-0" />
+-            </div>
+-          ),
+-          business: "Full-suite\nprofessional services",
+-          enterprise: "Full-suite\nprofessional services",
+-        },
+-      },
+-      {
+-        title: "SLA",
+-        description: (
+-          <>
+-            Get business-friendly SLAs with higher plans. SLAs are by priority of work item and tiers{" "}
+-            <a href="https://plane.so/talk-to-sales" target="_blank" rel="noopener noreferrer" className="underline">
+-              can be requested
+-            </a>
+-            .
+-          </>
+-        ),
+-        cloud: {
+-          free: false,
+-          one: false,
+-          pro: true,
+-          business: true,
+-          enterprise: true,
+-        },
+-      },
+-    ],
+-  },
+-];
+-
+-export const PLANE_PLANS: PlanePlans = {
+-  planDetails: {
+-    free: {
+-      id: EProductSubscriptionEnum.FREE,
+-      name: "Free",
+-      monthlyPrice: 0,
+-      yearlyPrice: 0,
+-      isActive: true,
+-    },
+-    one: {
+-      id: EProductSubscriptionEnum.ONE,
+-      name: "One",
+-      monthlyPrice: 799,
+-      yearlyPrice: 799,
+-      monthlyPriceSecondaryDescription: "per workspace",
+-      yearlyPriceSecondaryDescription: "per workspace",
+-      buttonCTA: "Upgrade",
+-      isActive: false,
+-    },
+-    pro: {
+-      id: EProductSubscriptionEnum.PRO,
+-      name: "Pro",
+-      monthlyPrice: 8,
+-      yearlyPrice: 6,
+-      monthlyPriceSecondaryDescription: "billed monthly",
+-      yearlyPriceSecondaryDescription: "billed yearly",
+-      buttonCTA: "Upgrade",
+-      isActive: true,
+-    },
+-    business: {
+-      id: EProductSubscriptionEnum.BUSINESS,
+-      name: "Business",
+-      monthlyPriceSecondaryDescription: "billed monthly",
+-      yearlyPriceSecondaryDescription: "billed yearly",
+-      buttonCTA: "Talk to Sales",
+-      isActive: false,
+-    },
+-    enterprise: {
+-      id: EProductSubscriptionEnum.ENTERPRISE,
+-      name: "Enterprise",
+-      monthlyPriceSecondaryDescription: "billed monthly",
+-      yearlyPriceSecondaryDescription: "billed yearly",
+-      buttonCTA: "Talk to Sales",
+-      isActive: false,
+-    },
+-  },
+-  planHighlights: {
+-    free: ["Upto 12 users", "Pages", "Unlimited projects", "Unlimited cycles and modules"],
+-    one: ["Upto 50 users", "OIDC and SAML", "Active cycles", "Limited time tracking"],
+-    pro: ["Unlimited users", "Custom work items + Properties", "Work item templates", "Full Time Tracking"],
+-    business: ["RBAC", "Project Templates", "Baselines And Deviations", "Custom Reports"],
+-    enterprise: ["Private + managed deployments", "GAC", "LDAP support", "Databases + Formulas"],
+-  },
+-  planComparison: PLANS_COMPARISON_LIST,
+-};
+diff --git a/apps/web/core/components/workspace/billing/comparison/root.tsx b/apps/web/core/components/workspace/billing/comparison/root.tsx
+deleted file mode 100644
+index 1c04554..0000000
+--- a/apps/web/core/components/workspace/billing/comparison/root.tsx
++++ /dev/null
+@@ -1,54 +0,0 @@
+-/**
+- * Copyright (c) 2023-present Plane Software, Inc. and contributors
+- * SPDX-License-Identifier: AGPL-3.0-only
+- * See the LICENSE file for details.
+- */
+-
+-import { observer } from "mobx-react";
+-// plane imports
+-import type { EProductSubscriptionEnum, TBillingFrequency } from "@plane/types";
+-// components
+-import { PlansComparisonBase, shouldRenderPlanDetail } from "@/components/workspace/billing/comparison/base";
+-import type { TPlanePlans } from "@/components/workspace/billing/comparison/plans";
+-import { PLANE_PLANS } from "@/components/workspace/billing/comparison/plans";
+-// plane web imports
+-import { PlanDetail } from "./plan-detail";
+-
+-type TPlansComparisonProps = {
+-  isCompareAllFeaturesSectionOpen: boolean;
+-  getBillingFrequency: (subscriptionType: EProductSubscriptionEnum) => TBillingFrequency | undefined;
+-  setBillingFrequency: (subscriptionType: EProductSubscriptionEnum, frequency: TBillingFrequency) => void;
+-  setIsCompareAllFeaturesSectionOpen: React.Dispatch<React.SetStateAction<boolean>>;
+-};
+-
+-export const PlansComparison = observer(function PlansComparison(props: TPlansComparisonProps) {
+-  const {
+-    isCompareAllFeaturesSectionOpen,
+-    getBillingFrequency,
+-    setBillingFrequency,
+-    setIsCompareAllFeaturesSectionOpen,
+-  } = props;
+-  // plan details
+-  const { planDetails } = PLANE_PLANS;
+-
+-  return (
+-    <PlansComparisonBase
+-      planeDetails={Object.entries(planDetails).map(([planKey, plan]) => {
+-        const currentPlanKey = planKey as TPlanePlans;
+-        if (!shouldRenderPlanDetail(currentPlanKey)) return null;
+-        return (
+-          <PlanDetail
+-            key={planKey}
+-            subscriptionType={plan.id}
+-            planDetail={plan}
+-            billingFrequency={getBillingFrequency(plan.id)}
+-            setBillingFrequency={(frequency) => setBillingFrequency(plan.id, frequency)}
+-          />
+-        );
+-      })}
+-      isSelfManaged
+-      isCompareAllFeaturesSectionOpen={isCompareAllFeaturesSectionOpen}
+-      setIsCompareAllFeaturesSectionOpen={setIsCompareAllFeaturesSectionOpen}
+-    />
+-  );
+-});
+diff --git a/apps/web/core/components/workspace/billing/index.ts b/apps/web/core/components/workspace/billing/index.ts
+deleted file mode 100644
+index d980334..0000000
+--- a/apps/web/core/components/workspace/billing/index.ts
++++ /dev/null
+@@ -1,7 +0,0 @@
+-/**
+- * Copyright (c) 2023-present Plane Software, Inc. and contributors
+- * SPDX-License-Identifier: AGPL-3.0-only
+- * See the LICENSE file for details.
+- */
+-
+-export * from "./root";
+diff --git a/apps/web/core/components/workspace/billing/root.tsx b/apps/web/core/components/workspace/billing/root.tsx
+deleted file mode 100644
+index 33100a4..0000000
+--- a/apps/web/core/components/workspace/billing/root.tsx
++++ /dev/null
+@@ -1,71 +0,0 @@
+-/**
+- * Copyright (c) 2023-present Plane Software, Inc. and contributors
+- * SPDX-License-Identifier: AGPL-3.0-only
+- * See the LICENSE file for details.
+- */
+-
+-import { useState } from "react";
+-import { observer } from "mobx-react";
+-// plane imports
+-import { DEFAULT_PRODUCT_BILLING_FREQUENCY, SUBSCRIPTION_WITH_BILLING_FREQUENCY } from "@plane/constants";
+-import { useTranslation } from "@plane/i18n";
+-import type { TBillingFrequency, TProductBillingFrequency } from "@plane/types";
+-import { EProductSubscriptionEnum } from "@plane/types";
+-// components
+-import { SettingsBoxedControlItem } from "@/components/settings/boxed-control-item";
+-import { SettingsHeading } from "@/components/settings/heading";
+-// local imports
+-import { PlansComparison } from "./comparison/root";
+-
+-export const BillingRoot = observer(function BillingRoot() {
+-  const [isCompareAllFeaturesSectionOpen, setIsCompareAllFeaturesSectionOpen] = useState(false);
+-  const [productBillingFrequency, setProductBillingFrequency] = useState<TProductBillingFrequency>(
+-    DEFAULT_PRODUCT_BILLING_FREQUENCY
+-  );
+-  const { t } = useTranslation();
+-
+-  /**
+-   * Retrieves the billing frequency for a given subscription type
+-   * @param {EProductSubscriptionEnum} subscriptionType - Type of subscription to get frequency for
+-   * @returns {TBillingFrequency | undefined} - Billing frequency if subscription supports it, undefined otherwise
+-   */
+-  const getBillingFrequency = (subscriptionType: EProductSubscriptionEnum): TBillingFrequency | undefined =>
+-    SUBSCRIPTION_WITH_BILLING_FREQUENCY.includes(subscriptionType)
+-      ? productBillingFrequency[subscriptionType]
+-      : undefined;
+-
+-  /**
+-   * Updates the billing frequency for a specific subscription type
+-   * @param {EProductSubscriptionEnum} subscriptionType - Type of subscription to update
+-   * @param {TBillingFrequency} frequency - New billing frequency to set
+-   * @returns {void}
+-   */
+-  const setBillingFrequency = (subscriptionType: EProductSubscriptionEnum, frequency: TBillingFrequency): void =>
+-    setProductBillingFrequency({ ...productBillingFrequency, [subscriptionType]: frequency });
+-
+-  return (
+-    <section className="relative scrollbar-hide size-full overflow-y-auto">
+-      <div>
+-        <SettingsHeading
+-          title={t("workspace_settings.settings.billing_and_plans.heading")}
+-          description={t("workspace_settings.settings.billing_and_plans.description")}
+-        />
+-        <div className="mt-6">
+-          <SettingsBoxedControlItem
+-            title="Community"
+-            description="Unlimited projects, issues, cycles, modules, pages, and storage"
+-          />
+-        </div>
+-      </div>
+-      <div className="mt-10 flex flex-col gap-y-3">
+-        <h4 className="text-h6-semibold">All plans</h4>
+-        <PlansComparison
+-          isCompareAllFeaturesSectionOpen={isCompareAllFeaturesSectionOpen}
+-          getBillingFrequency={getBillingFrequency}
+-          setBillingFrequency={setBillingFrequency}
+-          setIsCompareAllFeaturesSectionOpen={setIsCompareAllFeaturesSectionOpen}
+-        />
+-      </div>
+-    </section>
+-  );
+-});
 diff --git a/apps/web/core/components/workspace/content-wrapper.tsx b/apps/web/core/components/workspace/content-wrapper.tsx
 index 3d605d6..c085247 100644
 --- a/apps/web/core/components/workspace/content-wrapper.tsx
@@ -197570,6 +199768,18 @@ index c44e441..8028c64 100644
 + * usuario de la instancia pueda abrir sin credenciales.
 + */
 +export const SOURCE_CODE_URL = process.env.VITE_SOURCE_CODE_URL || "";
+diff --git a/packages/constants/src/settings/workspace.ts b/packages/constants/src/settings/workspace.ts
+index e9d326e..607e655 100644
+--- a/packages/constants/src/settings/workspace.ts
++++ b/packages/constants/src/settings/workspace.ts
+@@ -72,7 +72,6 @@ export const GROUPED_WORKSPACE_SETTINGS: Record<WORKSPACE_SETTINGS_CATEGORY, TWo
+   [WORKSPACE_SETTINGS_CATEGORY.ADMINISTRATION]: [
+     WORKSPACE_SETTINGS["general"],
+     WORKSPACE_SETTINGS["members"],
+-    WORKSPACE_SETTINGS["billing-and-plans"],
+     WORKSPACE_SETTINGS["export"],
+   ],
+   [WORKSPACE_SETTINGS_CATEGORY.FEATURES]: [],
 diff --git a/packages/constants/src/workspace.ts b/packages/constants/src/workspace.ts
 index 6083c77..6ba22ee 100644
 --- a/packages/constants/src/workspace.ts
@@ -198193,7 +200403,7 @@ index 5aa7d2f..32afb6d 100644
        "fixed_schedule": "Pevný rozvrh",
        "schedule": {
 diff --git a/packages/i18n/src/locales/cs/common.json b/packages/i18n/src/locales/cs/common.json
-index c1e9372..2c68243 100644
+index c1e9372..ecc39f7 100644
 --- a/packages/i18n/src/locales/cs/common.json
 +++ b/packages/i18n/src/locales/cs/common.json
 @@ -244,7 +244,7 @@
@@ -198223,10 +200433,11 @@ index c1e9372..2c68243 100644
    "in_app": "V aplikaci",
    "forms": "Formuláře",
    "milestones": "Milníky",
-@@ -867,5 +867,491 @@
+@@ -867,5 +867,494 @@
        "description": "Exportujte položky do JSON.",
        "short_description": "Exportovat jako JSON"
      }
+-  }
 +  },
 +  "drive": {
 +    "title": "Files",
@@ -198713,7 +200924,10 @@ index c1e9372..2c68243 100644
 +    "switch_account_description": "Pokud jste se omylem zaregistrovali s {email}, zde můžete přepnout účet.",
 +    "sign_out_failed": "Odhlášení se nezdařilo. Zkuste to znovu.",
 +    "step_progress": "Krok {current} z {total}"
-   }
++  },
++  "greeting_morning": "Dobrý ráno",
++  "greeting_afternoon": "Dobrý odpoledne",
++  "greeting_evening": "Dobrý večer"
  }
 diff --git a/packages/i18n/src/locales/cs/empty-state.json b/packages/i18n/src/locales/cs/empty-state.json
 index a812af9..e0d1792 100644
@@ -199075,7 +201289,7 @@ index 139cebc..c2a8eb8 100644
        },
        "no_templates": {
 diff --git a/packages/i18n/src/locales/cs/tour.json b/packages/i18n/src/locales/cs/tour.json
-index 2e5f7dc..1cfa842 100644
+index 2e5f7dc..3737e5a 100644
 --- a/packages/i18n/src/locales/cs/tour.json
 +++ b/packages/i18n/src/locales/cs/tour.json
 @@ -69,7 +69,7 @@
@@ -199105,7 +201319,44 @@ index 2e5f7dc..1cfa842 100644
        }
      },
      "navigation": {
-@@ -154,7 +154,7 @@
+@@ -150,11 +150,44 @@
+     "seed_data": {
+       "title": "Zde je váš demo projekt",
+       "description": "Projekty vám umožňují spravovat vaše týmy, úkoly a vše, co potřebujete k dokončení práce ve vašem pracovním prostoru."
++    },
++    "onboarding": {
++      "welcome_title": "Welcome to Tequio, {name}",
++      "welcome_body": "We’re glad you’re starting with Tequio. You can manage your projects with ease — start by creating one.",
++      "take_tour": "Take a product tour",
++      "skip": "No thanks, I’ll explore it myself",
++      "back": "Back",
++      "next": "Next",
++      "create_project": "Create your first project",
++      "sidebar_title": "Let’s get started!",
++      "sidebar_subtitle": "Get more out of Tequio.",
++      "steps": {
++        "work_items": {
++          "title": "Plan with work items",
++          "description": "The work item is the building block of Tequio: almost everything else is organised around them and their properties."
++        },
++        "cycles": {
++          "title": "Move with cycles",
++          "description": "Cycles help your team move in short stretches, like the sprints of agile development."
++        },
++        "modules": {
++          "title": "Break into modules",
++          "description": "Modules break a big piece of work into manageable parts so you can organise it better."
++        },
++        "views": {
++          "title": "Filter with views",
++          "description": "Build your own filters to see only what matters to you, then save or share them in a couple of clicks."
++        },
++        "pages": {
++          "title": "Document with pages",
++          "description": "Use pages to jot down whatever comes up in a meeting or at the start of the day."
++        }
++      }
+     }
    },
    "get_started": {
      "title": "Ahoj {name}, vítej na palubě!",
@@ -199114,7 +201365,7 @@ index 2e5f7dc..1cfa842 100644
      "checklist_section": {
        "title": "Začít",
        "description": "Začněte s nastavením a uvidíte své nápady ožít rychleji.",
-@@ -172,7 +172,7 @@
+@@ -172,7 +205,7 @@
            "title": "Vytvořit stránku"
          },
          "item_5": {
@@ -199123,7 +201374,7 @@ index 2e5f7dc..1cfa842 100644
          },
          "item_6": {
            "title": "Propojit integrace"
-@@ -188,8 +188,8 @@
+@@ -188,8 +221,8 @@
        "more_integrations": "Procházet další integrace"
      },
      "switch_to_plane_section": {
@@ -199569,7 +201820,7 @@ index 66379d4..2c778e6 100644
        "fixed_schedule": "Fester Zeitplan",
        "schedule": {
 diff --git a/packages/i18n/src/locales/de/common.json b/packages/i18n/src/locales/de/common.json
-index 1e18d4e..4ab0340 100644
+index 1e18d4e..ce8482b 100644
 --- a/packages/i18n/src/locales/de/common.json
 +++ b/packages/i18n/src/locales/de/common.json
 @@ -244,7 +244,7 @@
@@ -199590,10 +201841,11 @@ index 1e18d4e..4ab0340 100644
      "choose_view_logs_from_setup_sh_and_docker_logs_to_be_sure": "Wählen Sie View Logs aus setup.sh und Docker-Logs, um sicherzugehen."
    },
    "customize_navigation": "Navigation anpassen",
-@@ -867,5 +867,491 @@
+@@ -867,5 +867,494 @@
        "description": "Arbeitselemente in JSON exportieren.",
        "short_description": "Als JSON exportieren"
      }
+-  }
 +  },
 +  "drive": {
 +    "title": "Files",
@@ -200080,7 +202332,10 @@ index 1e18d4e..4ab0340 100644
 +    "switch_account_description": "Wenn du dich versehentlich mit {email} registriert hast, kannst du hier das Konto wechseln.",
 +    "sign_out_failed": "Abmelden fehlgeschlagen. Bitte erneut versuchen.",
 +    "step_progress": "Schritt {current} von {total}"
-   }
++  },
++  "greeting_morning": "Guten Morgen",
++  "greeting_afternoon": "Guten Nachmittag",
++  "greeting_evening": "Guten Abend"
  }
 diff --git a/packages/i18n/src/locales/de/empty-state.json b/packages/i18n/src/locales/de/empty-state.json
 index 74bc261..cfd2058 100644
@@ -200442,7 +202697,7 @@ index d97f852..2b98a01 100644
        },
        "no_templates": {
 diff --git a/packages/i18n/src/locales/de/tour.json b/packages/i18n/src/locales/de/tour.json
-index 4c3586a..1d6d0c2 100644
+index 4c3586a..650d95b 100644
 --- a/packages/i18n/src/locales/de/tour.json
 +++ b/packages/i18n/src/locales/de/tour.json
 @@ -69,7 +69,7 @@
@@ -200472,7 +202727,44 @@ index 4c3586a..1d6d0c2 100644
        }
      },
      "navigation": {
-@@ -154,7 +154,7 @@
+@@ -150,11 +150,44 @@
+     "seed_data": {
+       "title": "Hier ist Ihr Demo-Projekt",
+       "description": "Projekte ermöglichen es Ihnen, Ihre Teams, Aufgaben und alles zu verwalten, was Sie brauchen, um Dinge in Ihrem Arbeitsbereich zu erledigen."
++    },
++    "onboarding": {
++      "welcome_title": "Welcome to Tequio, {name}",
++      "welcome_body": "We’re glad you’re starting with Tequio. You can manage your projects with ease — start by creating one.",
++      "take_tour": "Take a product tour",
++      "skip": "No thanks, I’ll explore it myself",
++      "back": "Back",
++      "next": "Next",
++      "create_project": "Create your first project",
++      "sidebar_title": "Let’s get started!",
++      "sidebar_subtitle": "Get more out of Tequio.",
++      "steps": {
++        "work_items": {
++          "title": "Plan with work items",
++          "description": "The work item is the building block of Tequio: almost everything else is organised around them and their properties."
++        },
++        "cycles": {
++          "title": "Move with cycles",
++          "description": "Cycles help your team move in short stretches, like the sprints of agile development."
++        },
++        "modules": {
++          "title": "Break into modules",
++          "description": "Modules break a big piece of work into manageable parts so you can organise it better."
++        },
++        "views": {
++          "title": "Filter with views",
++          "description": "Build your own filters to see only what matters to you, then save or share them in a couple of clicks."
++        },
++        "pages": {
++          "title": "Document with pages",
++          "description": "Use pages to jot down whatever comes up in a meeting or at the start of the day."
++        }
++      }
+     }
    },
    "get_started": {
      "title": "Hallo {name}, willkommen an Bord!",
@@ -200481,7 +202773,7 @@ index 4c3586a..1d6d0c2 100644
      "checklist_section": {
        "title": "Loslegen",
        "description": "Beginnen Sie mit der Einrichtung und sehen Sie, wie Ihre Ideen schneller zum Leben erwachen.",
-@@ -172,7 +172,7 @@
+@@ -172,7 +205,7 @@
            "title": "Seite erstellen"
          },
          "item_5": {
@@ -200490,7 +202782,7 @@ index 4c3586a..1d6d0c2 100644
          },
          "item_6": {
            "title": "Integrationen verknüpfen"
-@@ -188,8 +188,8 @@
+@@ -188,8 +221,8 @@
        "more_integrations": "Weitere Integrationen durchsuchen"
      },
      "switch_to_plane_section": {
@@ -200921,7 +203213,7 @@ index 64779c7..c549990 100644
        "fixed_schedule": "Fixed schedule",
        "schedule": {
 diff --git a/packages/i18n/src/locales/en/common.json b/packages/i18n/src/locales/en/common.json
-index a138304..a6b0a49 100644
+index a138304..2d32674 100644
 --- a/packages/i18n/src/locales/en/common.json
 +++ b/packages/i18n/src/locales/en/common.json
 @@ -244,7 +244,7 @@
@@ -200951,10 +203243,11 @@ index a138304..a6b0a49 100644
    "in_app": "In-app",
    "forms": "Forms",
    "milestones": "Milestones",
-@@ -867,5 +867,491 @@
+@@ -867,5 +867,494 @@
        "description": "Export work items to a JSON file.",
        "short_description": "Export as json"
      }
+-  }
 +  },
 +  "drive": {
 +    "title": "Files",
@@ -201441,7 +203734,10 @@ index a138304..a6b0a49 100644
 +    "switch_account_description": "If you signed up with {email} by mistake, you can switch to a different account here.",
 +    "sign_out_failed": "Could not sign out. Please try again.",
 +    "step_progress": "Step {current} of {total}"
-   }
++  },
++  "greeting_morning": "Good morning",
++  "greeting_afternoon": "Good afternoon",
++  "greeting_evening": "Good evening"
  }
 diff --git a/packages/i18n/src/locales/en/empty-state.json b/packages/i18n/src/locales/en/empty-state.json
 index 33b556e..093781b 100644
@@ -201851,7 +204147,7 @@ index 5c0882a..9093f13 100644
        },
        "no_templates": {
 diff --git a/packages/i18n/src/locales/en/tour.json b/packages/i18n/src/locales/en/tour.json
-index b239e38..3dbaa69 100644
+index b239e38..3ae7d27 100644
 --- a/packages/i18n/src/locales/en/tour.json
 +++ b/packages/i18n/src/locales/en/tour.json
 @@ -69,7 +69,7 @@
@@ -201881,7 +204177,44 @@ index b239e38..3dbaa69 100644
        }
      },
      "navigation": {
-@@ -154,7 +154,7 @@
+@@ -150,11 +150,44 @@
+     "seed_data": {
+       "title": "Here is your demo project",
+       "description": "Projects let you manage your teams, tasks, and everything you need to get things done within your workspace."
++    },
++    "onboarding": {
++      "welcome_title": "Welcome to Tequio, {name}",
++      "welcome_body": "We’re glad you’re starting with Tequio. You can manage your projects with ease — start by creating one.",
++      "take_tour": "Take a product tour",
++      "skip": "No thanks, I’ll explore it myself",
++      "back": "Back",
++      "next": "Next",
++      "create_project": "Create your first project",
++      "sidebar_title": "Let’s get started!",
++      "sidebar_subtitle": "Get more out of Tequio.",
++      "steps": {
++        "work_items": {
++          "title": "Plan with work items",
++          "description": "The work item is the building block of Tequio: almost everything else is organised around them and their properties."
++        },
++        "cycles": {
++          "title": "Move with cycles",
++          "description": "Cycles help your team move in short stretches, like the sprints of agile development."
++        },
++        "modules": {
++          "title": "Break into modules",
++          "description": "Modules break a big piece of work into manageable parts so you can organise it better."
++        },
++        "views": {
++          "title": "Filter with views",
++          "description": "Build your own filters to see only what matters to you, then save or share them in a couple of clicks."
++        },
++        "pages": {
++          "title": "Document with pages",
++          "description": "Use pages to jot down whatever comes up in a meeting or at the start of the day."
++        }
++      }
+     }
    },
    "get_started": {
      "title": "Hey {name}, welcome aboard!",
@@ -201890,7 +204223,7 @@ index b239e38..3dbaa69 100644
      "checklist_section": {
        "title": "Get started",
        "description": "Begin your setup and see your ideas come to life faster.",
-@@ -172,7 +172,7 @@
+@@ -172,7 +205,7 @@
            "title": "Create a page"
          },
          "item_5": {
@@ -201899,7 +204232,7 @@ index b239e38..3dbaa69 100644
          },
          "item_6": {
            "title": "Link Integrations"
-@@ -188,8 +188,8 @@
+@@ -188,8 +221,8 @@
        "more_integrations": "Browse more integrations"
      },
      "switch_to_plane_section": {
@@ -202354,7 +204687,7 @@ index f49d529..b042251 100644
        "fixed_schedule": "Horario fijo",
        "schedule": {
 diff --git a/packages/i18n/src/locales/es/common.json b/packages/i18n/src/locales/es/common.json
-index 64440c9..41e2cdb 100644
+index 64440c9..edd1fd6 100644
 --- a/packages/i18n/src/locales/es/common.json
 +++ b/packages/i18n/src/locales/es/common.json
 @@ -145,7 +145,7 @@
@@ -202393,10 +204726,11 @@ index 64440c9..41e2cdb 100644
    "in_app": "En la aplicación",
    "forms": "Formularios",
    "milestones": "Hitos",
-@@ -867,5 +867,491 @@
+@@ -867,5 +867,494 @@
        "description": "Exporta elementos de trabajo a un archivo JSON.",
        "short_description": "Exportar como json"
      }
+-  }
 +  },
 +  "drive": {
 +    "title": "Documentos",
@@ -202883,7 +205217,10 @@ index 64440c9..41e2cdb 100644
 +    "switch_account_description": "Si te registraste con {email} por error, aquí puedes cambiar a otra cuenta.",
 +    "sign_out_failed": "No se pudo cerrar la sesión. Inténtalo de nuevo.",
 +    "step_progress": "Paso {current} de {total}"
-   }
++  },
++  "greeting_morning": "Buenos días",
++  "greeting_afternoon": "Buenas tardes",
++  "greeting_evening": "Buenas noches"
  }
 diff --git a/packages/i18n/src/locales/es/empty-state.json b/packages/i18n/src/locales/es/empty-state.json
 index 08feb2c..4a12149 100644
@@ -203284,7 +205621,7 @@ index 7f52a8a..cd7ba6e 100644
        },
        "no_templates": {
 diff --git a/packages/i18n/src/locales/es/tour.json b/packages/i18n/src/locales/es/tour.json
-index 14852c9..99e3dab 100644
+index 14852c9..214fed3 100644
 --- a/packages/i18n/src/locales/es/tour.json
 +++ b/packages/i18n/src/locales/es/tour.json
 @@ -69,7 +69,7 @@
@@ -203314,7 +205651,44 @@ index 14852c9..99e3dab 100644
        }
      },
      "navigation": {
-@@ -154,7 +154,7 @@
+@@ -150,11 +150,44 @@
+     "seed_data": {
+       "title": "Aquí está tu proyecto demo",
+       "description": "Los proyectos te permiten administrar tus equipos, tareas y todo lo que necesitas para hacer las cosas dentro de tu espacio de trabajo."
++    },
++    "onboarding": {
++      "welcome_title": "Te damos la bienvenida a Tequio, {name}",
++      "welcome_body": "Nos alegra que empieces a usar Tequio. Ya puedes gestionar tus proyectos con calma; empieza creando uno.",
++      "take_tour": "Ver un recorrido",
++      "skip": "No, gracias: prefiero explorarlo",
++      "back": "Atrás",
++      "next": "Siguiente",
++      "create_project": "Crea tu primer proyecto",
++      "sidebar_title": "¡Empecemos!",
++      "sidebar_subtitle": "Saca más partido a Tequio.",
++      "steps": {
++        "work_items": {
++          "title": "Planifica con elementos de trabajo",
++          "description": "El elemento de trabajo es la pieza básica de Tequio: casi todo lo demás se organiza alrededor de ellos y de sus propiedades."
++        },
++        "cycles": {
++          "title": "Avanza con ciclos",
++          "description": "Los ciclos ayudan a tu equipo a avanzar en tramos cortos, como los sprints del desarrollo ágil."
++        },
++        "modules": {
++          "title": "Divide en módulos",
++          "description": "Los módulos parten un trabajo grande en piezas manejables para organizarlo mejor."
++        },
++        "views": {
++          "title": "Filtra con vistas",
++          "description": "Crea filtros a medida para ver sólo lo que te importa, y guárdalos o compártelos en un par de clics."
++        },
++        "pages": {
++          "title": "Documenta con páginas",
++          "description": "Usa las páginas para anotar lo que surja en una reunión o al empezar el día."
++        }
++      }
+     }
    },
    "get_started": {
      "title": "¡Hola {name}, bienvenido a bordo!",
@@ -203323,7 +205697,7 @@ index 14852c9..99e3dab 100644
      "checklist_section": {
        "title": "Comenzar",
        "description": "Comienza tu configuración y ve tus ideas cobrar vida más rápido.",
-@@ -172,7 +172,7 @@
+@@ -172,7 +205,7 @@
            "title": "Crear una página"
          },
          "item_5": {
@@ -203332,7 +205706,7 @@ index 14852c9..99e3dab 100644
          },
          "item_6": {
            "title": "Vincular Integraciones"
-@@ -188,8 +188,8 @@
+@@ -188,8 +221,8 @@
        "more_integrations": "Explorar más integraciones"
      },
      "switch_to_plane_section": {
@@ -203787,7 +206161,7 @@ index 5343f12..1a31636 100644
        "fixed_schedule": "Horaire fixe",
        "schedule": {
 diff --git a/packages/i18n/src/locales/fr/common.json b/packages/i18n/src/locales/fr/common.json
-index a94ab8a..63ac42f 100644
+index a94ab8a..d856e90 100644
 --- a/packages/i18n/src/locales/fr/common.json
 +++ b/packages/i18n/src/locales/fr/common.json
 @@ -244,7 +244,7 @@
@@ -203817,10 +206191,11 @@ index a94ab8a..63ac42f 100644
    "in_app": "Dans l'application",
    "forms": "Formulaires",
    "milestones": "Jalons",
-@@ -867,5 +867,491 @@
+@@ -867,5 +867,494 @@
        "description": "Exportez les éléments de travail vers un fichier JSON.",
        "short_description": "Exporter en json"
      }
+-  }
 +  },
 +  "drive": {
 +    "title": "Files",
@@ -204307,7 +206682,10 @@ index a94ab8a..63ac42f 100644
 +    "switch_account_description": "Si vous vous êtes inscrit avec {email} par erreur, vous pouvez changer de compte ici.",
 +    "sign_out_failed": "Impossible de se déconnecter. Réessayez.",
 +    "step_progress": "Étape {current} sur {total}"
-   }
++  },
++  "greeting_morning": "Bonjour matin",
++  "greeting_afternoon": "Bonjour après-midi",
++  "greeting_evening": "Bonjour soir"
  }
 diff --git a/packages/i18n/src/locales/fr/empty-state.json b/packages/i18n/src/locales/fr/empty-state.json
 index 18e996a..9083003 100644
@@ -204708,7 +207086,7 @@ index e95e818..06c62c1 100644
        },
        "no_templates": {
 diff --git a/packages/i18n/src/locales/fr/tour.json b/packages/i18n/src/locales/fr/tour.json
-index 553228f..19c66ff 100644
+index 553228f..63ad6f1 100644
 --- a/packages/i18n/src/locales/fr/tour.json
 +++ b/packages/i18n/src/locales/fr/tour.json
 @@ -69,7 +69,7 @@
@@ -204738,7 +207116,44 @@ index 553228f..19c66ff 100644
        }
      },
      "navigation": {
-@@ -154,7 +154,7 @@
+@@ -150,11 +150,44 @@
+     "seed_data": {
+       "title": "Voici votre projet démo",
+       "description": "Les projets vous permettent de gérer vos équipes, tâches et tout ce dont vous avez besoin pour accomplir les choses dans votre espace de travail."
++    },
++    "onboarding": {
++      "welcome_title": "Welcome to Tequio, {name}",
++      "welcome_body": "We’re glad you’re starting with Tequio. You can manage your projects with ease — start by creating one.",
++      "take_tour": "Take a product tour",
++      "skip": "No thanks, I’ll explore it myself",
++      "back": "Back",
++      "next": "Next",
++      "create_project": "Create your first project",
++      "sidebar_title": "Let’s get started!",
++      "sidebar_subtitle": "Get more out of Tequio.",
++      "steps": {
++        "work_items": {
++          "title": "Plan with work items",
++          "description": "The work item is the building block of Tequio: almost everything else is organised around them and their properties."
++        },
++        "cycles": {
++          "title": "Move with cycles",
++          "description": "Cycles help your team move in short stretches, like the sprints of agile development."
++        },
++        "modules": {
++          "title": "Break into modules",
++          "description": "Modules break a big piece of work into manageable parts so you can organise it better."
++        },
++        "views": {
++          "title": "Filter with views",
++          "description": "Build your own filters to see only what matters to you, then save or share them in a couple of clicks."
++        },
++        "pages": {
++          "title": "Document with pages",
++          "description": "Use pages to jot down whatever comes up in a meeting or at the start of the day."
++        }
++      }
+     }
    },
    "get_started": {
      "title": "Bonjour {name}, bienvenue à bord!",
@@ -204747,7 +207162,7 @@ index 553228f..19c66ff 100644
      "checklist_section": {
        "title": "Commencer",
        "description": "Commencez votre configuration et voyez vos idées prendre vie plus rapidement.",
-@@ -172,7 +172,7 @@
+@@ -172,7 +205,7 @@
            "title": "Créer une page"
          },
          "item_5": {
@@ -204756,7 +207171,7 @@ index 553228f..19c66ff 100644
          },
          "item_6": {
            "title": "Lier les intégrations"
-@@ -188,8 +188,8 @@
+@@ -188,8 +221,8 @@
        "more_integrations": "Parcourir plus d intégrations"
      },
      "switch_to_plane_section": {
@@ -205211,7 +207626,7 @@ index 2fd8636..c6ce762 100644
        "fixed_schedule": "Jadwal tetap",
        "schedule": {
 diff --git a/packages/i18n/src/locales/id/common.json b/packages/i18n/src/locales/id/common.json
-index 7d26685..06ebac5 100644
+index 7d26685..9b6a26a 100644
 --- a/packages/i18n/src/locales/id/common.json
 +++ b/packages/i18n/src/locales/id/common.json
 @@ -244,7 +244,7 @@
@@ -205232,10 +207647,11 @@ index 7d26685..06ebac5 100644
      "choose_view_logs_from_setup_sh_and_docker_logs_to_be_sure": "Pilih View Logs dari setup.sh dan log Docker untuk memastikan."
    },
    "customize_navigation": "Sesuaikan navigasi",
-@@ -867,5 +867,491 @@
+@@ -867,5 +867,494 @@
        "description": "Ekspor item kerja ke file JSON.",
        "short_description": "Ekspor sebagai json"
      }
+-  }
 +  },
 +  "drive": {
 +    "title": "Files",
@@ -205722,7 +208138,10 @@ index 7d26685..06ebac5 100644
 +    "switch_account_description": "Jika kamu terdaftar dengan {email} secara keliru, kamu bisa ganti akun di sini.",
 +    "sign_out_failed": "Gagal keluar. Coba lagi.",
 +    "step_progress": "Langkah {current} dari {total}"
-   }
++  },
++  "greeting_morning": "Bagus pagi",
++  "greeting_afternoon": "Bagus siang",
++  "greeting_evening": "Bagus malam"
  }
 diff --git a/packages/i18n/src/locales/id/empty-state.json b/packages/i18n/src/locales/id/empty-state.json
 index 5c339ce..147e18f 100644
@@ -206124,7 +208543,7 @@ index 04abc9c..7fa4c2d 100644
        },
        "no_templates": {
 diff --git a/packages/i18n/src/locales/id/tour.json b/packages/i18n/src/locales/id/tour.json
-index 5d83e73..963d787 100644
+index 5d83e73..3c1ee3e 100644
 --- a/packages/i18n/src/locales/id/tour.json
 +++ b/packages/i18n/src/locales/id/tour.json
 @@ -69,7 +69,7 @@
@@ -206154,7 +208573,44 @@ index 5d83e73..963d787 100644
        }
      },
      "navigation": {
-@@ -154,7 +154,7 @@
+@@ -150,11 +150,44 @@
+     "seed_data": {
+       "title": "Ini adalah proyek demo Anda",
+       "description": "Proyek memungkinkan Anda mengelola tim, tugas, dan segala yang Anda butuhkan untuk menyelesaikan pekerjaan di ruang kerja Anda."
++    },
++    "onboarding": {
++      "welcome_title": "Welcome to Tequio, {name}",
++      "welcome_body": "We’re glad you’re starting with Tequio. You can manage your projects with ease — start by creating one.",
++      "take_tour": "Take a product tour",
++      "skip": "No thanks, I’ll explore it myself",
++      "back": "Back",
++      "next": "Next",
++      "create_project": "Create your first project",
++      "sidebar_title": "Let’s get started!",
++      "sidebar_subtitle": "Get more out of Tequio.",
++      "steps": {
++        "work_items": {
++          "title": "Plan with work items",
++          "description": "The work item is the building block of Tequio: almost everything else is organised around them and their properties."
++        },
++        "cycles": {
++          "title": "Move with cycles",
++          "description": "Cycles help your team move in short stretches, like the sprints of agile development."
++        },
++        "modules": {
++          "title": "Break into modules",
++          "description": "Modules break a big piece of work into manageable parts so you can organise it better."
++        },
++        "views": {
++          "title": "Filter with views",
++          "description": "Build your own filters to see only what matters to you, then save or share them in a couple of clicks."
++        },
++        "pages": {
++          "title": "Document with pages",
++          "description": "Use pages to jot down whatever comes up in a meeting or at the start of the day."
++        }
++      }
+     }
    },
    "get_started": {
      "title": "Hai {name}, selamat datang!",
@@ -206163,7 +208619,7 @@ index 5d83e73..963d787 100644
      "checklist_section": {
        "title": "Mulai",
        "description": "Mulai pengaturan Anda dan lihat ide Anda terwujud lebih cepat.",
-@@ -172,7 +172,7 @@
+@@ -172,7 +205,7 @@
            "title": "Buat halaman"
          },
          "item_5": {
@@ -206172,7 +208628,7 @@ index 5d83e73..963d787 100644
          },
          "item_6": {
            "title": "Tautkan Integrasi"
-@@ -188,8 +188,8 @@
+@@ -188,8 +221,8 @@
        "more_integrations": "Jelajahi lebih banyak integrasi"
      },
      "switch_to_plane_section": {
@@ -206627,7 +209083,7 @@ index f279366..b302f18 100644
        "fixed_schedule": "Pianificazione fissa",
        "schedule": {
 diff --git a/packages/i18n/src/locales/it/common.json b/packages/i18n/src/locales/it/common.json
-index 6fda1b0..0499d10 100644
+index 6fda1b0..ff0cd59 100644
 --- a/packages/i18n/src/locales/it/common.json
 +++ b/packages/i18n/src/locales/it/common.json
 @@ -244,7 +244,7 @@
@@ -206657,10 +209113,11 @@ index 6fda1b0..0499d10 100644
    "in_app": "In-app",
    "forms": "Moduli",
    "milestones": "Milestone",
-@@ -867,5 +867,491 @@
+@@ -867,5 +867,494 @@
        "description": "Esporta elementi di lavoro in un file JSON.",
        "short_description": "Esporta come JSON"
      }
+-  }
 +  },
 +  "drive": {
 +    "title": "Files",
@@ -207147,7 +209604,10 @@ index 6fda1b0..0499d10 100644
 +    "switch_account_description": "Se ti sei registrato con {email} per errore, qui puoi passare a un altro account.",
 +    "sign_out_failed": "Disconnessione non riuscita. Riprova.",
 +    "step_progress": "Passo {current} di {total}"
-   }
++  },
++  "greeting_morning": "Buono Mattina",
++  "greeting_afternoon": "Buono Pomeriggio",
++  "greeting_evening": "Buono Sera"
  }
 diff --git a/packages/i18n/src/locales/it/empty-state.json b/packages/i18n/src/locales/it/empty-state.json
 index 1af7d40..41e89e4 100644
@@ -207548,7 +210008,7 @@ index 40de474..ae6345f 100644
        },
        "no_templates": {
 diff --git a/packages/i18n/src/locales/it/tour.json b/packages/i18n/src/locales/it/tour.json
-index 6b3a028..45203f9 100644
+index 6b3a028..7e711f0 100644
 --- a/packages/i18n/src/locales/it/tour.json
 +++ b/packages/i18n/src/locales/it/tour.json
 @@ -69,7 +69,7 @@
@@ -207578,7 +210038,44 @@ index 6b3a028..45203f9 100644
        }
      },
      "navigation": {
-@@ -154,7 +154,7 @@
+@@ -150,11 +150,44 @@
+     "seed_data": {
+       "title": "Ecco il tuo progetto demo",
+       "description": "I progetti ti consentono di gestire i tuoi team, le attività e tutto ciò di cui hai bisogno per portare a termine le cose nel tuo spazio di lavoro."
++    },
++    "onboarding": {
++      "welcome_title": "Welcome to Tequio, {name}",
++      "welcome_body": "We’re glad you’re starting with Tequio. You can manage your projects with ease — start by creating one.",
++      "take_tour": "Take a product tour",
++      "skip": "No thanks, I’ll explore it myself",
++      "back": "Back",
++      "next": "Next",
++      "create_project": "Create your first project",
++      "sidebar_title": "Let’s get started!",
++      "sidebar_subtitle": "Get more out of Tequio.",
++      "steps": {
++        "work_items": {
++          "title": "Plan with work items",
++          "description": "The work item is the building block of Tequio: almost everything else is organised around them and their properties."
++        },
++        "cycles": {
++          "title": "Move with cycles",
++          "description": "Cycles help your team move in short stretches, like the sprints of agile development."
++        },
++        "modules": {
++          "title": "Break into modules",
++          "description": "Modules break a big piece of work into manageable parts so you can organise it better."
++        },
++        "views": {
++          "title": "Filter with views",
++          "description": "Build your own filters to see only what matters to you, then save or share them in a couple of clicks."
++        },
++        "pages": {
++          "title": "Document with pages",
++          "description": "Use pages to jot down whatever comes up in a meeting or at the start of the day."
++        }
++      }
+     }
    },
    "get_started": {
      "title": "Ciao {name}, benvenuto a bordo!",
@@ -207587,7 +210084,7 @@ index 6b3a028..45203f9 100644
      "checklist_section": {
        "title": "Inizia",
        "description": "Inizia la tua configurazione e vedi le tue idee prendere vita più velocemente.",
-@@ -172,7 +172,7 @@
+@@ -172,7 +205,7 @@
            "title": "Crea una pagina"
          },
          "item_5": {
@@ -207596,7 +210093,7 @@ index 6b3a028..45203f9 100644
          },
          "item_6": {
            "title": "Collega Integrazioni"
-@@ -188,8 +188,8 @@
+@@ -188,8 +221,8 @@
        "more_integrations": "Sfoglia più integrazioni"
      },
      "switch_to_plane_section": {
@@ -207993,7 +210490,7 @@ index d3dd8d3..0f5426b 100644
            }
          }
 diff --git a/packages/i18n/src/locales/ja/common.json b/packages/i18n/src/locales/ja/common.json
-index 4899411..6631cb8 100644
+index 4899411..ad474f5 100644
 --- a/packages/i18n/src/locales/ja/common.json
 +++ b/packages/i18n/src/locales/ja/common.json
 @@ -244,7 +244,7 @@
@@ -208005,10 +210502,11 @@ index 4899411..6631cb8 100644
    "please_select_at_least_one_invitation": "少なくとも1つの招待を選択してください。",
    "please_select_at_least_one_invitation_description": "ワークスペースに参加するには少なくとも1つの招待を選択してください。",
    "we_see_that_someone_has_invited_you_to_join_a_workspace": "誰かがあなたをワークスペースに招待しています",
-@@ -867,5 +867,491 @@
+@@ -867,5 +867,494 @@
        "description": "作業項目をJSONファイルにエクスポートします。",
        "short_description": "JSONとしてエクスポート"
      }
+-  }
 +  },
 +  "drive": {
 +    "title": "Files",
@@ -208495,7 +210993,10 @@ index 4899411..6631cb8 100644
 +    "switch_account_description": "誤って {email} で登録した場合は、ここで別のアカウントに切り替えられます。",
 +    "sign_out_failed": "サインアウトできませんでした。もう一度お試しください。",
 +    "step_progress": "ステップ {current}/{total}"
-   }
++  },
++  "greeting_morning": "おはよう ございます",
++  "greeting_afternoon": "おはよう こんにちは",
++  "greeting_evening": "おはよう こんばんは"
  }
 diff --git a/packages/i18n/src/locales/ja/integration.json b/packages/i18n/src/locales/ja/integration.json
 index e238e33..669d30c 100644
@@ -208583,7 +211084,7 @@ index 5f8b66d..525680c 100644
                "invalid": "無効なメールアドレス",
                "maxLength": "サポートメールアドレスは255文字未満にしてください"
 diff --git a/packages/i18n/src/locales/ja/tour.json b/packages/i18n/src/locales/ja/tour.json
-index e15707e..626d511 100644
+index e15707e..7cea7c1 100644
 --- a/packages/i18n/src/locales/ja/tour.json
 +++ b/packages/i18n/src/locales/ja/tour.json
 @@ -113,7 +113,7 @@
@@ -208595,7 +211096,47 @@ index e15707e..626d511 100644
        }
      },
      "navigation": {
-@@ -172,7 +172,7 @@
+@@ -150,6 +150,39 @@
+     "seed_data": {
+       "title": "これがあなたのデモプロジェクトです",
+       "description": "プロジェクトを使用すると、ワークスペース内でチーム、タスク、物事を完了するために必要なすべてを管理できます。"
++    },
++    "onboarding": {
++      "welcome_title": "Welcome to Tequio, {name}",
++      "welcome_body": "We’re glad you’re starting with Tequio. You can manage your projects with ease — start by creating one.",
++      "take_tour": "Take a product tour",
++      "skip": "No thanks, I’ll explore it myself",
++      "back": "Back",
++      "next": "Next",
++      "create_project": "Create your first project",
++      "sidebar_title": "Let’s get started!",
++      "sidebar_subtitle": "Get more out of Tequio.",
++      "steps": {
++        "work_items": {
++          "title": "Plan with work items",
++          "description": "The work item is the building block of Tequio: almost everything else is organised around them and their properties."
++        },
++        "cycles": {
++          "title": "Move with cycles",
++          "description": "Cycles help your team move in short stretches, like the sprints of agile development."
++        },
++        "modules": {
++          "title": "Break into modules",
++          "description": "Modules break a big piece of work into manageable parts so you can organise it better."
++        },
++        "views": {
++          "title": "Filter with views",
++          "description": "Build your own filters to see only what matters to you, then save or share them in a couple of clicks."
++        },
++        "pages": {
++          "title": "Document with pages",
++          "description": "Use pages to jot down whatever comes up in a meeting or at the start of the day."
++        }
++      }
+     }
+   },
+   "get_started": {
+@@ -172,7 +205,7 @@
            "title": "ページを作成"
          },
          "item_5": {
@@ -208885,7 +211426,7 @@ index 8d77f70..279ae09 100644
        "fixed_schedule": "고정 일정",
        "schedule": {
 diff --git a/packages/i18n/src/locales/ko/common.json b/packages/i18n/src/locales/ko/common.json
-index 73eea6b..931a3d7 100644
+index 73eea6b..4dfaaa0 100644
 --- a/packages/i18n/src/locales/ko/common.json
 +++ b/packages/i18n/src/locales/ko/common.json
 @@ -244,7 +244,7 @@
@@ -208906,10 +211447,11 @@ index 73eea6b..931a3d7 100644
      "choose_view_logs_from_setup_sh_and_docker_logs_to_be_sure": "확실히 하려면 setup.sh와 Docker 로그에서 View Logs를 선택하세요."
    },
    "customize_navigation": "내비게이션 사용자 지정",
-@@ -867,5 +867,491 @@
+@@ -867,5 +867,494 @@
        "description": "작업 항목을 JSON 파일로 내보냅니다.",
        "short_description": "JSON으로 내보내기"
      }
+-  }
 +  },
 +  "drive": {
 +    "title": "Files",
@@ -209396,7 +211938,10 @@ index 73eea6b..931a3d7 100644
 +    "switch_account_description": "실수로 {email}(으)로 가입했다면 여기서 다른 계정으로 전환할 수 있습니다.",
 +    "sign_out_failed": "로그아웃하지 못했습니다. 다시 시도하세요.",
 +    "step_progress": "{total}단계 중 {current}단계"
-   }
++  },
++  "greeting_morning": "좋은 아침",
++  "greeting_afternoon": "좋은 오후",
++  "greeting_evening": "좋은 저녁"
  }
 diff --git a/packages/i18n/src/locales/ko/empty-state.json b/packages/i18n/src/locales/ko/empty-state.json
 index d37876b..ee33004 100644
@@ -209560,7 +212105,7 @@ index aeb7915..e23ae90 100644
                "invalid": "유효하지 않은 이메일 주소",
                "maxLength": "지원 이메일은 255자 미만이어야 합니다"
 diff --git a/packages/i18n/src/locales/ko/tour.json b/packages/i18n/src/locales/ko/tour.json
-index 16cf9cd..96830ee 100644
+index 16cf9cd..7ea200c 100644
 --- a/packages/i18n/src/locales/ko/tour.json
 +++ b/packages/i18n/src/locales/ko/tour.json
 @@ -95,7 +95,7 @@
@@ -209581,7 +212126,47 @@ index 16cf9cd..96830ee 100644
        }
      },
      "navigation": {
-@@ -172,7 +172,7 @@
+@@ -150,6 +150,39 @@
+     "seed_data": {
+       "title": "여기 데모 프로젝트가 있습니다",
+       "description": "프로젝트를 사용하면 워크스페이스 내에서 팀, 작업 및 작업을 완료하는 데 필요한 모든 것을 관리할 수 있습니다."
++    },
++    "onboarding": {
++      "welcome_title": "Welcome to Tequio, {name}",
++      "welcome_body": "We’re glad you’re starting with Tequio. You can manage your projects with ease — start by creating one.",
++      "take_tour": "Take a product tour",
++      "skip": "No thanks, I’ll explore it myself",
++      "back": "Back",
++      "next": "Next",
++      "create_project": "Create your first project",
++      "sidebar_title": "Let’s get started!",
++      "sidebar_subtitle": "Get more out of Tequio.",
++      "steps": {
++        "work_items": {
++          "title": "Plan with work items",
++          "description": "The work item is the building block of Tequio: almost everything else is organised around them and their properties."
++        },
++        "cycles": {
++          "title": "Move with cycles",
++          "description": "Cycles help your team move in short stretches, like the sprints of agile development."
++        },
++        "modules": {
++          "title": "Break into modules",
++          "description": "Modules break a big piece of work into manageable parts so you can organise it better."
++        },
++        "views": {
++          "title": "Filter with views",
++          "description": "Build your own filters to see only what matters to you, then save or share them in a couple of clicks."
++        },
++        "pages": {
++          "title": "Document with pages",
++          "description": "Use pages to jot down whatever comes up in a meeting or at the start of the day."
++        }
++      }
+     }
+   },
+   "get_started": {
+@@ -172,7 +205,7 @@
            "title": "페이지 만들기"
          },
          "item_5": {
@@ -209939,7 +212524,7 @@ index 0632d1f..6396693 100644
        "fixed_schedule": "Stały harmonogram",
        "schedule": {
 diff --git a/packages/i18n/src/locales/pl/common.json b/packages/i18n/src/locales/pl/common.json
-index 4c4850c..5c7f736 100644
+index 4c4850c..ccddb6b 100644
 --- a/packages/i18n/src/locales/pl/common.json
 +++ b/packages/i18n/src/locales/pl/common.json
 @@ -244,7 +244,7 @@
@@ -209960,10 +212545,11 @@ index 4c4850c..5c7f736 100644
      "choose_view_logs_from_setup_sh_and_docker_logs_to_be_sure": "Wybierz View Logs z setup.sh i logów Docker, aby mieć pewność."
    },
    "customize_navigation": "Dostosuj nawigację",
-@@ -867,5 +867,491 @@
+@@ -867,5 +867,494 @@
        "description": "Eksportuj elementy do pliku JSON.",
        "short_description": "Eksportuj jako JSON"
      }
+-  }
 +  },
 +  "drive": {
 +    "title": "Files",
@@ -210450,7 +213036,10 @@ index 4c4850c..5c7f736 100644
 +    "switch_account_description": "Jeśli zarejestrowałeś się przez pomyłkę na {email}, tutaj zmienisz konto.",
 +    "sign_out_failed": "Nie udało się wylogować. Spróbuj ponownie.",
 +    "step_progress": "Krok {current} z {total}"
-   }
++  },
++  "greeting_morning": "Dzień dobry rano",
++  "greeting_afternoon": "Dzień dobry po południu",
++  "greeting_evening": "Dzień dobry wieczorem"
  }
 diff --git a/packages/i18n/src/locales/pl/empty-state.json b/packages/i18n/src/locales/pl/empty-state.json
 index 9ade0d8..b6f317c 100644
@@ -210806,7 +213395,7 @@ index e6b80ad..58887de 100644
        },
        "no_templates": {
 diff --git a/packages/i18n/src/locales/pl/tour.json b/packages/i18n/src/locales/pl/tour.json
-index 5f45b7e..2f599c0 100644
+index 5f45b7e..a0d363f 100644
 --- a/packages/i18n/src/locales/pl/tour.json
 +++ b/packages/i18n/src/locales/pl/tour.json
 @@ -69,7 +69,7 @@
@@ -210836,7 +213425,44 @@ index 5f45b7e..2f599c0 100644
        }
      },
      "navigation": {
-@@ -154,7 +154,7 @@
+@@ -150,11 +150,44 @@
+     "seed_data": {
+       "title": "Oto Twój projekt demo",
+       "description": "Projekty pozwalają zarządzać zespołami, zadaniami i wszystkim, czego potrzebujesz, aby wykonać pracę w swoim obszarze roboczym."
++    },
++    "onboarding": {
++      "welcome_title": "Welcome to Tequio, {name}",
++      "welcome_body": "We’re glad you’re starting with Tequio. You can manage your projects with ease — start by creating one.",
++      "take_tour": "Take a product tour",
++      "skip": "No thanks, I’ll explore it myself",
++      "back": "Back",
++      "next": "Next",
++      "create_project": "Create your first project",
++      "sidebar_title": "Let’s get started!",
++      "sidebar_subtitle": "Get more out of Tequio.",
++      "steps": {
++        "work_items": {
++          "title": "Plan with work items",
++          "description": "The work item is the building block of Tequio: almost everything else is organised around them and their properties."
++        },
++        "cycles": {
++          "title": "Move with cycles",
++          "description": "Cycles help your team move in short stretches, like the sprints of agile development."
++        },
++        "modules": {
++          "title": "Break into modules",
++          "description": "Modules break a big piece of work into manageable parts so you can organise it better."
++        },
++        "views": {
++          "title": "Filter with views",
++          "description": "Build your own filters to see only what matters to you, then save or share them in a couple of clicks."
++        },
++        "pages": {
++          "title": "Document with pages",
++          "description": "Use pages to jot down whatever comes up in a meeting or at the start of the day."
++        }
++      }
+     }
    },
    "get_started": {
      "title": "Cześć {name}, witaj na pokładzie!",
@@ -210845,7 +213471,7 @@ index 5f45b7e..2f599c0 100644
      "checklist_section": {
        "title": "Zacznij",
        "description": "Rozpocznij konfigurację i zobacz, jak Twoje pomysły ożywają szybciej.",
-@@ -172,7 +172,7 @@
+@@ -172,7 +205,7 @@
            "title": "Utwórz stronę"
          },
          "item_5": {
@@ -210854,7 +213480,7 @@ index 5f45b7e..2f599c0 100644
          },
          "item_6": {
            "title": "Połącz integracje"
-@@ -188,8 +188,8 @@
+@@ -188,8 +221,8 @@
        "more_integrations": "Przeglądaj więcej integracji"
      },
      "switch_to_plane_section": {
@@ -211300,7 +213926,7 @@ index 3eab73f..c2c7c08 100644
        "fixed_schedule": "Agendamento fixo",
        "schedule": {
 diff --git a/packages/i18n/src/locales/pt-BR/common.json b/packages/i18n/src/locales/pt-BR/common.json
-index 565e85d..4d87d3b 100644
+index 565e85d..49b3875 100644
 --- a/packages/i18n/src/locales/pt-BR/common.json
 +++ b/packages/i18n/src/locales/pt-BR/common.json
 @@ -244,7 +244,7 @@
@@ -211321,10 +213947,11 @@ index 565e85d..4d87d3b 100644
      "choose_view_logs_from_setup_sh_and_docker_logs_to_be_sure": "Escolha View Logs do setup.sh e logs do Docker para ter certeza."
    },
    "customize_navigation": "Personalizar navegação",
-@@ -867,5 +867,491 @@
+@@ -867,5 +867,494 @@
        "description": "Exporte itens de trabalho para um arquivo JSON.",
        "short_description": "Exportar como JSON"
      }
+-  }
 +  },
 +  "drive": {
 +    "title": "Files",
@@ -211811,7 +214438,10 @@ index 565e85d..4d87d3b 100644
 +    "switch_account_description": "Se você se cadastrou com {email} por engano, pode trocar de conta aqui.",
 +    "sign_out_failed": "Não foi possível sair. Tente novamente.",
 +    "step_progress": "Etapa {current} de {total}"
-   }
++  },
++  "greeting_morning": "Bom dia",
++  "greeting_afternoon": "Boa tarde",
++  "greeting_evening": "Boa noite"
  }
 diff --git a/packages/i18n/src/locales/pt-BR/empty-state.json b/packages/i18n/src/locales/pt-BR/empty-state.json
 index e9863a4..0378061 100644
@@ -212208,7 +214838,7 @@ index cd3bdb0..2eeab05 100644
        },
        "no_templates": {
 diff --git a/packages/i18n/src/locales/pt-BR/tour.json b/packages/i18n/src/locales/pt-BR/tour.json
-index 512aad6..e048a2b 100644
+index 512aad6..ead1925 100644
 --- a/packages/i18n/src/locales/pt-BR/tour.json
 +++ b/packages/i18n/src/locales/pt-BR/tour.json
 @@ -69,7 +69,7 @@
@@ -212238,7 +214868,44 @@ index 512aad6..e048a2b 100644
        }
      },
      "navigation": {
-@@ -154,7 +154,7 @@
+@@ -150,11 +150,44 @@
+     "seed_data": {
+       "title": "Aqui está seu projeto demo",
+       "description": "Os projetos permitem que você gerencie suas equipes, tarefas e tudo o que precisa para realizar as coisas dentro do seu espaço de trabalho."
++    },
++    "onboarding": {
++      "welcome_title": "Boas-vindas ao Tequio, {name}",
++      "welcome_body": "Que bom que você está começando com o Tequio. Já pode gerenciar seus projetos com calma; comece criando um.",
++      "take_tour": "Fazer um tour",
++      "skip": "Não, obrigado: prefiro explorar",
++      "back": "Voltar",
++      "next": "Próximo",
++      "create_project": "Crie seu primeiro projeto",
++      "sidebar_title": "Vamos começar!",
++      "sidebar_subtitle": "Aproveite melhor o Tequio.",
++      "steps": {
++        "work_items": {
++          "title": "Planeje com itens de trabalho",
++          "description": "O item de trabalho é a peça básica do Tequio: quase todo o resto se organiza em torno deles e de suas propriedades."
++        },
++        "cycles": {
++          "title": "Avance com ciclos",
++          "description": "Os ciclos ajudam sua equipe a avançar em trechos curtos, como os sprints do desenvolvimento ágil."
++        },
++        "modules": {
++          "title": "Divida em módulos",
++          "description": "Os módulos dividem um trabalho grande em partes gerenciáveis para organizá-lo melhor."
++        },
++        "views": {
++          "title": "Filtre com visões",
++          "description": "Crie filtros sob medida para ver só o que importa e salve ou compartilhe em poucos cliques."
++        },
++        "pages": {
++          "title": "Documente com páginas",
++          "description": "Use as páginas para anotar o que surgir em uma reunião ou ao começar o dia."
++        }
++      }
+     }
    },
    "get_started": {
      "title": "Olá {name}, bem-vindo a bordo!",
@@ -212247,7 +214914,7 @@ index 512aad6..e048a2b 100644
      "checklist_section": {
        "title": "Começar",
        "description": "Comece sua configuração e veja suas ideias ganharem vida mais rapidamente.",
-@@ -172,7 +172,7 @@
+@@ -172,7 +205,7 @@
            "title": "Criar uma página"
          },
          "item_5": {
@@ -212256,7 +214923,7 @@ index 512aad6..e048a2b 100644
          },
          "item_6": {
            "title": "Vincular integrações"
-@@ -188,8 +188,8 @@
+@@ -188,8 +221,8 @@
        "more_integrations": "Navegar por mais integrações"
      },
      "switch_to_plane_section": {
@@ -212711,7 +215378,7 @@ index 509bbb1..0c56d9c 100644
        "fixed_schedule": "Program fix",
        "schedule": {
 diff --git a/packages/i18n/src/locales/ro/common.json b/packages/i18n/src/locales/ro/common.json
-index e2b44ce..a8f200d 100644
+index e2b44ce..7d47499 100644
 --- a/packages/i18n/src/locales/ro/common.json
 +++ b/packages/i18n/src/locales/ro/common.json
 @@ -244,7 +244,7 @@
@@ -212741,10 +215408,11 @@ index e2b44ce..a8f200d 100644
    "in_app": "În-app",
    "forms": "Formulare",
    "milestones": "Jaloane",
-@@ -867,5 +867,491 @@
+@@ -867,5 +867,494 @@
        "description": "Exportă activitățile într-un fișier JSON.",
        "short_description": "Exportă ca JSON"
      }
+-  }
 +  },
 +  "drive": {
 +    "title": "Files",
@@ -213231,7 +215899,10 @@ index e2b44ce..a8f200d 100644
 +    "switch_account_description": "Dacă te-ai înregistrat din greșeală cu {email}, aici poți schimba contul.",
 +    "sign_out_failed": "Deconectarea a eșuat. Încearcă din nou.",
 +    "step_progress": "Pasul {current} din {total}"
-   }
++  },
++  "greeting_morning": "Bună dimineața",
++  "greeting_afternoon": "Bună după-amiaza",
++  "greeting_evening": "Bună seara"
  }
 diff --git a/packages/i18n/src/locales/ro/empty-state.json b/packages/i18n/src/locales/ro/empty-state.json
 index a613a68..32f35f3 100644
@@ -213632,7 +216303,7 @@ index a80ef4f..7f21ba6 100644
        },
        "no_templates": {
 diff --git a/packages/i18n/src/locales/ro/tour.json b/packages/i18n/src/locales/ro/tour.json
-index c3735c9..630e082 100644
+index c3735c9..2c730a8 100644
 --- a/packages/i18n/src/locales/ro/tour.json
 +++ b/packages/i18n/src/locales/ro/tour.json
 @@ -69,7 +69,7 @@
@@ -213662,7 +216333,44 @@ index c3735c9..630e082 100644
        }
      },
      "navigation": {
-@@ -154,7 +154,7 @@
+@@ -150,11 +150,44 @@
+     "seed_data": {
+       "title": "Iată proiectul tău demo",
+       "description": "Proiectele îți permit să gestionezi echipele, sarcinile și tot ce ai nevoie pentru a duce lucrurile la bun sfârșit în spațiul tău de lucru."
++    },
++    "onboarding": {
++      "welcome_title": "Welcome to Tequio, {name}",
++      "welcome_body": "We’re glad you’re starting with Tequio. You can manage your projects with ease — start by creating one.",
++      "take_tour": "Take a product tour",
++      "skip": "No thanks, I’ll explore it myself",
++      "back": "Back",
++      "next": "Next",
++      "create_project": "Create your first project",
++      "sidebar_title": "Let’s get started!",
++      "sidebar_subtitle": "Get more out of Tequio.",
++      "steps": {
++        "work_items": {
++          "title": "Plan with work items",
++          "description": "The work item is the building block of Tequio: almost everything else is organised around them and their properties."
++        },
++        "cycles": {
++          "title": "Move with cycles",
++          "description": "Cycles help your team move in short stretches, like the sprints of agile development."
++        },
++        "modules": {
++          "title": "Break into modules",
++          "description": "Modules break a big piece of work into manageable parts so you can organise it better."
++        },
++        "views": {
++          "title": "Filter with views",
++          "description": "Build your own filters to see only what matters to you, then save or share them in a couple of clicks."
++        },
++        "pages": {
++          "title": "Document with pages",
++          "description": "Use pages to jot down whatever comes up in a meeting or at the start of the day."
++        }
++      }
+     }
    },
    "get_started": {
      "title": "Salut {name}, bun venit la bord!",
@@ -213671,7 +216379,7 @@ index c3735c9..630e082 100644
      "checklist_section": {
        "title": "Începe",
        "description": "Începe configurarea și vezi-ți ideile prind viață mai repede.",
-@@ -172,7 +172,7 @@
+@@ -172,7 +205,7 @@
            "title": "Creează o pagină"
          },
          "item_5": {
@@ -213680,7 +216388,7 @@ index c3735c9..630e082 100644
          },
          "item_6": {
            "title": "Conectează integrări"
-@@ -188,8 +188,8 @@
+@@ -188,8 +221,8 @@
        "more_integrations": "Explorează mai multe integrări"
      },
      "switch_to_plane_section": {
@@ -214129,7 +216837,7 @@ index a97e9e6..7ce3fde 100644
        "fixed_schedule": "Фиксированное расписание",
        "schedule": {
 diff --git a/packages/i18n/src/locales/ru/common.json b/packages/i18n/src/locales/ru/common.json
-index c2881e5..f8621a0 100644
+index c2881e5..e065d86 100644
 --- a/packages/i18n/src/locales/ru/common.json
 +++ b/packages/i18n/src/locales/ru/common.json
 @@ -244,7 +244,7 @@
@@ -214150,10 +216858,11 @@ index c2881e5..f8621a0 100644
      "choose_view_logs_from_setup_sh_and_docker_logs_to_be_sure": "Выберите View Logs из setup.sh и логов Docker, чтобы убедиться."
    },
    "customize_navigation": "Настроить навигацию",
-@@ -867,5 +867,491 @@
+@@ -867,5 +867,494 @@
        "description": "Экспорт рабочих элементов в JSON-файл.",
        "short_description": "Экспорт в json"
      }
+-  }
 +  },
 +  "drive": {
 +    "title": "Files",
@@ -214640,7 +217349,10 @@ index c2881e5..f8621a0 100644
 +    "switch_account_description": "Если вы случайно зарегистрировались с {email}, здесь можно сменить аккаунт.",
 +    "sign_out_failed": "Не удалось выйти. Попробуйте ещё раз.",
 +    "step_progress": "Шаг {current} из {total}"
-   }
++  },
++  "greeting_morning": "Доброго утра",
++  "greeting_afternoon": "Доброго дня",
++  "greeting_evening": "Доброго вечера"
  }
 diff --git a/packages/i18n/src/locales/ru/empty-state.json b/packages/i18n/src/locales/ru/empty-state.json
 index e322a5e..d433978 100644
@@ -215033,7 +217745,7 @@ index 3087fd7..4d2fc13 100644
        },
        "no_templates": {
 diff --git a/packages/i18n/src/locales/ru/tour.json b/packages/i18n/src/locales/ru/tour.json
-index 6a752da..9202677 100644
+index 6a752da..a8a321c 100644
 --- a/packages/i18n/src/locales/ru/tour.json
 +++ b/packages/i18n/src/locales/ru/tour.json
 @@ -69,7 +69,7 @@
@@ -215063,7 +217775,44 @@ index 6a752da..9202677 100644
        }
      },
      "navigation": {
-@@ -154,7 +154,7 @@
+@@ -150,11 +150,44 @@
+     "seed_data": {
+       "title": "Вот ваш демо-проект",
+       "description": "Проекты позволяют вам управлять вашими командами, задачами и всем, что вам нужно для выполнения работы в вашем рабочем пространстве."
++    },
++    "onboarding": {
++      "welcome_title": "Welcome to Tequio, {name}",
++      "welcome_body": "We’re glad you’re starting with Tequio. You can manage your projects with ease — start by creating one.",
++      "take_tour": "Take a product tour",
++      "skip": "No thanks, I’ll explore it myself",
++      "back": "Back",
++      "next": "Next",
++      "create_project": "Create your first project",
++      "sidebar_title": "Let’s get started!",
++      "sidebar_subtitle": "Get more out of Tequio.",
++      "steps": {
++        "work_items": {
++          "title": "Plan with work items",
++          "description": "The work item is the building block of Tequio: almost everything else is organised around them and their properties."
++        },
++        "cycles": {
++          "title": "Move with cycles",
++          "description": "Cycles help your team move in short stretches, like the sprints of agile development."
++        },
++        "modules": {
++          "title": "Break into modules",
++          "description": "Modules break a big piece of work into manageable parts so you can organise it better."
++        },
++        "views": {
++          "title": "Filter with views",
++          "description": "Build your own filters to see only what matters to you, then save or share them in a couple of clicks."
++        },
++        "pages": {
++          "title": "Document with pages",
++          "description": "Use pages to jot down whatever comes up in a meeting or at the start of the day."
++        }
++      }
+     }
    },
    "get_started": {
      "title": "Привет {name}, добро пожаловать на борт!",
@@ -215072,7 +217821,7 @@ index 6a752da..9202677 100644
      "checklist_section": {
        "title": "Начать",
        "description": "Начните настройку и посмотрите, как ваши идеи воплощаются в жизнь быстрее.",
-@@ -172,7 +172,7 @@
+@@ -172,7 +205,7 @@
            "title": "Создать страницу"
          },
          "item_5": {
@@ -215081,7 +217830,7 @@ index 6a752da..9202677 100644
          },
          "item_6": {
            "title": "Связать интеграции"
-@@ -188,8 +188,8 @@
+@@ -188,8 +221,8 @@
        "more_integrations": "Просмотреть больше интеграций"
      },
      "switch_to_plane_section": {
@@ -215527,7 +218276,7 @@ index 3e7dbc5..27f375f 100644
        "fixed_schedule": "Pevný rozvrh",
        "schedule": {
 diff --git a/packages/i18n/src/locales/sk/common.json b/packages/i18n/src/locales/sk/common.json
-index 4fc339c..7201dc8 100644
+index 4fc339c..5d3ed9e 100644
 --- a/packages/i18n/src/locales/sk/common.json
 +++ b/packages/i18n/src/locales/sk/common.json
 @@ -244,7 +244,7 @@
@@ -215548,10 +218297,11 @@ index 4fc339c..7201dc8 100644
      "choose_view_logs_from_setup_sh_and_docker_logs_to_be_sure": "Vyberte View Logs z setup.sh a Docker logov, aby ste si boli istí."
    },
    "customize_navigation": "Prispôsobiť navigáciu",
-@@ -867,5 +867,491 @@
+@@ -867,5 +867,494 @@
        "description": "Exportujte položky do JSON.",
        "short_description": "Exportovať ako JSON"
      }
+-  }
 +  },
 +  "drive": {
 +    "title": "Files",
@@ -216038,7 +218788,10 @@ index 4fc339c..7201dc8 100644
 +    "switch_account_description": "Ak ste sa omylom zaregistrovali s {email}, tu môžete prepnúť účet.",
 +    "sign_out_failed": "Odhlásenie zlyhalo. Skúste to znova.",
 +    "step_progress": "Krok {current} z {total}"
-   }
++  },
++  "greeting_morning": "Dobrý ráno",
++  "greeting_afternoon": "Dobrý popoludnie",
++  "greeting_evening": "Dobrý večer"
  }
 diff --git a/packages/i18n/src/locales/sk/empty-state.json b/packages/i18n/src/locales/sk/empty-state.json
 index 15bc7d2..0a09f0f 100644
@@ -216394,7 +219147,7 @@ index 9d42a68..36a4852 100644
        },
        "no_templates": {
 diff --git a/packages/i18n/src/locales/sk/tour.json b/packages/i18n/src/locales/sk/tour.json
-index f5f6c66..f18d702 100644
+index f5f6c66..205cafe 100644
 --- a/packages/i18n/src/locales/sk/tour.json
 +++ b/packages/i18n/src/locales/sk/tour.json
 @@ -69,7 +69,7 @@
@@ -216424,7 +219177,44 @@ index f5f6c66..f18d702 100644
        }
      },
      "navigation": {
-@@ -154,7 +154,7 @@
+@@ -150,11 +150,44 @@
+     "seed_data": {
+       "title": "Tu je váš demo projekt",
+       "description": "Projekty vám umožňujú spravovať vaše tímy, úlohy a všetko, čo potrebujete na dokončenie práce vo vašom pracovnom priestore."
++    },
++    "onboarding": {
++      "welcome_title": "Welcome to Tequio, {name}",
++      "welcome_body": "We’re glad you’re starting with Tequio. You can manage your projects with ease — start by creating one.",
++      "take_tour": "Take a product tour",
++      "skip": "No thanks, I’ll explore it myself",
++      "back": "Back",
++      "next": "Next",
++      "create_project": "Create your first project",
++      "sidebar_title": "Let’s get started!",
++      "sidebar_subtitle": "Get more out of Tequio.",
++      "steps": {
++        "work_items": {
++          "title": "Plan with work items",
++          "description": "The work item is the building block of Tequio: almost everything else is organised around them and their properties."
++        },
++        "cycles": {
++          "title": "Move with cycles",
++          "description": "Cycles help your team move in short stretches, like the sprints of agile development."
++        },
++        "modules": {
++          "title": "Break into modules",
++          "description": "Modules break a big piece of work into manageable parts so you can organise it better."
++        },
++        "views": {
++          "title": "Filter with views",
++          "description": "Build your own filters to see only what matters to you, then save or share them in a couple of clicks."
++        },
++        "pages": {
++          "title": "Document with pages",
++          "description": "Use pages to jot down whatever comes up in a meeting or at the start of the day."
++        }
++      }
+     }
    },
    "get_started": {
      "title": "Ahoj {name}, vitaj na palube!",
@@ -216433,7 +219223,7 @@ index f5f6c66..f18d702 100644
      "checklist_section": {
        "title": "Začať",
        "description": "Začnite s nastavením a uvidíte svoje nápady ožívať rýchlejšie.",
-@@ -172,7 +172,7 @@
+@@ -172,7 +205,7 @@
            "title": "Vytvoriť stránku"
          },
          "item_5": {
@@ -216442,7 +219232,7 @@ index f5f6c66..f18d702 100644
          },
          "item_6": {
            "title": "Prepojiť integrácie"
-@@ -188,8 +188,8 @@
+@@ -188,8 +221,8 @@
        "more_integrations": "Prezerať viac integrácií"
      },
      "switch_to_plane_section": {
@@ -216877,7 +219667,7 @@ index 5d44f94..bd09842 100644
        "fixed_schedule": "Sabit zamanlama",
        "schedule": {
 diff --git a/packages/i18n/src/locales/tr-TR/common.json b/packages/i18n/src/locales/tr-TR/common.json
-index 74bd5cb..4bde80c 100644
+index 74bd5cb..472c958 100644
 --- a/packages/i18n/src/locales/tr-TR/common.json
 +++ b/packages/i18n/src/locales/tr-TR/common.json
 @@ -244,7 +244,7 @@
@@ -216907,10 +219697,11 @@ index 74bd5cb..4bde80c 100644
    "in_app": "Uygulama İçi",
    "forms": "Formlar",
    "milestones": "Kilometre taşları",
-@@ -867,5 +867,491 @@
+@@ -867,5 +867,494 @@
        "description": "İş öğelerini JSON dosyasına aktarın.",
        "short_description": "JSON olarak aktar"
      }
+-  }
 +  },
 +  "drive": {
 +    "title": "Files",
@@ -217397,7 +220188,10 @@ index 74bd5cb..4bde80c 100644
 +    "switch_account_description": "{email} ile yanlışlıkla kaydolduysan, buradan hesap değiştirebilirsin.",
 +    "sign_out_failed": "Çıkış yapılamadı. Tekrar dene.",
 +    "step_progress": "Adım {current}/{total}"
-   }
++  },
++  "greeting_morning": "İyi sabah",
++  "greeting_afternoon": "İyi öğleden sonra",
++  "greeting_evening": "İyi akşam"
  }
 diff --git a/packages/i18n/src/locales/tr-TR/empty-state.json b/packages/i18n/src/locales/tr-TR/empty-state.json
 index c326cea..475198a 100644
@@ -217792,7 +220586,7 @@ index 64f5136..16d956e 100644
        },
        "no_templates": {
 diff --git a/packages/i18n/src/locales/tr-TR/tour.json b/packages/i18n/src/locales/tr-TR/tour.json
-index f9457f1..f9921e9 100644
+index f9457f1..a0ec4ee 100644
 --- a/packages/i18n/src/locales/tr-TR/tour.json
 +++ b/packages/i18n/src/locales/tr-TR/tour.json
 @@ -69,7 +69,7 @@
@@ -217822,7 +220616,44 @@ index f9457f1..f9921e9 100644
        }
      },
      "navigation": {
-@@ -154,7 +154,7 @@
+@@ -150,11 +150,44 @@
+     "seed_data": {
+       "title": "İşte demo projeniz",
+       "description": "Projeler, çalışma alanınızda ekiplerinizi, görevlerinizi ve işleri bitirmek için ihtiyacınız olan her şeyi yönetmenize olanak tanır."
++    },
++    "onboarding": {
++      "welcome_title": "Welcome to Tequio, {name}",
++      "welcome_body": "We’re glad you’re starting with Tequio. You can manage your projects with ease — start by creating one.",
++      "take_tour": "Take a product tour",
++      "skip": "No thanks, I’ll explore it myself",
++      "back": "Back",
++      "next": "Next",
++      "create_project": "Create your first project",
++      "sidebar_title": "Let’s get started!",
++      "sidebar_subtitle": "Get more out of Tequio.",
++      "steps": {
++        "work_items": {
++          "title": "Plan with work items",
++          "description": "The work item is the building block of Tequio: almost everything else is organised around them and their properties."
++        },
++        "cycles": {
++          "title": "Move with cycles",
++          "description": "Cycles help your team move in short stretches, like the sprints of agile development."
++        },
++        "modules": {
++          "title": "Break into modules",
++          "description": "Modules break a big piece of work into manageable parts so you can organise it better."
++        },
++        "views": {
++          "title": "Filter with views",
++          "description": "Build your own filters to see only what matters to you, then save or share them in a couple of clicks."
++        },
++        "pages": {
++          "title": "Document with pages",
++          "description": "Use pages to jot down whatever comes up in a meeting or at the start of the day."
++        }
++      }
+     }
    },
    "get_started": {
      "title": "Merhaba {name}, hoş geldiniz!",
@@ -217831,7 +220662,7 @@ index f9457f1..f9921e9 100644
      "checklist_section": {
        "title": "Başlayın",
        "description": "Kurulumunuza başlayın ve fikirlerinizin daha hızlı hayata geçtiğini görün.",
-@@ -172,7 +172,7 @@
+@@ -172,7 +205,7 @@
            "title": "Bir sayfa oluşturun"
          },
          "item_5": {
@@ -217840,7 +220671,7 @@ index f9457f1..f9921e9 100644
          },
          "item_6": {
            "title": "Entegrasyonları bağlayın"
-@@ -188,8 +188,8 @@
+@@ -188,8 +221,8 @@
        "more_integrations": "Daha fazla entegrasyona göz atın"
      },
      "switch_to_plane_section": {
@@ -218268,7 +221099,7 @@ index 25a1f98..64286c8 100644
        "fixed_schedule": "Фіксований розклад",
        "schedule": {
 diff --git a/packages/i18n/src/locales/ua/common.json b/packages/i18n/src/locales/ua/common.json
-index 89bd906..cdfd372 100644
+index 89bd906..b2d359d 100644
 --- a/packages/i18n/src/locales/ua/common.json
 +++ b/packages/i18n/src/locales/ua/common.json
 @@ -244,7 +244,7 @@
@@ -218289,10 +221120,11 @@ index 89bd906..cdfd372 100644
      "choose_view_logs_from_setup_sh_and_docker_logs_to_be_sure": "Виберіть View Logs з setup.sh та логів Docker, щоб переконатися."
    },
    "customize_navigation": "Налаштувати навігацію",
-@@ -867,5 +867,491 @@
+@@ -867,5 +867,494 @@
        "description": "Експортуйте одиниці у формат JSON.",
        "short_description": "Експортувати як JSON"
      }
+-  }
 +  },
 +  "drive": {
 +    "title": "Files",
@@ -218779,7 +221611,10 @@ index 89bd906..cdfd372 100644
 +    "switch_account_description": "Якщо ви випадково зареєструвалися з {email}, тут можна змінити обліковий запис.",
 +    "sign_out_failed": "Не вдалося вийти. Спробуйте ще раз.",
 +    "step_progress": "Крок {current} з {total}"
-   }
++  },
++  "greeting_morning": "Доброго ранку",
++  "greeting_afternoon": "Доброго дня",
++  "greeting_evening": "Доброго вечора"
  }
 diff --git a/packages/i18n/src/locales/ua/empty-state.json b/packages/i18n/src/locales/ua/empty-state.json
 index a1672ce..4009715 100644
@@ -219024,7 +221859,7 @@ index bea8fa6..a58ffad 100644
                "invalid": "Некоректна email адреса",
                "maxLength": "Email підтримки має бути менше 255 символів"
 diff --git a/packages/i18n/src/locales/ua/tour.json b/packages/i18n/src/locales/ua/tour.json
-index 7dbec43..ffa74b8 100644
+index 7dbec43..82248a5 100644
 --- a/packages/i18n/src/locales/ua/tour.json
 +++ b/packages/i18n/src/locales/ua/tour.json
 @@ -69,7 +69,7 @@
@@ -219054,7 +221889,44 @@ index 7dbec43..ffa74b8 100644
        }
      },
      "navigation": {
-@@ -154,7 +154,7 @@
+@@ -150,11 +150,44 @@
+     "seed_data": {
+       "title": "Ось ваш демо-проект",
+       "description": "Проекти дозволяють вам керувати вашими командами, завданнями та всім, що вам потрібно для виконання роботи у вашому робочому просторі."
++    },
++    "onboarding": {
++      "welcome_title": "Welcome to Tequio, {name}",
++      "welcome_body": "We’re glad you’re starting with Tequio. You can manage your projects with ease — start by creating one.",
++      "take_tour": "Take a product tour",
++      "skip": "No thanks, I’ll explore it myself",
++      "back": "Back",
++      "next": "Next",
++      "create_project": "Create your first project",
++      "sidebar_title": "Let’s get started!",
++      "sidebar_subtitle": "Get more out of Tequio.",
++      "steps": {
++        "work_items": {
++          "title": "Plan with work items",
++          "description": "The work item is the building block of Tequio: almost everything else is organised around them and their properties."
++        },
++        "cycles": {
++          "title": "Move with cycles",
++          "description": "Cycles help your team move in short stretches, like the sprints of agile development."
++        },
++        "modules": {
++          "title": "Break into modules",
++          "description": "Modules break a big piece of work into manageable parts so you can organise it better."
++        },
++        "views": {
++          "title": "Filter with views",
++          "description": "Build your own filters to see only what matters to you, then save or share them in a couple of clicks."
++        },
++        "pages": {
++          "title": "Document with pages",
++          "description": "Use pages to jot down whatever comes up in a meeting or at the start of the day."
++        }
++      }
+     }
    },
    "get_started": {
      "title": "Привіт {name}, ласкаво просимо на борт!",
@@ -219063,7 +221935,7 @@ index 7dbec43..ffa74b8 100644
      "checklist_section": {
        "title": "Почати",
        "description": "Почніть налаштування та побачите, як ваші ідеї втілюються в життя швидше.",
-@@ -172,7 +172,7 @@
+@@ -172,7 +205,7 @@
            "title": "Створити сторінку"
          },
          "item_5": {
@@ -219072,7 +221944,7 @@ index 7dbec43..ffa74b8 100644
          },
          "item_6": {
            "title": "Зв язати інтеграції"
-@@ -188,8 +188,8 @@
+@@ -188,8 +221,8 @@
        "more_integrations": "Переглянути більше інтеграцій"
      },
      "switch_to_plane_section": {
@@ -219481,7 +222353,7 @@ index 8dec0fb..fd3adb2 100644
        "fixed_schedule": "Lịch trình cố định",
        "schedule": {
 diff --git a/packages/i18n/src/locales/vi-VN/common.json b/packages/i18n/src/locales/vi-VN/common.json
-index f9aae43..73181ce 100644
+index f9aae43..2ead8ae 100644
 --- a/packages/i18n/src/locales/vi-VN/common.json
 +++ b/packages/i18n/src/locales/vi-VN/common.json
 @@ -244,7 +244,7 @@
@@ -219511,10 +222383,11 @@ index f9aae43..73181ce 100644
    "in_app": "Trong ứng dụng",
    "forms": "Biểu mẫu",
    "milestones": "Cột mốc",
-@@ -867,5 +867,491 @@
+@@ -867,5 +867,494 @@
        "description": "Xuất mục công việc thành tệp JSON.",
        "short_description": "Xuất sang JSON"
      }
+-  }
 +  },
 +  "drive": {
 +    "title": "Files",
@@ -220001,7 +222874,10 @@ index f9aae43..73181ce 100644
 +    "switch_account_description": "Nếu bạn lỡ đăng ký bằng {email}, bạn có thể đổi tài khoản tại đây.",
 +    "sign_out_failed": "Không đăng xuất được. Vui lòng thử lại.",
 +    "step_progress": "Bước {current}/{total}"
-   }
++  },
++  "greeting_morning": "Chào buổi sáng Buổi sáng",
++  "greeting_afternoon": "Chào buổi sáng Buổi chiều",
++  "greeting_evening": "Chào buổi sáng Buổi tối"
  }
 diff --git a/packages/i18n/src/locales/vi-VN/empty-state.json b/packages/i18n/src/locales/vi-VN/empty-state.json
 index 3e6a3be..6da1341 100644
@@ -220402,7 +223278,7 @@ index 209c772..62ec893 100644
        },
        "no_templates": {
 diff --git a/packages/i18n/src/locales/vi-VN/tour.json b/packages/i18n/src/locales/vi-VN/tour.json
-index 69e10b6..e6a5794 100644
+index 69e10b6..603759d 100644
 --- a/packages/i18n/src/locales/vi-VN/tour.json
 +++ b/packages/i18n/src/locales/vi-VN/tour.json
 @@ -69,7 +69,7 @@
@@ -220432,7 +223308,44 @@ index 69e10b6..e6a5794 100644
        }
      },
      "navigation": {
-@@ -154,7 +154,7 @@
+@@ -150,11 +150,44 @@
+     "seed_data": {
+       "title": "Đây là dự án demo của bạn",
+       "description": "Dự án cho phép bạn quản lý nhóm, nhiệm vụ và mọi thứ bạn cần để hoàn thành công việc trong không gian làm việc của bạn."
++    },
++    "onboarding": {
++      "welcome_title": "Welcome to Tequio, {name}",
++      "welcome_body": "We’re glad you’re starting with Tequio. You can manage your projects with ease — start by creating one.",
++      "take_tour": "Take a product tour",
++      "skip": "No thanks, I’ll explore it myself",
++      "back": "Back",
++      "next": "Next",
++      "create_project": "Create your first project",
++      "sidebar_title": "Let’s get started!",
++      "sidebar_subtitle": "Get more out of Tequio.",
++      "steps": {
++        "work_items": {
++          "title": "Plan with work items",
++          "description": "The work item is the building block of Tequio: almost everything else is organised around them and their properties."
++        },
++        "cycles": {
++          "title": "Move with cycles",
++          "description": "Cycles help your team move in short stretches, like the sprints of agile development."
++        },
++        "modules": {
++          "title": "Break into modules",
++          "description": "Modules break a big piece of work into manageable parts so you can organise it better."
++        },
++        "views": {
++          "title": "Filter with views",
++          "description": "Build your own filters to see only what matters to you, then save or share them in a couple of clicks."
++        },
++        "pages": {
++          "title": "Document with pages",
++          "description": "Use pages to jot down whatever comes up in a meeting or at the start of the day."
++        }
++      }
+     }
    },
    "get_started": {
      "title": "Xin chào {name}, chào mừng!",
@@ -220441,7 +223354,7 @@ index 69e10b6..e6a5794 100644
      "checklist_section": {
        "title": "Bắt đầu",
        "description": "Bắt đầu thiết lập của bạn và xem ý tưởng của bạn trở thành hiện thực nhanh hơn.",
-@@ -172,7 +172,7 @@
+@@ -172,7 +205,7 @@
            "title": "Tạo trang"
          },
          "item_5": {
@@ -220450,7 +223363,7 @@ index 69e10b6..e6a5794 100644
          },
          "item_6": {
            "title": "Liên kết Tích hợp"
-@@ -188,8 +188,8 @@
+@@ -188,8 +221,8 @@
        "more_integrations": "Duyệt thêm tích hợp"
      },
      "switch_to_plane_section": {
@@ -220905,7 +223818,7 @@ index 3f057bd..9322b6f 100644
        "fixed_schedule": "固定计划",
        "schedule": {
 diff --git a/packages/i18n/src/locales/zh-CN/common.json b/packages/i18n/src/locales/zh-CN/common.json
-index dd67d92..d21fb35 100644
+index dd67d92..afbb61b 100644
 --- a/packages/i18n/src/locales/zh-CN/common.json
 +++ b/packages/i18n/src/locales/zh-CN/common.json
 @@ -820,7 +820,7 @@
@@ -220917,10 +223830,11 @@ index dd67d92..d21fb35 100644
      "choose_view_logs_from_setup_sh_and_docker_logs_to_be_sure": "请选择“查看日志”来查看 setup.sh 和 Docker 日志，以确认问题。"
    },
    "customize_navigation": "自定义导航",
-@@ -867,5 +867,491 @@
+@@ -867,5 +867,494 @@
        "description": "将工作项导出为 JSON 文件。",
        "short_description": "导出为 JSON"
      }
+-  }
 +  },
 +  "drive": {
 +    "title": "Files",
@@ -221407,7 +224321,10 @@ index dd67d92..d21fb35 100644
 +    "switch_account_description": "如果你误用 {email} 注册，可以在这里切换到其他账户。",
 +    "sign_out_failed": "无法退出登录，请重试。",
 +    "step_progress": "第 {current} 步，共 {total} 步"
-   }
++  },
++  "greeting_morning": "早上 早上",
++  "greeting_afternoon": "早上 下午",
++  "greeting_evening": "早上 晚上"
  }
 diff --git a/packages/i18n/src/locales/zh-CN/empty-state.json b/packages/i18n/src/locales/zh-CN/empty-state.json
 index 6dd4704..b79cf53 100644
@@ -221755,7 +224672,7 @@ index 05112ec..35ac032 100644
                "invalid": "无效的邮箱地址",
                "maxLength": "支持邮箱应少于255个字符"
 diff --git a/packages/i18n/src/locales/zh-CN/tour.json b/packages/i18n/src/locales/zh-CN/tour.json
-index 431cbad..aad521b 100644
+index 431cbad..6c2da3b 100644
 --- a/packages/i18n/src/locales/zh-CN/tour.json
 +++ b/packages/i18n/src/locales/zh-CN/tour.json
 @@ -113,7 +113,7 @@
@@ -221767,6 +224684,46 @@ index 431cbad..aad521b 100644
        }
      },
      "navigation": {
+@@ -150,6 +150,39 @@
+     "seed_data": {
+       "title": "这是您的演示项目",
+       "description": "项目让您可以管理团队、任务以及在工作区中完成工作所需的一切。"
++    },
++    "onboarding": {
++      "welcome_title": "Welcome to Tequio, {name}",
++      "welcome_body": "We’re glad you’re starting with Tequio. You can manage your projects with ease — start by creating one.",
++      "take_tour": "Take a product tour",
++      "skip": "No thanks, I’ll explore it myself",
++      "back": "Back",
++      "next": "Next",
++      "create_project": "Create your first project",
++      "sidebar_title": "Let’s get started!",
++      "sidebar_subtitle": "Get more out of Tequio.",
++      "steps": {
++        "work_items": {
++          "title": "Plan with work items",
++          "description": "The work item is the building block of Tequio: almost everything else is organised around them and their properties."
++        },
++        "cycles": {
++          "title": "Move with cycles",
++          "description": "Cycles help your team move in short stretches, like the sprints of agile development."
++        },
++        "modules": {
++          "title": "Break into modules",
++          "description": "Modules break a big piece of work into manageable parts so you can organise it better."
++        },
++        "views": {
++          "title": "Filter with views",
++          "description": "Build your own filters to see only what matters to you, then save or share them in a couple of clicks."
++        },
++        "pages": {
++          "title": "Document with pages",
++          "description": "Use pages to jot down whatever comes up in a meeting or at the start of the day."
++        }
++      }
+     }
+   },
+   "get_started": {
 diff --git a/packages/i18n/src/locales/zh-CN/wiki.json b/packages/i18n/src/locales/zh-CN/wiki.json
 index 7ee16ca..c3f3a6a 100644
 --- a/packages/i18n/src/locales/zh-CN/wiki.json
@@ -222162,7 +225119,7 @@ index 27b9a4b..c71e752 100644
        "fixed_schedule": "固定排程",
        "schedule": {
 diff --git a/packages/i18n/src/locales/zh-TW/common.json b/packages/i18n/src/locales/zh-TW/common.json
-index 834a2d9..1975e90 100644
+index 834a2d9..3f7d774 100644
 --- a/packages/i18n/src/locales/zh-TW/common.json
 +++ b/packages/i18n/src/locales/zh-TW/common.json
 @@ -244,7 +244,7 @@
@@ -222183,10 +225140,11 @@ index 834a2d9..1975e90 100644
      "choose_view_logs_from_setup_sh_and_docker_logs_to_be_sure": "從 setup.sh 和 Docker 日誌中選擇 View Logs 來確認。"
    },
    "customize_navigation": "自訂導覽",
-@@ -867,5 +867,491 @@
+@@ -867,5 +867,494 @@
        "description": "將工作事項匯出為 JSON 檔案。",
        "short_description": "匯出為 JSON"
      }
+-  }
 +  },
 +  "drive": {
 +    "title": "Files",
@@ -222673,7 +225631,10 @@ index 834a2d9..1975e90 100644
 +    "switch_account_description": "如果你誤用 {email} 註冊，可以在這裡切換到其他帳號。",
 +    "sign_out_failed": "無法登出，請再試一次。",
 +    "step_progress": "第 {current} 步，共 {total} 步"
-   }
++  },
++  "greeting_morning": "早安 早上",
++  "greeting_afternoon": "早安 下午",
++  "greeting_evening": "早安 晚上"
  }
 diff --git a/packages/i18n/src/locales/zh-TW/empty-state.json b/packages/i18n/src/locales/zh-TW/empty-state.json
 index ebb0ad8..5ee24a0 100644
@@ -223037,7 +225998,7 @@ index 8610f8f..6bfeb12 100644
                "invalid": "無效的電子郵件地址",
                "maxLength": "支持電子郵件應少於255個字符"
 diff --git a/packages/i18n/src/locales/zh-TW/tour.json b/packages/i18n/src/locales/zh-TW/tour.json
-index f2599d4..9e10671 100644
+index f2599d4..aa2392b 100644
 --- a/packages/i18n/src/locales/zh-TW/tour.json
 +++ b/packages/i18n/src/locales/zh-TW/tour.json
 @@ -113,7 +113,7 @@
@@ -223049,6 +226010,46 @@ index f2599d4..9e10671 100644
        }
      },
      "navigation": {
+@@ -150,6 +150,39 @@
+     "seed_data": {
+       "title": "這是您的演示項目",
+       "description": "項目讓您可以管理團隊、任務以及在工作區中完成工作所需的一切。"
++    },
++    "onboarding": {
++      "welcome_title": "Welcome to Tequio, {name}",
++      "welcome_body": "We’re glad you’re starting with Tequio. You can manage your projects with ease — start by creating one.",
++      "take_tour": "Take a product tour",
++      "skip": "No thanks, I’ll explore it myself",
++      "back": "Back",
++      "next": "Next",
++      "create_project": "Create your first project",
++      "sidebar_title": "Let’s get started!",
++      "sidebar_subtitle": "Get more out of Tequio.",
++      "steps": {
++        "work_items": {
++          "title": "Plan with work items",
++          "description": "The work item is the building block of Tequio: almost everything else is organised around them and their properties."
++        },
++        "cycles": {
++          "title": "Move with cycles",
++          "description": "Cycles help your team move in short stretches, like the sprints of agile development."
++        },
++        "modules": {
++          "title": "Break into modules",
++          "description": "Modules break a big piece of work into manageable parts so you can organise it better."
++        },
++        "views": {
++          "title": "Filter with views",
++          "description": "Build your own filters to see only what matters to you, then save or share them in a couple of clicks."
++        },
++        "pages": {
++          "title": "Document with pages",
++          "description": "Use pages to jot down whatever comes up in a meeting or at the start of the day."
++        }
++      }
+     }
+   },
+   "get_started": {
 diff --git a/packages/i18n/src/locales/zh-TW/wiki.json b/packages/i18n/src/locales/zh-TW/wiki.json
 index e53c9ae..b855919 100644
 --- a/packages/i18n/src/locales/zh-TW/wiki.json
