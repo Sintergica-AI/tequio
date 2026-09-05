@@ -14,7 +14,8 @@ despliegue y quedarse en un estado mixto silencioso.
 
 ## Requisitos del servidor
 
-- Linux con **systemd** y **Docker Engine + plugin `docker compose` v2**.
+- Linux **x86_64** con **systemd** y **Docker Engine + plugin `docker compose` v2**.
+  Las imágenes no se publican para ARM; el instalador lo comprueba y se detiene.
 - 4 vCPU y 8 GB de RAM como mínimo cómodo (arranca con 4 GB, va justo).
 - 40 GB de disco: las imágenes ocupan ~3 GB y los respaldos se acumulan.
 - Un **registro DNS A** apuntando a la IP del servidor.

@@ -67,6 +67,18 @@ say() { echo "==> $*"; }
 
 # --- Requisitos ---------------------------------------------------------------
 [ "$(id -u)" -eq 0 ] || die "hay que ejecutarlo como root (sudo)."
+
+# Las imágenes se construyen en los runners de GitHub, que son x86_64, y no se
+# publican para ARM. Sin esta comprobación el fallo llega mucho más tarde y en
+# forma de "no matching manifest for linux/arm64", que no menciona ni Tequio ni
+# la arquitectura como causa.
+ARCH="$(uname -m)"
+case "$ARCH" in
+  x86_64|amd64) ;;
+  *) die "este servidor es $ARCH y las imágenes de Tequio solo se publican para
+       x86_64. Hace falta un servidor x86_64 (o construir las imágenes para esta
+       arquitectura desde el repositorio)." ;;
+esac
 command -v docker >/dev/null || die "falta Docker. Instálalo con las instrucciones oficiales
        de tu distribución (https://docs.docker.com/engine/install/) y vuelve a lanzar esto."
 docker compose version >/dev/null 2>&1 || die "falta el plugin 'docker compose' (v2)."
