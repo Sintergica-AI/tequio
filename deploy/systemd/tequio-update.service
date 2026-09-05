@@ -1,6 +1,6 @@
 [Unit]
 Description=Tequio · comprobar y aplicar actualizaciones
-Documentation=https://github.com/Sintergica-AI/plane-ce-sintergica
+Documentation=https://github.com/Sintergica-AI/tequio
 After=docker.service network-online.target
 Wants=network-online.target
 Requires=docker.service

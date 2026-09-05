@@ -109,8 +109,8 @@ fuente y **no requiere migraciones de base de datos**, lo que mantiene el riesgo
 al mínimo y permite revertir en un comando.
 
 ```bash
-git clone git@github.com:Sintergica-AI/plane-ce-sintergica.git
-cd plane-ce-sintergica/patch
+git clone git@github.com:Sintergica-AI/tequio.git
+cd tequio/patch
 docker build -t plane-backend-custom:v1.4.2-mcp .
 ```
 

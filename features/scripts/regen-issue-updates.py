@@ -15,7 +15,7 @@ def _ancestro_con(sub, que):
 
     El árbol de trabajo y el repositorio colocan estos scripts en sitios
     distintos (`sintergica-features/` suelto vs `features/scripts/` y
-    `features/verify/` dentro de plane-ce-sintergica), así que una ruta relativa
+    `features/verify/` dentro del repo tequio), así que una ruta relativa
     fija funciona en uno y falla en el otro. Se busca y se AFIRMA el hallazgo:
     mejor un error que diga qué falta que trabajar sobre el árbol equivocado.
     """
