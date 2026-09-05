@@ -15,9 +15,13 @@
 #    ahi NO se commitea nunca. Si alguien commitea, `git diff HEAD` queda vacio
 #    y el parche se regenera vacio, tambien en silencio.
 #
-# 3. La lista de rutas se queda corta cuando el arbol crece. Ya paso tres veces:
-#    apps/admin fuera de sync-web.sh, y apps/space y packages/propel fuera del
-#    patch (los logotipos viven en propel: sin el, el rebranding sale a medias).
+# 3. La lista de rutas se queda corta cuando el arbol crece. Ya paso cuatro veces:
+#    apps/admin fuera de sync-web.sh; apps/space y packages/propel fuera del
+#    patch (los logotipos viven en propel: sin el, el rebranding sale a medias);
+#    y packages/types y packages/utils fuera del patch (ahi viven el tipo de las
+#    claves de configuracion de instancia y los criterios de contrasena, asi que
+#    sin ellos la pantalla de alta compila pero se ve a medio traducir y la
+#    clave nueva del proveedor de IA ni siquiera tipa).
 #
 # Las tres fallan en silencio, asi que el resultado se verifica solo. Si una
 # asercion salta, NO se toca el parche existente.
@@ -31,11 +35,12 @@ trap 'rm -f "$TMP"' EXIT
 PATHS=(
   apps/web apps/admin apps/space apps/live
   packages/constants packages/editor packages/i18n packages/propel
+  packages/types packages/utils
   pnpm-lock.yaml
 )
 # Minimos esperados por directorio. No son cifras magicas: son "si esto baja de
 # aqui, algo se quedo fuera". Subirlos cuando el arbol crezca de verdad.
-declare -a MIN_DIRS=(packages/propel:5 apps/space:10 apps/admin:50 apps/web:200 packages/i18n:100)
+declare -a MIN_DIRS=(packages/propel:5 apps/space:10 apps/admin:50 apps/web:200 packages/i18n:100 packages/types:1 packages/utils:1)
 MIN_TOTAL=400
 
 cd "$SRC"

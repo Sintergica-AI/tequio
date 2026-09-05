@@ -63,6 +63,7 @@ def get_config():
         api_key,
         provider,
         model,
+        llm_base_url,
         a_api_key,
         a_provider,
         a_model,
@@ -74,6 +75,7 @@ def get_config():
             {"key": "LLM_API_KEY", "default": os.environ.get("LLM_API_KEY")},
             {"key": "LLM_PROVIDER", "default": os.environ.get("LLM_PROVIDER", "openai")},
             {"key": "LLM_MODEL", "default": os.environ.get("LLM_MODEL")},
+            {"key": "LLM_BASE_URL", "default": os.environ.get("LLM_BASE_URL", "")},
             {"key": "ASSISTANT_API_KEY", "default": os.environ.get("ASSISTANT_API_KEY")},
             {"key": "ASSISTANT_PROVIDER", "default": os.environ.get("ASSISTANT_PROVIDER")},
             {"key": "ASSISTANT_MODEL", "default": os.environ.get("ASSISTANT_MODEL")},
@@ -88,7 +90,10 @@ def get_config():
 
     provider = (a_provider or provider or "openai").strip().lower()
     api_key = a_api_key or api_key
-    base_url = a_base_url or PROVIDER_BASE_URLS.get(provider)
+    # Orden: lo específico del asistente, luego la URL base del panel
+    # (LLM_BASE_URL, que es como se elige proveedor desde /god-mode/ai/), y
+    # solo al final el mapa por nombre de proveedor.
+    base_url = a_base_url or (llm_base_url or "").strip() or PROVIDER_BASE_URLS.get(provider)
 
     # El selector de god-mode permite marcar varios modelos y los guarda
     # separados por comas en una sola clave. Enviar la cadena entera como

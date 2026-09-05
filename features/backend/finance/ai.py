@@ -47,11 +47,12 @@ class FinanceAINotConfigured(Exception):
 
 
 def get_llm_config():
-    api_key, provider, model = get_configuration_value(
+    api_key, provider, model, base_url = get_configuration_value(
         [
             {"key": "LLM_API_KEY", "default": os.environ.get("LLM_API_KEY")},
             {"key": "LLM_PROVIDER", "default": os.environ.get("LLM_PROVIDER", "openai")},
             {"key": "LLM_MODEL", "default": os.environ.get("LLM_MODEL")},
+            {"key": "LLM_BASE_URL", "default": os.environ.get("LLM_BASE_URL", "")},
         ]
     )
     provider = (provider or "openai").strip().lower()
@@ -62,7 +63,14 @@ def get_llm_config():
         raise FinanceAINotConfigured(
             "Falta configurar el proveedor de IA. Ve a /god-mode/ai/ y define la clave y el modelo."
         )
-    return {"api_key": api_key, "models": models, "base_url": PROVIDER_BASE_URLS.get(provider)}
+    # LLM_BASE_URL manda: es la clave con la que el panel elige proveedor
+    # (Sintergica AI habla el protocolo de OpenAI). El mapa por nombre queda
+    # como respaldo para instancias que aún no la tengan puesta.
+    return {
+        "api_key": api_key,
+        "models": models,
+        "base_url": (base_url or "").strip() or PROVIDER_BASE_URLS.get(provider),
+    }
 
 
 def _client(config):

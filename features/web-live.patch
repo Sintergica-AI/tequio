@@ -1,8 +1,44 @@
 diff --git a/apps/admin/app/(all)/(dashboard)/ai/form.tsx b/apps/admin/app/(all)/(dashboard)/ai/form.tsx
-index 991e2e6..a0bc23e 100644
+index 991e2e6..fd7718e 100644
 --- a/apps/admin/app/(all)/(dashboard)/ai/form.tsx
 +++ b/apps/admin/app/(all)/(dashboard)/ai/form.tsx
-@@ -41,7 +41,7 @@ export function InstanceAIForm(props: IInstanceAIForm) {
+@@ -1,11 +1,11 @@
+ /**
+  * Copyright (c) 2023-present Plane Software, Inc. and contributors
++ * Modificaciones (c) 2026 Sintergica AI - proveedor Sintergica AI
+  * SPDX-License-Identifier: AGPL-3.0-only
+  * See the LICENSE file for details.
+  */
+ 
+ import { useForm } from "react-hook-form";
+-import { Lightbulb } from "lucide-react";
+ import { Button } from "@plane/propel/button";
+ import { TOAST_TYPE, setToast } from "@plane/propel/toast";
+ import type { IFormattedInstanceConfiguration, TInstanceAIConfigurationKeys } from "@plane/types";
+@@ -21,6 +21,14 @@ type IInstanceAIForm = {
+ 
+ type AIFormValues = Record<TInstanceAIConfigurationKeys, string>;
+ 
++// Sintergica AI habla el protocolo de OpenAI, así que el proveedor se define por
++// su URL base y no por un nombre de una lista cerrada. Se deja editable —y no
++// fija— para que una instancia pueda apuntar a otro servicio compatible sin
++// tocar el código, que es lo que pasa en cuanto un cliente trae su propio
++// proveedor.
++const SINTERGICA_BASE_URL = "https://lattice.sintergica.ai/v1";
++const SINTERGICA_CONSOLE_URL = "https://lattice.sintergica.ai/";
++
+ export function InstanceAIForm(props: IInstanceAIForm) {
+   const { config } = props;
+   // store
+@@ -34,6 +42,7 @@ export function InstanceAIForm(props: IInstanceAIForm) {
+     defaultValues: {
+       LLM_API_KEY: config["LLM_API_KEY"],
+       LLM_MODEL: config["LLM_MODEL"],
++      LLM_BASE_URL: config["LLM_BASE_URL"] || SINTERGICA_BASE_URL,
+     },
+   });
+ 
+@@ -41,47 +50,58 @@ export function InstanceAIForm(props: IInstanceAIForm) {
      {
        key: "LLM_MODEL",
        type: "text",
@@ -10,20 +46,28 @@ index 991e2e6..a0bc23e 100644
 +      label: "Modelo",
        description: (
          <>
-           Choose an OpenAI engine.{" "}
-@@ -50,9 +50,9 @@ export function InstanceAIForm(props: IInstanceAIForm) {
+-          Choose an OpenAI engine.{" "}
++          El identificador tal y como lo publica el proveedor. Consulta los disponibles en{" "}
+           <a
+-            href="https://platform.openai.com/docs/models/overview"
++            href={SINTERGICA_CONSOLE_URL}
              target="_blank"
              className="text-accent-primary hover:underline"
              rel="noreferrer"
 -            aria-label="OpenAI models documentation"
-+            aria-label="documentación de modelos de OpenAI"
++            aria-label="consola de Sintergica AI"
            >
 -            Learn more
-+            Más información
++            Sintergica AI
            </a>
++          .
          </>
        ),
-@@ -63,7 +63,7 @@ export function InstanceAIForm(props: IInstanceAIForm) {
+-      placeholder: "gpt-4o-mini",
++      placeholder: "lattice/claude-sonnet-5",
+       error: Boolean(errors.LLM_MODEL),
+       required: false,
+     },
      {
        key: "LLM_API_KEY",
        type: "password",
@@ -31,17 +75,41 @@ index 991e2e6..a0bc23e 100644
 +      label: "Clave de API",
        description: (
          <>
-           You will find your API key{" "}
-@@ -72,7 +72,7 @@ export function InstanceAIForm(props: IInstanceAIForm) {
+-          You will find your API key{" "}
++          Se obtiene en{" "}
+           <a
+-            href="https://platform.openai.com/api-keys"
++            href={SINTERGICA_CONSOLE_URL}
              target="_blank"
              className="text-accent-primary hover:underline"
              rel="noreferrer"
 -            aria-label="OpenAI API keys page"
-+            aria-label="página de claves de API de OpenAI"
++            aria-label="obtener una clave de API en Sintergica AI"
            >
-             here.
+-            here.
++            lattice.sintergica.ai
            </a>
-@@ -91,8 +91,8 @@ export function InstanceAIForm(props: IInstanceAIForm) {
++          .
+         </>
+       ),
+-      placeholder: "sk-asddassdfasdefqsdfasd23das3dasdcasd",
++      placeholder: "sk-...",
+       error: Boolean(errors.LLM_API_KEY),
+       required: false,
+     },
++    {
++      key: "LLM_BASE_URL",
++      type: "text",
++      label: "URL base de la API",
++      description: <>Cámbiala solo para usar otro servicio compatible con OpenAI.</>,
++      placeholder: SINTERGICA_BASE_URL,
++      error: Boolean(errors.LLM_BASE_URL),
++      required: false,
++    },
+   ];
+ 
+   const onSubmit = async (formData: AIFormValues) => {
+@@ -91,8 +111,8 @@ export function InstanceAIForm(props: IInstanceAIForm) {
        .then(() =>
          setToast({
            type: TOAST_TYPE.SUCCESS,
@@ -52,24 +120,39 @@ index 991e2e6..a0bc23e 100644
          })
        )
        .catch((err) => console.error(err));
-@@ -103,7 +103,7 @@ export function InstanceAIForm(props: IInstanceAIForm) {
+@@ -102,8 +122,10 @@ export function InstanceAIForm(props: IInstanceAIForm) {
+     <div className="space-y-8">
        <div className="space-y-3">
          <div>
-           <div className="pb-1 text-18 font-medium text-primary">OpenAI</div>
+-          <div className="pb-1 text-18 font-medium text-primary">OpenAI</div>
 -          <div className="text-13 font-regular text-tertiary">If you use ChatGPT, this is for you.</div>
-+          <div className="text-13 font-regular text-tertiary">Credenciales del proveedor de modelos.</div>
++          <div className="pb-1 text-18 font-medium text-primary">Sintergica AI</div>
++          <div className="text-13 font-regular text-tertiary">
++            Credenciales del proveedor de modelos. La API es compatible con OpenAI.
++          </div>
          </div>
          <div className="grid-col grid w-full grid-cols-1 items-center justify-between gap-x-12 gap-y-8 lg:grid-cols-3">
            {aiFormFields.map((field) => (
-@@ -124,7 +124,7 @@ export function InstanceAIForm(props: IInstanceAIForm) {
+@@ -124,18 +146,8 @@ export function InstanceAIForm(props: IInstanceAIForm) {
  
        <div className="flex flex-col items-start gap-4">
          <Button variant="primary" size="lg" onClick={handleSubmit(onSubmit)} loading={isSubmitting}>
 -          {isSubmitting ? "Saving" : "Save changes"}
 +          {isSubmitting ? "Guardando" : "Guardar cambios"}
          </Button>
- 
-         <div className="relative inline-flex items-center gap-1.5 rounded-sm border border-accent-subtle bg-accent-subtle px-4 py-2 text-caption-sm-regular text-accent-secondary">
+-
+-        <div className="relative inline-flex items-center gap-1.5 rounded-sm border border-accent-subtle bg-accent-subtle px-4 py-2 text-caption-sm-regular text-accent-secondary">
+-          <Lightbulb className="size-4" />
+-          <div>
+-            If you have a preferred AI models vendor, please get in{" "}
+-            <a className="font-medium underline" href="https://plane.so/contact">
+-              touch with us.
+-            </a>
+-          </div>
+-        </div>
+       </div>
+     </div>
+   );
 diff --git a/apps/admin/app/(all)/(dashboard)/ai/page.tsx b/apps/admin/app/(all)/(dashboard)/ai/page.tsx
 index dec3200..4b3dabb 100644
 --- a/apps/admin/app/(all)/(dashboard)/ai/page.tsx
@@ -1173,10 +1256,34 @@ index c059b02..6f9dde5 100644
                      )}
                    </div>
 diff --git a/apps/admin/app/(all)/(dashboard)/general/form.tsx b/apps/admin/app/(all)/(dashboard)/general/form.tsx
-index e38d784..d0cc1f0 100644
+index e38d784..658e57c 100644
 --- a/apps/admin/app/(all)/(dashboard)/general/form.tsx
 +++ b/apps/admin/app/(all)/(dashboard)/general/form.tsx
-@@ -46,8 +46,8 @@ export const GeneralConfigurationForm = observer(function GeneralConfigurationFo
+@@ -5,13 +5,12 @@
+  */
+ 
+ import { observer } from "mobx-react";
+-import { Controller, useForm } from "react-hook-form";
+-import { Telescope } from "lucide-react";
++import { useForm } from "react-hook-form";
+ // plane imports
+ import { Button } from "@plane/propel/button";
+ import { TOAST_TYPE, setToast } from "@plane/propel/toast";
+ import type { IInstance, IInstanceAdmin } from "@plane/types";
+-import { Input, ToggleSwitch } from "@plane/ui";
++import { Input } from "@plane/ui";
+ // components
+ import { ControllerInput } from "@/components/common/controller-input";
+ // hooks
+@@ -35,7 +34,6 @@ export const GeneralConfigurationForm = observer(function GeneralConfigurationFo
+   } = useForm<Partial<IInstance>>({
+     defaultValues: {
+       instance_name: instance?.instance_name,
+-      is_telemetry_enabled: instance?.is_telemetry_enabled,
+     },
+   });
+ 
+@@ -46,8 +44,8 @@ export const GeneralConfigurationForm = observer(function GeneralConfigurationFo
        .then(() =>
          setToast({
            type: TOAST_TYPE.SUCCESS,
@@ -1187,7 +1294,7 @@ index e38d784..d0cc1f0 100644
          })
        )
        .catch((err) => console.error(err));
-@@ -56,27 +56,27 @@ export const GeneralConfigurationForm = observer(function GeneralConfigurationFo
+@@ -56,27 +54,27 @@ export const GeneralConfigurationForm = observer(function GeneralConfigurationFo
    return (
      <div className="space-y-8">
        <div className="space-y-4">
@@ -1220,7 +1327,7 @@ index e38d784..d0cc1f0 100644
                className="w-full cursor-not-allowed !text-placeholder"
                autoComplete="on"
                disabled
-@@ -84,7 +84,7 @@ export const GeneralConfigurationForm = observer(function GeneralConfigurationFo
+@@ -84,7 +82,7 @@ export const GeneralConfigurationForm = observer(function GeneralConfigurationFo
            </div>
  
            <div className="flex flex-col gap-1">
@@ -1229,28 +1336,51 @@ index e38d784..d0cc1f0 100644
              <Input
                id="instance_id"
                name="instance_id"
-@@ -98,7 +98,7 @@ export const GeneralConfigurationForm = observer(function GeneralConfigurationFo
+@@ -97,43 +95,6 @@ export const GeneralConfigurationForm = observer(function GeneralConfigurationFo
+         </div>
        </div>
  
-       <div className="space-y-6">
+-      <div className="space-y-6">
 -        <div className="border-b border-subtle pb-1.5 text-16 font-medium text-primary">Telemetry</div>
-+        <div className="border-b border-subtle pb-1.5 text-16 font-medium text-primary">Telemetría</div>
-         <div className="flex items-center gap-14">
-           <div className="flex grow items-center gap-4">
-             <div className="shrink-0">
-@@ -107,9 +107,9 @@ export const GeneralConfigurationForm = observer(function GeneralConfigurationFo
-               </div>
-             </div>
-             <div className="grow">
+-        <div className="flex items-center gap-14">
+-          <div className="flex grow items-center gap-4">
+-            <div className="shrink-0">
+-              <div className="flex size-11 items-center justify-center rounded-lg bg-layer-1">
+-                <Telescope className="size-5 text-tertiary" />
+-              </div>
+-            </div>
+-            <div className="grow">
 -              <div className="text-13 leading-5 font-medium text-primary">Let Plane collect anonymous usage data</div>
-+              <div className="text-13 leading-5 font-medium text-primary">Permitir la recogida de datos de uso anónimos</div>
-               <div className="text-11 leading-5 font-regular text-tertiary">
+-              <div className="text-11 leading-5 font-regular text-tertiary">
 -                No PII is collected.This anonymized data is used to understand how you use Plane and build new features
-+                No PII is collected.This anonymized data is used to understand how you use Tequio and build new features
-                 in line with{" "}
-                 <a
-                   href="https://developers.plane.so/self-hosting/telemetry"
-@@ -143,7 +143,7 @@ export const GeneralConfigurationForm = observer(function GeneralConfigurationFo
+-                in line with{" "}
+-                <a
+-                  href="https://developers.plane.so/self-hosting/telemetry"
+-                  target="_blank"
+-                  className="text-accent-primary hover:underline"
+-                  rel="noreferrer"
+-                >
+-                  our Telemetry Policy.
+-                </a>
+-              </div>
+-            </div>
+-          </div>
+-          <div className={`shrink-0 ${isSubmitting && "opacity-70"}`}>
+-            <Controller
+-              control={control}
+-              name="is_telemetry_enabled"
+-              render={({ field: { value, onChange } }) => (
+-                <ToggleSwitch value={value ?? false} onChange={onChange} size="sm" disabled={isSubmitting} />
+-              )}
+-            />
+-          </div>
+-        </div>
+-      </div>
+-
+       <div>
+         <Button
+           variant="primary"
+@@ -143,7 +104,7 @@ export const GeneralConfigurationForm = observer(function GeneralConfigurationFo
            }}
            loading={isSubmitting}
          >
@@ -1284,75 +1414,149 @@ index cb0a8c6..0a57d92 100644
  
  export default observer(GeneralPage);
 diff --git a/apps/admin/app/(all)/(dashboard)/image/form.tsx b/apps/admin/app/(all)/(dashboard)/image/form.tsx
-index 7a2b165..ad1651f 100644
+deleted file mode 100644
+index 7a2b165..0000000
 --- a/apps/admin/app/(all)/(dashboard)/image/form.tsx
-+++ b/apps/admin/app/(all)/(dashboard)/image/form.tsx
-@@ -41,8 +41,8 @@ export function InstanceImageConfigForm(props: IInstanceImageConfigForm) {
-       .then(() =>
-         setToast({
-           type: TOAST_TYPE.SUCCESS,
++++ /dev/null
+@@ -1,86 +0,0 @@
+-/**
+- * Copyright (c) 2023-present Plane Software, Inc. and contributors
+- * SPDX-License-Identifier: AGPL-3.0-only
+- * See the LICENSE file for details.
+- */
+-
+-import { useForm } from "react-hook-form";
+-import { Button } from "@plane/propel/button";
+-import { TOAST_TYPE, setToast } from "@plane/propel/toast";
+-import type { IFormattedInstanceConfiguration, TInstanceImageConfigurationKeys } from "@plane/types";
+-// components
+-import { ControllerInput } from "@/components/common/controller-input";
+-// hooks
+-import { useInstance } from "@/hooks/store";
+-
+-type IInstanceImageConfigForm = {
+-  config: IFormattedInstanceConfiguration;
+-};
+-
+-type ImageConfigFormValues = Record<TInstanceImageConfigurationKeys, string>;
+-
+-export function InstanceImageConfigForm(props: IInstanceImageConfigForm) {
+-  const { config } = props;
+-  // store hooks
+-  const { updateInstanceConfigurations } = useInstance();
+-  // form data
+-  const {
+-    handleSubmit,
+-    control,
+-    formState: { errors, isSubmitting },
+-  } = useForm<ImageConfigFormValues>({
+-    defaultValues: {
+-      UNSPLASH_ACCESS_KEY: config["UNSPLASH_ACCESS_KEY"],
+-    },
+-  });
+-
+-  const onSubmit = async (formData: ImageConfigFormValues) => {
+-    const payload: Partial<ImageConfigFormValues> = { ...formData };
+-
+-    await updateInstanceConfigurations(payload)
+-      .then(() =>
+-        setToast({
+-          type: TOAST_TYPE.SUCCESS,
 -          title: "Success",
 -          message: "Image Configuration Settings updated successfully",
-+          title: "Listo",
-+          message: "Ajustes de imágenes guardados",
-         })
-       )
-       .catch((err) => console.error(err));
-@@ -55,18 +55,18 @@ export function InstanceImageConfigForm(props: IInstanceImageConfigForm) {
-           control={control}
-           type="password"
-           name="UNSPLASH_ACCESS_KEY"
+-        })
+-      )
+-      .catch((err) => console.error(err));
+-  };
+-
+-  return (
+-    <div className="space-y-8">
+-      <div className="grid-col grid w-full grid-cols-1 items-center justify-between gap-x-16 gap-y-8 lg:grid-cols-2">
+-        <ControllerInput
+-          control={control}
+-          type="password"
+-          name="UNSPLASH_ACCESS_KEY"
 -          label="Access key from your Unsplash account"
-+          label="Clave de acceso de tu cuenta de Unsplash"
-           description={
-             <>
+-          description={
+-            <>
 -              You will find your access key in your Unsplash developer console.&nbsp;
-+              Encontrarás la clave en tu consola de desarrollador de Unsplash.&nbsp;
-               <a
-                 href="https://unsplash.com/documentation#creating-a-developer-account"
-                 target="_blank"
-                 className="text-accent-primary hover:underline"
-                 rel="noreferrer"
+-              <a
+-                href="https://unsplash.com/documentation#creating-a-developer-account"
+-                target="_blank"
+-                className="text-accent-primary hover:underline"
+-                rel="noreferrer"
 -                aria-label="Unsplash developer account documentation"
-+                aria-label="documentación de la cuenta de desarrollador de Unsplash"
-               >
+-              >
 -                Learn more.
-+                Más información.
-               </a>
-             </>
-           }
-@@ -78,7 +78,7 @@ export function InstanceImageConfigForm(props: IInstanceImageConfigForm) {
- 
-       <div>
-         <Button variant="primary" size="lg" onClick={handleSubmit(onSubmit)} loading={isSubmitting}>
+-              </a>
+-            </>
+-          }
+-          placeholder="oXgq-sdfadsaeweqasdfasdf3234234rassd"
+-          error={Boolean(errors.UNSPLASH_ACCESS_KEY)}
+-          required
+-        />
+-      </div>
+-
+-      <div>
+-        <Button variant="primary" size="lg" onClick={handleSubmit(onSubmit)} loading={isSubmitting}>
 -          {isSubmitting ? "Saving" : "Save changes"}
-+          {isSubmitting ? "Guardando" : "Guardar cambios"}
-         </Button>
-       </div>
-     </div>
+-        </Button>
+-      </div>
+-    </div>
+-  );
+-}
 diff --git a/apps/admin/app/(all)/(dashboard)/image/page.tsx b/apps/admin/app/(all)/(dashboard)/image/page.tsx
-index e410e87..c5b7e6f 100644
+deleted file mode 100644
+index e410e87..0000000
 --- a/apps/admin/app/(all)/(dashboard)/image/page.tsx
-+++ b/apps/admin/app/(all)/(dashboard)/image/page.tsx
-@@ -25,8 +25,8 @@ const InstanceImagePage = observer(function InstanceImagePage(_props: Route.Comp
-   return (
-     <PageWrapper
-       header={{
++++ /dev/null
+@@ -1,46 +0,0 @@
+-/**
+- * Copyright (c) 2023-present Plane Software, Inc. and contributors
+- * SPDX-License-Identifier: AGPL-3.0-only
+- * See the LICENSE file for details.
+- */
+-
+-import { observer } from "mobx-react";
+-import useSWR from "swr";
+-import { Loader } from "@plane/ui";
+-// components
+-import { PageWrapper } from "@/components/common/page-wrapper";
+-// hooks
+-import { useInstance } from "@/hooks/store";
+-// types
+-import type { Route } from "./+types/page";
+-// local
+-import { InstanceImageConfigForm } from "./form";
+-
+-const InstanceImagePage = observer(function InstanceImagePage(_props: Route.ComponentProps) {
+-  // store
+-  const { formattedConfig, fetchInstanceConfigurations } = useInstance();
+-
+-  useSWR("INSTANCE_CONFIGURATIONS", () => fetchInstanceConfigurations());
+-
+-  return (
+-    <PageWrapper
+-      header={{
 -        title: "Third-party image libraries",
 -        description: "Let your users search and choose images from third-party libraries",
-+        title: "Bibliotecas de imágenes de terceros",
-+        description: "Permite a tus usuarios buscar y elegir imágenes de bibliotecas externas",
-       }}
-     >
-       {formattedConfig ? (
-@@ -41,6 +41,6 @@ const InstanceImagePage = observer(function InstanceImagePage(_props: Route.Comp
-   );
- });
- 
+-      }}
+-    >
+-      {formattedConfig ? (
+-        <InstanceImageConfigForm config={formattedConfig} />
+-      ) : (
+-        <Loader className="space-y-8">
+-          <Loader.Item height="50px" width="50%" />
+-          <Loader.Item height="50px" width="20%" />
+-        </Loader>
+-      )}
+-    </PageWrapper>
+-  );
+-});
+-
 -export const meta: Route.MetaFunction = () => [{ title: "Images Settings - God Mode" }];
-+export const meta: Route.MetaFunction = () => [{ title: "Ajustes de imágenes · Administración" }];
- 
- export default InstanceImagePage;
+-
+-export default InstanceImagePage;
 diff --git a/apps/admin/app/(all)/(dashboard)/sidebar-dropdown.tsx b/apps/admin/app/(all)/(dashboard)/sidebar-dropdown.tsx
 index d1ddb1f..12917ce 100644
 --- a/apps/admin/app/(all)/(dashboard)/sidebar-dropdown.tsx
@@ -31271,6 +31475,18 @@ index 5d4eafb..30a2e51 100644
      </div>
    );
  }
+diff --git a/apps/admin/app/routes.ts b/apps/admin/app/routes.ts
+index 184bed2..c03f7ec 100644
+--- a/apps/admin/app/routes.ts
++++ b/apps/admin/app/routes.ts
+@@ -20,7 +20,6 @@ export default [
+     route("authentication/google", "./(all)/(dashboard)/authentication/google/page.tsx"),
+     route("authentication/gitea", "./(all)/(dashboard)/authentication/gitea/page.tsx"),
+     route("ai", "./(all)/(dashboard)/ai/page.tsx"),
+-    route("image", "./(all)/(dashboard)/image/page.tsx"),
+   ]),
+   // Catch-all route for 404 handling - must be last
+   route("*", "./components/404.tsx"),
 diff --git a/apps/admin/components/authentication/gitea-config.tsx b/apps/admin/components/authentication/gitea-config.tsx
 index ef9d6db..2088cc5 100644
 --- a/apps/admin/components/authentication/gitea-config.tsx
@@ -31426,10 +31642,10 @@ index d161740..8f986b5 100644
            });
          }}
 diff --git a/apps/admin/components/common/header/core.ts b/apps/admin/components/common/header/core.ts
-index 4cfc8ee..8a0c366 100644
+index 4cfc8ee..7bfb106 100644
 --- a/apps/admin/components/common/header/core.ts
 +++ b/apps/admin/components/common/header/core.ts
-@@ -6,14 +6,14 @@
+@@ -6,14 +6,13 @@
  
  export const CORE_HEADER_SEGMENT_LABELS: Record<string, string> = {
    general: "General",
@@ -31440,7 +31656,6 @@ index 4cfc8ee..8a0c366 100644
 +  ai: "Inteligencia artificial",
 +  email: "Correo",
 +  authentication: "Autenticación",
-+  image: "Imágenes",
    google: "Google",
    github: "GitHub",
    gitlab: "GitLab",
@@ -31473,7 +31688,7 @@ index 8be7107..7f27a79 100644
                  />
                }
 diff --git a/apps/admin/components/common/new-user-popup.tsx b/apps/admin/components/common/new-user-popup.tsx
-index 30dda8d..1d76cc9 100644
+index 30dda8d..1c3e348 100644
 --- a/apps/admin/components/common/new-user-popup.tsx
 +++ b/apps/admin/components/common/new-user-popup.tsx
 @@ -27,17 +27,17 @@ export const NewUserPopup = observer(function NewUserPopup() {
@@ -31484,8 +31699,9 @@ index 30dda8d..1d76cc9 100644
 +          <div className="text-14 font-semibold">Crear espacio de trabajo</div>
            <div className="py-2 text-13 font-medium text-tertiary">
 -            Instance setup done! Welcome to Plane instance portal. Start your journey with by creating your first
-+            Instance setup done! Te damos la bienvenida al portal de instancia de Tequio. Start your journey with by creating your first
-             workspace.
+-            workspace.
++            Instancia configurada. Te damos la bienvenida al portal de administración de Tequio: crea tu primer
++            espacio de trabajo para empezar.
            </div>
            <div className="flex items-center gap-4 pt-2">
              <Link href="/workspace/create" className={getButtonStyling("primary", "lg")}>
@@ -31530,10 +31746,53 @@ index 89515b8..c487552 100644
            </div>
          </div>
 diff --git a/apps/admin/components/instance/setup-form.tsx b/apps/admin/components/instance/setup-form.tsx
-index fdb7c80..f3ccfe2 100644
+index fdb7c80..f338c52 100644
 --- a/apps/admin/components/instance/setup-form.tsx
 +++ b/apps/admin/components/instance/setup-form.tsx
-@@ -142,8 +142,8 @@ export function InstanceSetupForm() {
+@@ -12,7 +12,7 @@ import { Eye, EyeOff } from "lucide-react";
+ import { API_BASE_URL, E_PASSWORD_STRENGTH } from "@plane/constants";
+ import { Button } from "@plane/propel/button";
+ import { AuthService } from "@plane/services";
+-import { Checkbox, Input, PasswordStrengthIndicator, Spinner } from "@plane/ui";
++import { Input, PasswordStrengthIndicator, Spinner } from "@plane/ui";
+ import { getPasswordStrength, validatePersonName, validateCompanyName } from "@plane/utils";
+ // components
+ import { AuthHeader } from "@/app/(all)/(home)/auth-header";
+@@ -45,7 +45,6 @@ type TFormData = {
+   company_name: string;
+   password: string;
+   confirm_password?: string;
+-  is_telemetry_enabled: boolean;
+ };
+ 
+ const defaultFromData: TFormData = {
+@@ -54,7 +53,6 @@ const defaultFromData: TFormData = {
+   email: "",
+   company_name: "",
+   password: "",
+-  is_telemetry_enabled: true,
+ };
+ 
+ export function InstanceSetupForm() {
+@@ -64,7 +62,6 @@ export function InstanceSetupForm() {
+   const lastNameParam = searchParams?.get("last_name") || undefined;
+   const companyParam = searchParams?.get("company") || undefined;
+   const emailParam = searchParams?.get("email") || undefined;
+-  const isTelemetryEnabledParam = (searchParams?.get("is_telemetry_enabled") === "True" ? true : false) || true;
+   const errorCode = searchParams?.get("error_code") || undefined;
+   const errorMessage = searchParams?.get("error_message") || undefined;
+   // state
+@@ -94,8 +91,7 @@ export function InstanceSetupForm() {
+     if (lastNameParam) setFormData((prev) => ({ ...prev, last_name: lastNameParam }));
+     if (companyParam) setFormData((prev) => ({ ...prev, company_name: companyParam }));
+     if (emailParam) setFormData((prev) => ({ ...prev, email: emailParam }));
+-    if (isTelemetryEnabledParam) setFormData((prev) => ({ ...prev, is_telemetry_enabled: isTelemetryEnabledParam }));
+-  }, [firstNameParam, lastNameParam, companyParam, emailParam, isTelemetryEnabledParam]);
++  }, [firstNameParam, lastNameParam, companyParam, emailParam]);
+ 
+   // derived values
+   const errorData: TError = useMemo(() => {
+@@ -142,8 +138,8 @@ export function InstanceSetupForm() {
        <div className="mt-10 flex w-full flex-grow flex-col items-center justify-center py-6">
          <div className="relative flex w-full max-w-[22.5rem] flex-col gap-6">
            <FormHeader
@@ -31544,7 +31803,15 @@ index fdb7c80..f3ccfe2 100644
            />
            {errorData.type &&
              errorData?.message &&
-@@ -163,7 +163,7 @@ export function InstanceSetupForm() {
+@@ -158,12 +154,14 @@ export function InstanceSetupForm() {
+             onError={() => setIsSubmitting(false)}
+           >
+             <input type="hidden" name="csrfmiddlewaretoken" value={csrfToken} />
+-            <input type="hidden" name="is_telemetry_enabled" value={formData.is_telemetry_enabled ? "True" : "False"} />
++            {/* Tequio no recopila telemetría. El campo se envía explícitamente en
++                False porque el backend, si no lo recibe, lo da por activado. */}
++            <input type="hidden" name="is_telemetry_enabled" value="False" />
+ 
              <div className="flex flex-col items-center gap-4 sm:flex-row">
                <div className="w-full space-y-1">
                  <label className="text-13 font-medium text-tertiary" htmlFor="first_name">
@@ -31553,7 +31820,16 @@ index fdb7c80..f3ccfe2 100644
                  </label>
                  <Input
                    className="w-full border border-subtle !bg-surface-1 placeholder:text-placeholder"
-@@ -186,7 +186,7 @@ export function InstanceSetupForm() {
+@@ -171,7 +169,7 @@ export function InstanceSetupForm() {
+                   name="first_name"
+                   type="text"
+                   inputSize="md"
+-                  placeholder="Wilber"
++                  placeholder="Juan"
+                   value={formData.first_name}
+                   onChange={(e) => {
+                     const validation = validatePersonName(e.target.value);
+@@ -186,7 +184,7 @@ export function InstanceSetupForm() {
                </div>
                <div className="w-full space-y-1">
                  <label className="text-13 font-medium text-tertiary" htmlFor="last_name">
@@ -31562,7 +31838,16 @@ index fdb7c80..f3ccfe2 100644
                  </label>
                  <Input
                    className="w-full border border-subtle !bg-surface-1 placeholder:text-placeholder"
-@@ -210,7 +210,7 @@ export function InstanceSetupForm() {
+@@ -194,7 +192,7 @@ export function InstanceSetupForm() {
+                   name="last_name"
+                   type="text"
+                   inputSize="md"
+-                  placeholder="Wright"
++                  placeholder="Pérez"
+                   value={formData.last_name}
+                   onChange={(e) => {
+                     const validation = validatePersonName(e.target.value);
+@@ -210,7 +208,7 @@ export function InstanceSetupForm() {
  
              <div className="w-full space-y-1">
                <label className="text-13 font-medium text-tertiary" htmlFor="email">
@@ -31571,7 +31856,16 @@ index fdb7c80..f3ccfe2 100644
                </label>
                <Input
                  className="w-full border border-subtle !bg-surface-1 placeholder:text-placeholder"
-@@ -231,7 +231,7 @@ export function InstanceSetupForm() {
+@@ -218,7 +216,7 @@ export function InstanceSetupForm() {
+                 name="email"
+                 type="email"
+                 inputSize="md"
+-                placeholder="name@company.com"
++                placeholder="nombre@empresa.com"
+                 value={formData.email}
+                 onChange={(e) => handleFormChange("email", e.target.value)}
+                 hasError={errorData.type && errorData.type === EErrorCodes.INVALID_EMAIL ? true : false}
+@@ -231,7 +229,7 @@ export function InstanceSetupForm() {
  
              <div className="w-full space-y-1">
                <label className="text-13 font-medium text-tertiary" htmlFor="company_name">
@@ -31580,7 +31874,7 @@ index fdb7c80..f3ccfe2 100644
                </label>
                <Input
                  className="w-full border border-subtle !bg-surface-1 placeholder:text-placeholder"
-@@ -239,7 +239,7 @@ export function InstanceSetupForm() {
+@@ -239,7 +237,7 @@ export function InstanceSetupForm() {
                  name="company_name"
                  type="text"
                  inputSize="md"
@@ -31589,7 +31883,7 @@ index fdb7c80..f3ccfe2 100644
                  value={formData.company_name}
                  onChange={(e) => {
                    const validation = validateCompanyName(e.target.value, false);
-@@ -253,7 +253,7 @@ export function InstanceSetupForm() {
+@@ -253,7 +251,7 @@ export function InstanceSetupForm() {
  
              <div className="w-full space-y-1">
                <label className="text-13 font-medium text-tertiary" htmlFor="password">
@@ -31598,7 +31892,7 @@ index fdb7c80..f3ccfe2 100644
                </label>
                <div className="relative">
                  <Input
-@@ -262,7 +262,7 @@ export function InstanceSetupForm() {
+@@ -262,7 +260,7 @@ export function InstanceSetupForm() {
                    name="password"
                    type={showPassword.password ? "text" : "password"}
                    inputSize="md"
@@ -31607,7 +31901,7 @@ index fdb7c80..f3ccfe2 100644
                    value={formData.password}
                    onChange={(e) => handleFormChange("password", e.target.value)}
                    hasError={errorData.type && errorData.type === EErrorCodes.INVALID_PASSWORD ? true : false}
-@@ -273,7 +273,7 @@ export function InstanceSetupForm() {
+@@ -273,7 +271,7 @@ export function InstanceSetupForm() {
                  {showPassword.password ? (
                    <button
                      type="button"
@@ -31616,7 +31910,7 @@ index fdb7c80..f3ccfe2 100644
                      className="absolute top-3.5 right-3 flex items-center justify-center text-placeholder"
                      onClick={() => handleShowPassword("password")}
                    >
-@@ -282,7 +282,7 @@ export function InstanceSetupForm() {
+@@ -282,7 +280,7 @@ export function InstanceSetupForm() {
                  ) : (
                    <button
                      type="button"
@@ -31625,7 +31919,7 @@ index fdb7c80..f3ccfe2 100644
                      className="absolute top-3.5 right-3 flex items-center justify-center text-placeholder"
                      onClick={() => handleShowPassword("password")}
                    >
-@@ -298,7 +298,7 @@ export function InstanceSetupForm() {
+@@ -298,7 +296,7 @@ export function InstanceSetupForm() {
  
              <div className="w-full space-y-1">
                <label className="text-13 font-medium text-tertiary" htmlFor="confirm_password">
@@ -31634,7 +31928,7 @@ index fdb7c80..f3ccfe2 100644
                </label>
                <div className="relative">
                  <Input
-@@ -308,7 +308,7 @@ export function InstanceSetupForm() {
+@@ -308,7 +306,7 @@ export function InstanceSetupForm() {
                    inputSize="md"
                    value={formData.confirm_password}
                    onChange={(e) => handleFormChange("confirm_password", e.target.value)}
@@ -31643,7 +31937,7 @@ index fdb7c80..f3ccfe2 100644
                    className="w-full border border-subtle !bg-surface-1 pr-12 placeholder:text-placeholder"
                    onFocus={() => setIsRetryPasswordInputFocused(true)}
                    onBlur={() => setIsRetryPasswordInputFocused(false)}
-@@ -317,7 +317,7 @@ export function InstanceSetupForm() {
+@@ -317,7 +315,7 @@ export function InstanceSetupForm() {
                  {showPassword.retypePassword ? (
                    <button
                      type="button"
@@ -31652,7 +31946,7 @@ index fdb7c80..f3ccfe2 100644
                      className="absolute top-3.5 right-3 flex items-center justify-center text-placeholder"
                      onClick={() => handleShowPassword("retypePassword")}
                    >
-@@ -326,7 +326,7 @@ export function InstanceSetupForm() {
+@@ -326,7 +324,7 @@ export function InstanceSetupForm() {
                  ) : (
                    <button
                      type="button"
@@ -31661,24 +31955,38 @@ index fdb7c80..f3ccfe2 100644
                      className="absolute top-3.5 right-3 flex items-center justify-center text-placeholder"
                      onClick={() => handleShowPassword("retypePassword")}
                    >
-@@ -352,21 +352,21 @@ export function InstanceSetupForm() {
-                 />
-               </div>
-               <label className="cursor-pointer text-13 font-medium text-tertiary" htmlFor="is_telemetry_enabled">
--                Allow Plane to anonymously collect usage events.{" "}
-+                Permite que Tequio recopile eventos de uso de forma anónima.{" "}
-                 <a
-                   href="https://developers.plane.so/self-hosting/telemetry"
-                   target="_blank"
-                   rel="noopener noreferrer"
-                   className="text-blue-500 hover:text-blue-600 flex-shrink-0 text-13 font-medium"
-                 >
--                  See More
-+                  Ver más
-                 </a>
-               </label>
+@@ -337,36 +335,13 @@ export function InstanceSetupForm() {
+               {!!formData.confirm_password &&
+                 formData.password !== formData.confirm_password &&
+                 renderPasswordMatchError && (
+-                  <span className="text-13 text-danger-primary">Passwords don{"'"}t match</span>
++                  <span className="text-13 text-danger-primary">Las contraseñas no coinciden</span>
+                 )}
              </div>
  
+-            <div className="relative flex gap-2">
+-              <div>
+-                <Checkbox
+-                  className="h-4 w-4"
+-                  iconClassName="w-3 h-3"
+-                  id="is_telemetry_enabled"
+-                  onChange={() => handleFormChange("is_telemetry_enabled", !formData.is_telemetry_enabled)}
+-                  checked={formData.is_telemetry_enabled}
+-                />
+-              </div>
+-              <label className="cursor-pointer text-13 font-medium text-tertiary" htmlFor="is_telemetry_enabled">
+-                Allow Plane to anonymously collect usage events.{" "}
+-                <a
+-                  href="https://developers.plane.so/self-hosting/telemetry"
+-                  target="_blank"
+-                  rel="noopener noreferrer"
+-                  className="text-blue-500 hover:text-blue-600 flex-shrink-0 text-13 font-medium"
+-                >
+-                  See More
+-                </a>
+-              </label>
+-            </div>
+-
              <div className="py-2">
                <Button type="submit" size="xl" className="w-full" disabled={isButtonDisabled}>
 -                {isSubmitting ? <Spinner height="20px" width="20px" /> : "Continue"}
@@ -31786,10 +32094,24 @@ index 9e6914e..00e8d20 100644
      config: <GiteaConfiguration disabled={disabled} updateConfig={updateConfig} />,
      enabledConfigKey: "IS_GITEA_ENABLED",
 diff --git a/apps/admin/hooks/use-sidebar-menu/core.ts b/apps/admin/hooks/use-sidebar-menu/core.ts
-index 9d4e449..74dfc5e 100644
+index 9d4e449..ab45901 100644
 --- a/apps/admin/hooks/use-sidebar-menu/core.ts
 +++ b/apps/admin/hooks/use-sidebar-menu/core.ts
-@@ -16,37 +16,37 @@ export const coreSidebarMenuLinks: Record<TCoreSidebarMenuKey, TSidebarMenuItem>
+@@ -4,49 +4,43 @@
+  * See the LICENSE file for details.
+  */
+ 
+-import { Image, BrainCog, Cog, Mail } from "lucide-react";
++import { BrainCog, Cog, Mail } from "lucide-react";
+ // plane imports
+ import { LockIcon, WorkspaceIcon } from "@plane/propel/icons";
+ // types
+ import type { TSidebarMenuItem } from "./types";
+ 
+-export type TCoreSidebarMenuKey = "general" | "email" | "workspace" | "authentication" | "ai" | "image";
++export type TCoreSidebarMenuKey = "general" | "email" | "workspace" | "authentication" | "ai";
+ 
+ export const coreSidebarMenuLinks: Record<TCoreSidebarMenuKey, TSidebarMenuItem> = {
    general: {
      Icon: Cog,
      name: "General",
@@ -31829,15 +32151,24 @@ index 9d4e449..74dfc5e 100644
 +    description: "Configura las credenciales del proveedor de IA.",
      href: `/ai/`,
    },
-   image: {
-     Icon: Image,
+-  image: {
+-    Icon: Image,
 -    name: "Images in Plane",
 -    description: "Allow third-party image libraries.",
-+    name: "Imágenes",
-+    description: "Permite bibliotecas de imágenes de terceros.",
-     href: `/image/`,
-   },
+-    href: `/image/`,
+-  },
  };
+diff --git a/apps/admin/hooks/use-sidebar-menu/index.ts b/apps/admin/hooks/use-sidebar-menu/index.ts
+index cfc76f4..80bcc8d 100644
+--- a/apps/admin/hooks/use-sidebar-menu/index.ts
++++ b/apps/admin/hooks/use-sidebar-menu/index.ts
+@@ -15,6 +15,5 @@ export function useSidebarMenu(): TSidebarMenuItem[] {
+     coreSidebarMenuLinks.authentication,
+     coreSidebarMenuLinks.workspace,
+     coreSidebarMenuLinks.ai,
+-    coreSidebarMenuLinks.image,
+   ];
+ }
 diff --git a/apps/admin/public/favicon/android-chrome-192x192.png b/apps/admin/public/favicon/android-chrome-192x192.png
 index 4a005e54230cfd475e713ca7518ec6ec31c7a352..9850d6c4a156c3ec8b6c58af1c7b427bad78fd8d 100644
 GIT binary patch
@@ -68677,6 +69008,540 @@ RQi<5DB!5kga7q8g{{bj<CC2~&
 
 literal 0
 HcmV?d00001
+
+diff --git a/apps/web/app/assets/auth/gradient-bg-logo.webp b/apps/web/app/assets/auth/gradient-bg-logo.webp
+deleted file mode 100644
+index 47202e562cb1b5106348a339770ee398070a005a..0000000000000000000000000000000000000000
+GIT binary patch
+literal 0
+HcmV?d00001
+
+literal 8598
+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
+Cif#P>
+
+diff --git a/apps/web/app/assets/auth/gradient-logo.webp b/apps/web/app/assets/auth/gradient-logo.webp
+deleted file mode 100644
+index 674434ceef7fd566ceaeaee04cdb93e4bc0985d1..0000000000000000000000000000000000000000
+GIT binary patch
+literal 0
+HcmV?d00001
+
+literal 18208
+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
+X)wkwxCMe0?(32LQKEtmHF8lxh{LiZ7
 
 diff --git a/apps/web/app/assets/favicon/apple-touch-icon.png b/apps/web/app/assets/favicon/apple-touch-icon.png
 index a631267832248a456bb5d92b8167092161c1d360..5be8da80785a985497d5be10f0210b9d954988a2 100644
@@ -123223,21 +124088,67 @@ index 05203dc..d442ccf 100644
          </div>
          <div className="relative mt-4 flex w-full flex-col gap-4">
 diff --git a/apps/web/core/components/instance/not-ready-view.tsx b/apps/web/core/components/instance/not-ready-view.tsx
-index 850d0af..ec7dc0b 100644
+index 850d0af..9a70834 100644
 --- a/apps/web/core/components/instance/not-ready-view.tsx
 +++ b/apps/web/core/components/instance/not-ready-view.tsx
-@@ -37,9 +37,9 @@ export function InstanceNotReady() {
+@@ -7,29 +7,14 @@
+ import Link from "next/link";
+ import { GOD_MODE_URL } from "@plane/constants";
+ // assets
+-import GradientLogo from "@/app/assets/auth/gradient-logo.webp?url";
+-import GradientBgLogo from "@/app/assets/auth/gradient-bg-logo.webp?url";
+ import DefaultLayout from "@/layouts/default-layout";
+-import { PlaneLockup } from "@plane/propel/icons";
++import { PlaneLockup, PlaneLogo } from "@plane/propel/icons";
+ import { Button } from "@plane/propel/button";
+ 
+ export function InstanceNotReady() {
+   return (
+     <DefaultLayout>
+       <div className="relative z-10 flex h-screen w-screen overflow-hidden">
+-        {/* Background decorations */}
+-        <img
+-          src={GradientBgLogo}
+-          className="pointer-events-none absolute -top-24 -left-32 h-56 w-96 opacity-15"
+-          alt=""
+-          aria-hidden="true"
+-        />
+-        <img
+-          src={GradientBgLogo}
+-          className="pointer-events-none absolute -right-20 -bottom-16 h-56 w-96 opacity-15"
+-          alt=""
+-          aria-hidden="true"
+-        />
+         {/* Main content */}
+         <div className="flex h-full w-full flex-col items-center px-8 pt-6 pb-10">
+           <div className="sticky top-0 flex w-full shrink-0 items-center justify-between gap-6">
+@@ -37,17 +22,22 @@ export function InstanceNotReady() {
            </div>
            <div className="flex h-full w-full flex-col items-center justify-center gap-7">
              <div className="flex flex-col items-center gap-11">
 -              <img src={GradientLogo} className="h-24 w-40 object-contain" alt="Plane Logo" />
-+              <img src={GradientLogo} className="h-24 w-40 object-contain" alt="Tequio Logo" />
++              {/* PlaneLogo solo lee width/height/className/color: un aria-label
++                  pasado como prop no llegaría al DOM, así que la etiqueta va
++                  en el contenedor. */}
++              <div role="img" aria-label="Tequio">
++                <PlaneLogo className="h-24 w-24 text-primary" />
++              </div>
                <div className="flex max-w-124 flex-col items-center gap-3">
 -                <h1 className="text-h2-semibold text-primary">Welcome to Plane</h1>
 +                <h1 className="text-h2-semibold text-primary">Te damos la bienvenida a Tequio</h1>
                  <p className="text-center text-body-md-regular text-secondary">
-                   Set up your instance and create your first workspace to begin managing projects and work.
+-                  Set up your instance and create your first workspace to begin managing projects and work.
++                  Configura tu instancia y crea tu primer espacio de trabajo para empezar a gestionar proyectos.
                  </p>
+               </div>
+             </div>
+             <a href={GOD_MODE_URL} className="w-72">
+               <Button variant="primary" className="w-full" size="xl">
+-                Get started
++                Empezar
+               </Button>
+             </a>
+           </div>
 diff --git a/apps/web/core/components/integration/single-integration-card.tsx b/apps/web/core/components/integration/single-integration-card.tsx
 index 6f63801..dd0e0c0 100644
 --- a/apps/web/core/components/integration/single-integration-card.tsx
@@ -195989,6 +196900,19 @@ index 7f53eaa..8bc02b1 100644
 +    }
    ]
  }
+diff --git a/packages/constants/src/auth/index.ts b/packages/constants/src/auth/index.ts
+index 9d29181..af2c7d0 100644
+--- a/packages/constants/src/auth/index.ts
++++ b/packages/constants/src/auth/index.ts
+@@ -20,7 +20,7 @@ export const PASSWORD_MIN_LENGTH = 8;
+ export const SPACE_PASSWORD_CRITERIA = [
+   {
+     key: "min_8_char",
+-    label: "Min 8 characters",
++    label: "Mínimo 8 caracteres",
+     isCriteriaValid: (password: string) => password.length >= PASSWORD_MIN_LENGTH,
+   },
+   // {
 diff --git a/packages/constants/src/endpoints.ts b/packages/constants/src/endpoints.ts
 index 630f07e..0703091 100644
 --- a/packages/constants/src/endpoints.ts
@@ -196376,10 +197300,10 @@ index 0000000..8a34af5
 +  );
 +}
 diff --git a/packages/i18n/src/constants/language.ts b/packages/i18n/src/constants/language.ts
-index 20a48df..5cb1172 100644
+index 20a48df..2bf2d76 100644
 --- a/packages/i18n/src/constants/language.ts
 +++ b/packages/i18n/src/constants/language.ts
-@@ -8,6 +8,11 @@ import type { TLanguage, ILanguageOption } from "../types";
+@@ -8,26 +8,20 @@ import type { TLanguage, ILanguageOption } from "../types";
  
  export const FALLBACK_LANGUAGE: TLanguage = "en";
  
@@ -196388,9 +197312,36 @@ index 20a48df..5cb1172 100644
 +// muestren inglés en vez de la clave cruda.
 +export const DEFAULT_LANGUAGE: TLanguage = "es";
 +
++// Sintergica: Tequio se ofrece en estos tres idiomas. Los 19 locales de upstream
++// siguen en el repositorio, pero no se ofrecen en el selector: los módulos
++// propios (drive, chat, finanzas, asistente) se mantienen al día solo en estos,
++// y un idioma a medias no se ve como una traducción incompleta — se ve como una
++// aplicación rota, con etiquetas crudas mezcladas con texto traducido.
  export const SUPPORTED_LANGUAGES: ILanguageOption[] = [
-   { label: "English", value: "en" },
-   { label: "Français", value: "fr" },
+-  { label: "English", value: "en" },
+-  { label: "Français", value: "fr" },
+   { label: "Español", value: "es" },
+-  { label: "日本語", value: "ja" },
+-  { label: "简体中文", value: "zh-CN" },
+-  { label: "繁體中文", value: "zh-TW" },
+-  { label: "Русский", value: "ru" },
+-  { label: "Italian", value: "it" },
+-  { label: "Čeština", value: "cs" },
+-  { label: "Slovenčina", value: "sk" },
+-  { label: "Deutsch", value: "de" },
+-  { label: "Українська", value: "ua" },
+-  { label: "Polski", value: "pl" },
+-  { label: "한국어", value: "ko" },
+-  { label: "Português Brasil", value: "pt-BR" },
+-  { label: "Indonesian", value: "id" },
+-  { label: "Română", value: "ro" },
+-  { label: "Tiếng việt", value: "vi-VN" },
+-  { label: "Türkçe", value: "tr-TR" },
++  { label: "English", value: "en" },
++  { label: "Português (Brasil)", value: "pt-BR" },
+ ];
+ 
+ export const LANGUAGE_STORAGE_KEY = "userLanguage";
 diff --git a/packages/i18n/src/core/instance.ts b/packages/i18n/src/core/instance.ts
 index 58e425e..ffe41de 100644
 --- a/packages/i18n/src/core/instance.ts
@@ -219092,6 +220043,55 @@ index 25acfeb..1178ed7 100644
      </IconWrapper>
    );
  }
+diff --git a/packages/types/src/instance/ai.ts b/packages/types/src/instance/ai.ts
+index 64c745b..35ab91b 100644
+--- a/packages/types/src/instance/ai.ts
++++ b/packages/types/src/instance/ai.ts
+@@ -4,4 +4,6 @@
+  * See the LICENSE file for details.
+  */
+ 
+-export type TInstanceAIConfigurationKeys = "LLM_API_KEY" | "LLM_MODEL";
++// LLM_BASE_URL: Sintergica AI expone una API compatible con OpenAI, así que el
++// proveedor se elige por su URL base y no por un nombre de una lista cerrada.
++export type TInstanceAIConfigurationKeys = "LLM_API_KEY" | "LLM_MODEL" | "LLM_BASE_URL";
+diff --git a/packages/utils/src/auth.ts b/packages/utils/src/auth.ts
+index cd0646a..8a6f3e9 100644
+--- a/packages/utils/src/auth.ts
++++ b/packages/utils/src/auth.ts
+@@ -57,27 +57,27 @@ export type PasswordCriteria = {
+ export const getPasswordCriteria = (password: string): PasswordCriteria[] => [
+   {
+     key: "length",
+-    label: "Min 8 characters",
++    label: "Mínimo 8 caracteres",
+     isValid: password.length >= 8,
+   },
+   {
+     key: "uppercase",
+-    label: "Min 1 upper-case letter",
++    label: "Al menos 1 mayúscula",
+     isValid: /[A-Z]/.test(password),
+   },
+   {
+     key: "lowercase",
+-    label: "Min 1 lower-case letter",
++    label: "Al menos 1 minúscula",
+     isValid: /[a-z]/.test(password),
+   },
+   {
+     key: "number",
+-    label: "Min 1 number",
++    label: "Al menos 1 número",
+     isValid: /[0-9]/.test(password),
+   },
+   {
+     key: "special",
+-    label: "Min 1 special character",
++    label: "Al menos 1 carácter especial",
+     isValid: /[!@#$%^&*()\-_+=\[\]{}|;:'",.<>?/]/.test(password),
+   },
+ ];
 diff --git a/pnpm-lock.yaml b/pnpm-lock.yaml
 index bbf11e2..4992513 100644
 --- a/pnpm-lock.yaml

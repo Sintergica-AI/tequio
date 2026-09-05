@@ -20,6 +20,14 @@ def patch(path, old, new, must=True):
             sys.exit(1)
         print(f"skip (not found): {path}")
         return
+    if new == "":
+        # `"" in content` es cierto SIEMPRE, así que un reemplazo vacío se daba
+        # por aplicado y el parche no hacía nada, sin error ni aviso. Pasó el
+        # 5 Sep 2026 al intentar borrar la tarea de telemetría del beat: el
+        # build salió verde y la entrada seguía programada en la imagen.
+        # Para quitar código, comenta el bloque en vez de vaciarlo.
+        print(f"FATAL: reemplazo vacío en {path}. Comenta el bloque en vez de borrarlo.")
+        sys.exit(1)
     if new in content:
         print(f"already patched: {path}")
         return
@@ -374,6 +382,128 @@ if encontradas != esperadas:
 print(f"{OK} las {len(encontradas)} plantillas de correo están cubiertas")
 
 # ---------------------------------------------------------------------------
+# TELEMETRÍA: fuera. Tequio no recopila datos de uso de sus instancias.
+#
+# De fábrica, cada instancia empuja métricas (usuarios, workspaces, proyectos,
+# work items…) a https://telemetry.plane.so cada pocas horas. Se corta en las
+# TRES puertas por las que pasa, porque cerrar solo una deja el mecanismo vivo:
+#   1. el programador (celery beat) que la despierta,
+#   2. la propia tarea, que además se invoca al registrar la instancia,
+#   3. el valor por defecto del interruptor, que ya no tiene mando en la interfaz.
+# ---------------------------------------------------------------------------
+patch(
+    "/code/plane/celery.py",
+    '    "push-instance-metrics": {\n'
+    '        "task": "plane.license.bgtasks.telemetry_metrics.push_instance_metrics",\n'
+    "        \"schedule\": schedule(run_every=timedelta(minutes=METRICS_PUSH_INTERVAL_MINUTES)),\n"
+    "    },\n",
+    "    # Tequio no recopila telemetría: esta tarea empujaba métricas de la\n"
+    "    # instancia a telemetry.plane.so. Se deja comentada, y no borrada, para\n"
+    "    # que quede constancia de qué se quitó y por qué.\n"
+    '    # "push-instance-metrics": {\n'
+    '    #     "task": "plane.license.bgtasks.telemetry_metrics.push_instance_metrics",\n'
+    "    #     \"schedule\": schedule(run_every=timedelta(minutes=METRICS_PUSH_INTERVAL_MINUTES)),\n"
+    "    # },\n",
+)
+patch(
+    "/code/plane/license/bgtasks/telemetry_metrics.py",
+    '    logger.debug("Starting push_instance_metrics task")\n'
+    "    try:\n"
+    "        _collect_and_push_metrics()",
+    "    # Tequio no envía telemetría. La tarea se conserva porque\n"
+    "    # register_instance la invoca, pero no hace nada.\n"
+    "    return\n"
+    '    logger.debug("Starting push_instance_metrics task")\n'
+    "    try:\n"
+    "        _collect_and_push_metrics()",
+)
+patch(
+    "/code/plane/license/models/instance.py",
+    "    is_telemetry_enabled = models.BooleanField(default=True)",
+    "    # Tequio no recopila telemetría: el interruptor ya no existe en el panel\n"
+    "    # y el valor por defecto deja de mentir sobre lo que hace la instancia.\n"
+    "    # Sin migración a propósito: el default de un BooleanField vive en Python\n"
+    "    # y una AlterField en plane.license chocaría con upstream.\n"
+    "    is_telemetry_enabled = models.BooleanField(default=False)",
+)
+patch(
+    "/code/plane/license/api/views/admin.py",
+    '        is_telemetry_enabled = request.POST.get("is_telemetry_enabled", True)',
+    "        # Si el formulario no manda el campo, no se activa: el alta de la\n"
+    "        # instancia ya no ofrece la casilla.\n"
+    '        is_telemetry_enabled = request.POST.get("is_telemetry_enabled", False)',
+)
+
+# ---------------------------------------------------------------------------
+# PROVEEDOR DE IA: Sintergica AI, que habla el protocolo de OpenAI.
+#
+# CE construye SIEMPRE `OpenAI(api_key=...)` —es decir, api.openai.com— y además
+# valida el modelo contra una lista fija por proveedor. Las dos cosas hacen
+# imposible apuntar a un servicio compatible: la llamada se va a otro sitio y,
+# aunque no lo hiciera, cualquier modelo real del proveedor se rechazaría por no
+# estar en la lista. Se resuelve con una sola clave nueva, LLM_BASE_URL: si
+# tiene valor, manda ella.
+# ---------------------------------------------------------------------------
+patch(
+    "/code/plane/utils/instance_config_variables/core.py",
+    '    {\n'
+    '        "key": "LLM_MODEL",\n'
+    '        "value": os.environ.get("LLM_MODEL", "gpt-4o-mini"),\n'
+    '        "category": "AI",\n'
+    '        "is_encrypted": False,\n'
+    '    },\n',
+    '    {\n'
+    '        "key": "LLM_MODEL",\n'
+    '        "value": os.environ.get("LLM_MODEL", "lattice/claude-sonnet-5"),\n'
+    '        "category": "AI",\n'
+    '        "is_encrypted": False,\n'
+    '    },\n'
+    '    {\n'
+    '        # URL base del proveedor compatible con OpenAI. Vacía = api.openai.com.\n'
+    '        "key": "LLM_BASE_URL",\n'
+    '        "value": os.environ.get("LLM_BASE_URL", "https://lattice.sintergica.ai/v1"),\n'
+    '        "category": "AI",\n'
+    '        "is_encrypted": False,\n'
+    '    },\n',
+)
+patch(
+    "/code/plane/app/views/external/base.py",
+    "    provider = SUPPORTED_PROVIDERS.get(provider_key.lower())\n"
+    "    if not provider:",
+    "    # Con URL base configurada, el catálogo de modelos es del proveedor y no\n"
+    "    # de la lista fija de este fichero: validar contra ella rechazaría\n"
+    "    # cualquier modelo real suyo.\n"
+    "    (base_url,) = get_configuration_value(\n"
+    '        [{"key": "LLM_BASE_URL", "default": os.environ.get("LLM_BASE_URL", "")}]\n'
+    "    )\n"
+    '    if (base_url or "").strip():\n'
+    "        if not api_key:\n"
+    '            log_exception(ValueError("Missing API key for the configured LLM provider"))\n'
+    "            return None, None, None\n"
+    "        if not model:\n"
+    '            log_exception(ValueError("Missing model for the configured LLM provider"))\n'
+    "            return None, None, None\n"
+    "        return api_key, model, provider_key\n"
+    "\n"
+    "    provider = SUPPORTED_PROVIDERS.get(provider_key.lower())\n"
+    "    if not provider:",
+)
+# Ojo al ancla: la capa 1 (patch/patch_ce.py) YA sustituyó aquí el
+# `OpenAI(api_key=api_key)` de fábrica por el mapa provider_base_urls. Este
+# parche se apila sobre ESE resultado, no sobre el código original de upstream.
+patch(
+    "/code/plane/app/views/external/base.py",
+    "        client = OpenAI(api_key=api_key, base_url=provider_base_urls.get(provider.lower()))",
+    "        (llm_base_url,) = get_configuration_value(\n"
+    '            [{"key": "LLM_BASE_URL", "default": os.environ.get("LLM_BASE_URL", "")}]\n'
+    "        )\n"
+    "        client = OpenAI(\n"
+    "            api_key=api_key,\n"
+    '            base_url=(llm_base_url or "").strip() or provider_base_urls.get(provider.lower()),\n'
+    "        )",
+)
+
+# ---------------------------------------------------------------------------
 # Sanity: compile every file we touched or added
 # ---------------------------------------------------------------------------
 import glob
@@ -389,6 +519,12 @@ for f in (
     "/code/plane/settings/common.py",
     "/code/plane/urls.py",
     "/code/plane/db/models/user.py",
+    "/code/plane/celery.py",
+    "/code/plane/license/bgtasks/telemetry_metrics.py",
+    "/code/plane/license/models/instance.py",
+    "/code/plane/license/api/views/admin.py",
+    "/code/plane/utils/instance_config_variables/core.py",
+    "/code/plane/app/views/external/base.py",
     *sorted(glob.glob("/code/plane/finance/*.py")),
     *sorted(glob.glob("/code/plane/finance/migrations/*.py")),
     *sorted(glob.glob("/code/plane/assistant/*.py")),

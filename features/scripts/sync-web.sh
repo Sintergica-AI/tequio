@@ -49,7 +49,7 @@ cd "$SRC"
 # git status colapsa directorios enteramente nuevos a "?? dir/", lo que rompería
 # la copia archivo-por-archivo. `add -N` (intent-to-add) los expande a archivos
 # individuales sin preparar contenido.
-git add -A -N -- 'apps/web' 'packages/propel' 'packages/i18n' 'packages/constants' 'packages/editor' >/dev/null 2>&1 || true
+git add -A -N -- 'apps/web' 'packages/propel' 'packages/i18n' 'packages/constants' 'packages/editor' 'packages/types' 'packages/utils' >/dev/null 2>&1 || true
 # status porcelain: XY <ruta>. La X/Y es "D" cuando el archivo se borró.
 # (bash 3.2 de macOS no tiene mapfile, así que se lee con un while)
 TO_COPY=()
@@ -64,7 +64,7 @@ while IFS= read -r line; do
   else
     TO_COPY+=("$path")
   fi
-done < <(git status --porcelain -- 'apps/web' 'packages/propel' 'packages/i18n' 'packages/constants' 'packages/editor' 'pnpm-lock.yaml')
+done < <(git status --porcelain -- 'apps/web' 'packages/propel' 'packages/i18n' 'packages/constants' 'packages/editor' 'packages/types' 'packages/utils' 'pnpm-lock.yaml')
 # pnpm-lock.yaml es imprescindible: el Dockerfile instala con
 # --frozen-lockfile, así que si package.json cambia y el lock no viaja,
 # el build falla.
