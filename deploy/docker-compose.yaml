@@ -71,6 +71,18 @@ x-app-env: &app-env
   USE_MINIO: ${USE_MINIO:-1}
   DATABASE_URL: ${DATABASE_URL:-}
   SECRET_KEY: ${SECRET_KEY:?falta SECRET_KEY}
+  # Los servicios de Python leen RABBITMQ_USER/RABBITMQ_PASSWORD
+  # (plane/settings/common.py), NO los RABBITMQ_DEFAULT_* que espera la imagen
+  # de RabbitMQ; por eso *mq-env no sirve aqui aunque lo parezca. Sin estas
+  # cinco claves, CELERY_BROKER_URL cae al valor de fabrica de Celery
+  # (amqp://guest@localhost:5672//), api entra en bucle de reinicios con
+  # "Connection refused" y worker reintenta para siempre en silencio.
+  RABBITMQ_HOST: ${RABBITMQ_HOST:-plane-mq}
+  RABBITMQ_PORT: ${RABBITMQ_PORT:-5672}
+  RABBITMQ_USER: ${RABBITMQ_USER:-plane}
+  RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD:?falta RABBITMQ_PASSWORD}
+  RABBITMQ_VHOST: ${RABBITMQ_VHOST:-plane}
+  # Sigue disponible como anulacion manual desde tequio.env.
   AMQP_URL: ${AMQP_URL:-}
   API_KEY_RATE_LIMIT: ${API_KEY_RATE_LIMIT:-60/minute}
   MINIO_ENDPOINT_SSL: ${MINIO_ENDPOINT_SSL:-0}
