@@ -1,0 +1,17 @@
+[Unit]
+Description=Tequio · comprobar y aplicar actualizaciones
+Documentation=https://github.com/Sintergica-AI/plane-ce-sintergica
+After=docker.service network-online.target
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/tequio/bin/tequio-update
+# Una actualización completa descarga ~2 GB de imágenes, respalda la base y
+# migra. Una hora es holgado; sin límite, un cuelgue de red dejaría el servicio
+# "arrancando" para siempre y el temporizador no volvería a dispararlo.
+TimeoutStartSec=3600
+# El actualizador ya escribe su propio log en /var/log/tequio/.
+StandardOutput=journal
+StandardError=journal

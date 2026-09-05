@@ -1,5 +1,11 @@
 # Oferta de código fuente (AGPL-3.0 §13)
 
+> **Esto describe la instalación manual del VPS propio.** En las instancias
+> desplegadas con el kit de [`deploy/`](../../deploy/), las tres piezas ya vienen
+> puestas y el tarball lo publica el actualizador en cada despliegue: no hay paso
+> suelto que olvidar. Sigue leyendo solo si operas una instancia anterior a ese
+> kit (tequio.sintergica.ai mientras no se adopte).
+
 Tequio es una versión modificada de Plane. La AGPL obliga a que **toda persona
 que use la instancia a través de la red** pueda obtener el código fuente
 correspondiente de esa versión. Esto es lo que lo implementa.

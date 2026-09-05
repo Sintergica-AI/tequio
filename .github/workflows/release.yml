@@ -1,0 +1,250 @@
+name: release
+
+# Qué produce este workflow:
+#   - push a main        -> versión "edge-<fecha>-<sha>", canal `edge`
+#   - etiqueta v*        -> esa versión, canal `stable` (lo que reciben los clientes)
+#   - ejecución manual   -> canal a elegir
+#
+# El interruptor de un despliegue es la etiqueta de canal de `tequio-release`,
+# que se publica AL FINAL. Las seis imágenes de la versión llevan solo la
+# etiqueta de versión exacta, así que un cliente nunca puede mezclar mitades de
+# dos releases: o ve la nueva imagen de release (y entonces están todas), o no.
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: "Canal al que publicar"
+        type: choice
+        options: [edge, stable]
+        default: edge
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      channel: ${{ steps.v.outputs.channel }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: v
+        run: |
+          set -euo pipefail
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            VERSION="${GITHUB_REF_NAME}"
+            CHANNEL="stable"
+          else
+            VERSION="edge-$(date -u +%Y%m%d)-$(git rev-parse --short HEAD)"
+            CHANNEL="${{ inputs.channel || 'edge' }}"
+          fi
+          # Las etiquetas de Docker no admiten cualquier cosa; mejor fallar aquí
+          # que a mitad del push de la sexta imagen.
+          echo "$VERSION" | grep -qE '^[A-Za-z0-9][A-Za-z0-9._-]{0,126}$' \
+            || { echo "FATAL: versión no válida como etiqueta de Docker: $VERSION"; exit 1; }
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "channel=$CHANNEL" >> "$GITHUB_OUTPUT"
+          echo "### Tequio \`$VERSION\` → canal \`$CHANNEL\`" >> "$GITHUB_STEP_SUMMARY"
+
+  backend:
+    needs: version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Cargar release.env
+        # Solo las líneas KEY=valor: $GITHUB_ENV no admite comentarios.
+        run: grep -E '^[A-Z_]+=' release.env >> "$GITHUB_ENV"
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: build/backend/Dockerfile
+          build-args: BASE_BACKEND_IMAGE=${{ env.BASE_BACKEND_IMAGE }}
+          push: true
+          tags: ghcr.io/${{ env.IMAGE_NAMESPACE }}/tequio-backend:${{ needs.version.outputs.version }}
+          cache-from: type=gha,scope=backend
+          cache-to: type=gha,mode=max,scope=backend
+
+  proxy:
+    needs: version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Cargar release.env
+        # Solo las líneas KEY=valor: $GITHUB_ENV no admite comentarios.
+        run: grep -E '^[A-Z_]+=' release.env >> "$GITHUB_ENV"
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: build/proxy/Dockerfile
+          build-args: BASE_PROXY_IMAGE=${{ env.BASE_PROXY_IMAGE }}
+          push: true
+          tags: ghcr.io/${{ env.IMAGE_NAMESPACE }}/tequio-proxy:${{ needs.version.outputs.version }}
+          cache-from: type=gha,scope=proxy
+          cache-to: type=gha,mode=max,scope=proxy
+
+  frontend:
+    needs: version
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - app: web
+            dockerfile: apps/web/Dockerfile.web
+          - app: space
+            dockerfile: apps/space/Dockerfile.space
+          - app: admin
+            dockerfile: apps/admin/Dockerfile.admin
+          - app: live
+            dockerfile: apps/live/Dockerfile.live
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Cargar release.env
+        # Solo las líneas KEY=valor: $GITHUB_ENV no admite comentarios.
+        run: grep -E '^[A-Z_]+=' release.env >> "$GITHUB_ENV"
+      - name: Preparar el árbol de upstream con el frontend de Tequio
+        run: bash build/prepare-upstream.sh "$RUNNER_TEMP/upstream"
+      # Las VITE_* se HORNEAN en el bundle: ponerlas en el entorno del
+      # contenedor no sirve de nada. Solo el web las usa; pasarlas a los demás
+      # es inofensivo pero invalidaría su caché sin motivo.
+      - uses: docker/build-push-action@v6
+        with:
+          context: ${{ runner.temp }}/upstream
+          file: ${{ runner.temp }}/upstream/${{ matrix.dockerfile }}
+          push: true
+          tags: ghcr.io/${{ env.IMAGE_NAMESPACE }}/tequio-${{ matrix.app }}:${{ needs.version.outputs.version }}
+          build-args: |
+            ${{ matrix.app == 'web' && format('VITE_SOURCE_CODE_URL={0}', env.VITE_SOURCE_CODE_URL) || '' }}
+            ${{ matrix.app == 'web' && format('VITE_SUPPORT_EMAIL={0}', env.VITE_SUPPORT_EMAIL) || '' }}
+            ${{ matrix.app == 'web' && format('VITE_TERMS_URL={0}', env.VITE_TERMS_URL) || '' }}
+            ${{ matrix.app == 'web' && format('VITE_PRIVACY_URL={0}', env.VITE_PRIVACY_URL) || '' }}
+          cache-from: type=gha,scope=${{ matrix.app }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.app }}
+
+  # Comprobación de FONDO sobre el artefacto publicado, no sobre el log del
+  # build: que el bundle servido lleve de verdad el enlace de código fuente y el
+  # rebranding. Un build verde con un bundle de fábrica ya ha pasado aquí.
+  verify-web:
+    needs: [version, frontend]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Cargar release.env
+        # Solo las líneas KEY=valor: $GITHUB_ENV no admite comentarios.
+        run: grep -E '^[A-Z_]+=' release.env >> "$GITHUB_ENV"
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Comprobar el bundle
+        run: |
+          set -euo pipefail
+          IMG="ghcr.io/${IMAGE_NAMESPACE}/tequio-web:${{ needs.version.outputs.version }}"
+          docker pull -q "$IMG"
+          CID="$(docker create "$IMG")"
+          trap 'docker rm -f "$CID" >/dev/null 2>&1 || true' EXIT
+          OUT="$RUNNER_TEMP/bundle"; mkdir -p "$OUT"
+          # Ruta literal a propósito: es donde el Dockerfile.web deja el bundle.
+          # Si upstream la cambia, esto tiene que fallar, no buscar en otro sitio.
+          docker cp "$CID:/usr/share/nginx/html" "$OUT/" \
+            || { echo "FATAL: la imagen web no tiene el bundle en /usr/share/nginx/html"; exit 1; }
+          grep -rqs "Tequio" "$OUT" || { echo "FATAL: el bundle no lleva el rebranding"; exit 1; }
+          # Las VITE_* quedan horneadas como un objeto literal
+          #   {VITE_SOURCE_CODE_URL:`/source/`,VITE_SUPPORT_EMAIL:`...`,...}
+          # Se busca la ASIGNACIÓN, no el valor suelto: "/source/" a secas
+          # aparece en cualquier ruta del bundle y daría por buena una compilación
+          # en la que la variable llegó vacía.
+          grep -rqsE "VITE_SOURCE_CODE_URL:.{0,2}${VITE_SOURCE_CODE_URL}" "$OUT" \
+            || { echo "FATAL: el bundle no lleva horneada VITE_SOURCE_CODE_URL=$VITE_SOURCE_CODE_URL"; exit 1; }
+          grep -rqsE "VITE_SUPPORT_EMAIL:.{0,2}${VITE_SUPPORT_EMAIL}" "$OUT" \
+            || { echo "FATAL: el bundle no lleva horneado VITE_SUPPORT_EMAIL"; exit 1; }
+          echo "OK: bundle verificado"
+
+  release:
+    needs: [version, backend, proxy, frontend, verify-web]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Cargar release.env
+        # Solo las líneas KEY=valor: $GITHUB_ENV no admite comentarios.
+        run: grep -E '^[A-Z_]+=' release.env >> "$GITHUB_ENV"
+      - name: Preparar el árbol de upstream
+        run: bash build/prepare-upstream.sh "$RUNNER_TEMP/upstream"
+      - name: Armar el contexto de la imagen de release
+        run: |
+          set -euo pipefail
+          V="${{ needs.version.outputs.version }}"
+          CTX="$RUNNER_TEMP/release-ctx"
+          mkdir -p "$CTX/kit" "$CTX/source"
+          cp -a deploy/. "$CTX/kit/"
+          chmod +x "$CTX/kit/bin/"* "$CTX/kit/install.sh"
+          bash build/source-tarball.sh "$RUNNER_TEMP/upstream" "$V" "$CTX/source"
+          cp build/release/Dockerfile "$CTX/Dockerfile"
+          python3 - "$CTX/release.json" <<PY
+          import json, os, sys, subprocess
+          json.dump({
+            "version": "$V",
+            "channel": "${{ needs.version.outputs.channel }}",
+            "commit": os.environ["GITHUB_SHA"],
+            "upstream_ref": os.environ["UPSTREAM_REF"],
+            "built_at": subprocess.run(["date","-u","+%Y-%m-%dT%H:%M:%SZ"],
+                                       capture_output=True, text=True).stdout.strip(),
+            "images": [f"ghcr.io/{os.environ['IMAGE_NAMESPACE']}/tequio-{n}:$V"
+                       for n in ("backend","web","space","admin","live","proxy")],
+          }, open(sys.argv[1], "w"), indent=2)
+          PY
+          cat "$CTX/release.json"
+      - uses: docker/build-push-action@v6
+        with:
+          context: ${{ runner.temp }}/release-ctx
+          file: ${{ runner.temp }}/release-ctx/Dockerfile
+          push: true
+          build-args: |
+            VERSION=${{ needs.version.outputs.version }}
+            CHANNEL=${{ needs.version.outputs.channel }}
+          # La etiqueta de canal va aquí, en el ÚLTIMO push del workflow: es lo
+          # que hace que los clientes vean la versión nueva.
+          tags: |
+            ghcr.io/${{ env.IMAGE_NAMESPACE }}/tequio-release:${{ needs.version.outputs.version }}
+            ghcr.io/${{ env.IMAGE_NAMESPACE }}/tequio-release:${{ needs.version.outputs.channel }}
+      - name: Resumen
+        run: |
+          {
+            echo "## Tequio ${{ needs.version.outputs.version }} publicado"
+            echo
+            echo "Canal: \`${{ needs.version.outputs.channel }}\`"
+            echo
+            echo "Los clientes del canal lo aplicarán en su ventana nocturna."
+            echo "Para forzarlo en una instancia: \`tequio update\`."
+          } >> "$GITHUB_STEP_SUMMARY"

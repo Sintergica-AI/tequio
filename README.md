@@ -9,6 +9,7 @@ Plane CE para producir Tequio, en dos capas independientes:
 |---|---|---|
 | 1 · API pública | [`patch/`](patch/) | *Pages* y *features* en el API `X-API-Key` + fix del asistente de IA de fábrica |
 | 2 · Funciones Tequio | [`features/`](features/) | Wiki por organización, gestor de archivos (Drive), finanzas, asistente de IA, canales de chat, correos e identidad Tequio — con su interfaz web |
+| 3 · Distribución | [`build/`](build/) y [`deploy/`](deploy/) | Las recetas con las que CI construye las imágenes de cada versión, y el kit con el que una instancia se instala y se actualiza sola |
 
 La capa 1 hace que el
 [servidor MCP oficial de Plane](https://github.com/makeplane/plane-mcp-server)
@@ -174,6 +175,33 @@ corrige los patrones que el script reporte como no encontrados.
 
 Restaura la imagen oficial en el `docker-compose.yaml` y recrea los servicios.
 No hay cambios de esquema en la base de datos que deshacer.
+
+## Desplegar en el VPS de un cliente
+
+Una etiqueta `v*` en este repositorio construye las seis imágenes de esa versión
+y publica `tequio-release:stable`. Cada instancia lo ve esa madrugada, respalda
+su base de datos, migra, se recrea y revierte sola si no responde.
+
+```bash
+# En el VPS del cliente, con el DNS ya apuntando aquí:
+docker run --rm ghcr.io/sintergica-ai/tequio-release:stable cat /kit/install.sh > install.sh
+sudo bash install.sh --domain tequio.cliente.com --email admin@cliente.com
+```
+
+Guía completa —requisitos, operación, canales, adopción de una instancia
+existente y qué hacer cuando algo falla— en [`deploy/README.md`](deploy/README.md).
+
+| | |
+|---|---|
+| [`release.env`](release.env) | Las entradas fijadas de una versión: ref de upstream, imágenes base y los valores que se hornean en el bundle web |
+| [`build/`](build/) | Recetas: Dockerfile del backend y del proxy, preparación del árbol de upstream, tarball de código fuente (AGPL §13) e imagen de release |
+| [`deploy/`](deploy/) | Lo que acaba en el servidor: instalador, compose, comandos `tequio`, actualizador y unidades de systemd |
+| [`.github/workflows/release.yml`](.github/workflows/release.yml) | El pipeline que ata las dos cosas |
+
+Los scripts de `features/scripts/` (sync-web, sync-backend, …) siguen sirviendo
+para iterar rápido contra la instancia propia, pero **no son la vía de despliegue
+a clientes**: construyen en el servidor de destino y dejan estado mixto cuando el
+SSH se corta a mitad.
 
 ## Licencia
 

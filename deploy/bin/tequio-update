@@ -1,0 +1,309 @@
+#!/bin/bash
+# Tequio · actualizador. Lo dispara un temporizador de systemd cada noche y
+# también `tequio update`.
+#
+# QUÉ HACE, en orden, y por qué ese orden:
+#   1. Descarga la imagen de release del canal y le lee la versión de una
+#      etiqueta. Esa imagen es el único punto de sincronía: CI la publica al
+#      FINAL, cuando las demás ya están arriba, así que si existe, existen todas.
+#   2. Se reemplaza a sí mismo y al compose con los del release (el kit también
+#      se actualiza; si no, un compose viejo no sabría levantar un servicio nuevo).
+#   3. Comprueba que `tequio.env` tiene las claves que la versión nueva exige.
+#   4. Descarga las imágenes. Hasta aquí no se ha tocado nada en marcha.
+#   5. Respalda la base de datos y corre el `migrator` ANTES de recrear api,
+#      worker y beat: si no, esos tres se quedan colgados en wait_for_migrations.
+#   6. Recrea los servicios, extrae el tarball de código fuente (AGPL §13) y
+#      comprueba la salud. Si no responde, VUELVE a la versión anterior.
+#
+# Lo que NO hace solo: restaurar la base de datos. Un `pg_restore` destructivo
+# automático puede tirar lo que se escribió mientras tanto, y las migraciones
+# de Tequio son aditivas por convención, así que el código viejo sigue
+# funcionando sobre el esquema nuevo. Si el migrator falla, esto se detiene,
+# avisa e imprime el comando exacto de restauración para una persona.
+set -euo pipefail
+
+TEQUIO_HOME="${TEQUIO_HOME:-/opt/tequio}"
+FORCE=0
+REEXEC="${TEQUIO_REEXEC:-0}"
+for arg in "$@"; do
+  case "$arg" in
+    --force) FORCE=1 ;;
+    --reexec) REEXEC=1 ;;
+    *) echo "Uso: tequio-update [--force]"; exit 2 ;;
+  esac
+done
+
+[ -f "$TEQUIO_HOME/tequio.env" ] || { echo "FATAL: no existe $TEQUIO_HOME/tequio.env"; exit 1; }
+# shellcheck disable=SC1090
+set -a; . "$TEQUIO_HOME/tequio.env"; set +a
+
+REGISTRY="${TEQUIO_REGISTRY:-ghcr.io}"
+NAMESPACE="${TEQUIO_NAMESPACE:-sintergica-ai}"
+CHANNEL="${TEQUIO_CHANNEL:-stable}"
+PROJECT="${COMPOSE_PROJECT_NAME:-tequio}"
+RELEASE_IMAGE="$REGISTRY/$NAMESPACE/tequio-release:$CHANNEL"
+STATE="$TEQUIO_HOME/state"
+LOGDIR="/var/log/tequio"
+mkdir -p "$STATE" "$LOGDIR" "$TEQUIO_HOME/backups" "$TEQUIO_HOME/source/public" "$TEQUIO_HOME/kit"
+
+# El mismo fichero de log para el proceso que arranca y para el actualizador
+# nuevo al que cede el control: si no, media actualización queda en un log y la
+# otra media en otro, y el que se mira primero parece truncado.
+LOG="${TEQUIO_LOG:-$LOGDIR/update-$(date +%Y%m%d-%H%M%S).log}"
+exec > >(tee -a "$LOG") 2>&1
+
+# Un solo actualizador a la vez: el temporizador y una ejecución manual pueden
+# coincidir, y dos migrator simultáneos sobre la misma base no es un escenario
+# que nadie quiera depurar.
+#
+# El candado NO se vuelve a pedir tras el exec: el descriptor 9 se hereda y el
+# bloqueo sigue puesto. Volver a abrir el fichero crearía una descripción nueva
+# que choca con la heredada — del mismo proceso —, `flock -n` fallaría y la
+# actualización se saldría diciendo "ya hay una en curso". Un fallo que parece
+# una decisión.
+if [ "$REEXEC" != "1" ]; then
+  exec 9>"$STATE/update.lock"
+  flock -n 9 || { echo "Ya hay una actualización en curso. Salgo."; exit 0; }
+fi
+
+say() { echo "[$(date +%H:%M:%S)] $*"; }
+die() { echo "FATAL: $*" >&2; alert "error" "$*"; exit 1; }
+
+alert() {
+  local status="$1" msg="$2"
+  [ -n "${TEQUIO_ALERT_WEBHOOK:-}" ] || return 0
+  msg="${msg//$'\n'/ }"
+  curl -fsS -m 15 -X POST -H 'Content-Type: application/json' \
+    -d "$(printf '{"instance":"%s","status":"%s","message":"%s","log":"%s"}' \
+          "${APP_DOMAIN:-desconocido}" "$status" "${msg//\"/\'}" "$LOG")" \
+    "$TEQUIO_ALERT_WEBHOOK" >/dev/null 2>&1 || true
+}
+
+compose() {
+  docker compose \
+    --project-name "$PROJECT" \
+    --project-directory "$TEQUIO_HOME" \
+    -f "$TEQUIO_HOME/docker-compose.yaml" \
+    --env-file "$TEQUIO_HOME/tequio.env" \
+    --env-file "$STATE/version.env" \
+    "$@"
+}
+
+registry_login() {
+  [ -n "${TEQUIO_REGISTRY_TOKEN:-}" ] || return 0
+  echo "$TEQUIO_REGISTRY_TOKEN" | docker login "$REGISTRY" \
+    -u "${TEQUIO_REGISTRY_USER:-tequio}" --password-stdin >/dev/null \
+    || die "no pude autenticarme contra $REGISTRY"
+}
+
+# --- 1. ¿Hay versión nueva? ---------------------------------------------------
+say "canal $CHANNEL · imagen de release $RELEASE_IMAGE"
+registry_login
+docker pull -q "$RELEASE_IMAGE" >/dev/null || die "no pude descargar $RELEASE_IMAGE"
+
+NEW="$(docker image inspect "$RELEASE_IMAGE" \
+        --format '{{ index .Config.Labels "ai.sintergica.tequio.version" }}')"
+[ -n "$NEW" ] || die "la imagen de release no trae la etiqueta de versión"
+CUR=""
+if [ -f "$STATE/version.env" ]; then
+  CUR="$(sed -n 's/^TEQUIO_VERSION=//p' "$STATE/version.env")"
+fi
+
+if [ "$NEW" = "$CUR" ] && [ "$FORCE" -eq 0 ]; then
+  say "ya en $CUR — nada que hacer"
+  exit 0
+fi
+say "actualizando: ${CUR:-(sin versión previa)} -> $NEW"
+
+# --- 2. El kit se actualiza a sí mismo ---------------------------------------
+KIT="$TEQUIO_HOME/kit/$NEW"
+if [ ! -d "$KIT" ]; then
+  say "extrayendo el kit $NEW de la imagen de release"
+  CID="$(docker create "$RELEASE_IMAGE")"
+  trap 'docker rm -f "$CID" >/dev/null 2>&1 || true' EXIT
+  rm -rf "$KIT.tmp"; mkdir -p "$KIT.tmp"
+  docker cp "$CID:/kit/." "$KIT.tmp/" || die "no pude extraer /kit de la imagen"
+  docker rm -f "$CID" >/dev/null; trap - EXIT
+  [ -f "$KIT.tmp/docker-compose.yaml" ] && [ -x "$KIT.tmp/bin/tequio-update" ] \
+    || die "el kit extraído está incompleto"
+  mv "$KIT.tmp" "$KIT"
+fi
+
+# El actualizador nuevo puede necesitar pasos que este no conoce, así que a
+# partir de aquí manda él. TEQUIO_REEXEC corta el bucle.
+if [ "$REEXEC" != "1" ]; then
+  say "cediendo el control al actualizador de $NEW"
+  ARGS=(--reexec)
+  if [ "$FORCE" -eq 1 ]; then ARGS+=(--force); fi
+  exec env TEQUIO_REEXEC=1 TEQUIO_HOME="$TEQUIO_HOME" TEQUIO_LOG="$LOG" \
+    "$KIT/bin/tequio-update" "${ARGS[@]}"
+fi
+
+install -m 644 "$KIT/docker-compose.yaml" "$TEQUIO_HOME/docker-compose.yaml"
+install -d "$TEQUIO_HOME/bin"
+install -m 755 "$KIT/bin/"* "$TEQUIO_HOME/bin/"
+install -m 644 "$KIT/tequio.env.example" "$TEQUIO_HOME/tequio.env.example"
+SYSTEMD_CHANGED=0
+for unit in tequio-update.service tequio-update.timer; do
+  if [ -f "$KIT/systemd/$unit" ] && ! cmp -s "$KIT/systemd/$unit" "/etc/systemd/system/$unit"; then
+    install -m 644 "$KIT/systemd/$unit" "/etc/systemd/system/$unit"
+    SYSTEMD_CHANGED=1
+  fi
+done
+[ "$SYSTEMD_CHANGED" -eq 0 ] || { systemctl daemon-reload; systemctl restart tequio-update.timer || true; }
+
+# --- 3. ¿Le falta configuración a esta instancia? ----------------------------
+# Una versión nueva puede exigir una clave nueva. Mejor detenerse aquí, con el
+# nombre de la clave, que levantar servicios que fallan por una variable vacía.
+# La lista de obligatorias se saca del PROPIO compose (las marcadas `:?`), no de
+# una lista escrita a mano: una lista paralela se queda corta en silencio en
+# cuanto el compose crece, que es exactamente como se han roto aquí otras cosas.
+REQUIRED="$(grep -oE '\$\{[A-Z_][A-Z0-9_]*:\?' "$TEQUIO_HOME/docker-compose.yaml" \
+            | sed 's/^\${//; s/:?$//' | sort -u)"
+MISSING=""
+for key in $REQUIRED; do
+  # TEQUIO_VERSION no vive en tequio.env sino en state/version.env.
+  if [ "$key" = "TEQUIO_VERSION" ]; then continue; fi
+  [ -n "${!key:-}" ] || MISSING="$MISSING $key"
+done
+if [ -n "$MISSING" ]; then
+  die "a tequio.env le faltan claves que esta versión necesita:$MISSING
+       Añádelas comparando con $TEQUIO_HOME/tequio.env.example y vuelve a lanzar
+       'tequio update'. No se ha modificado nada."
+fi
+
+# --- 4. Descargar imágenes (todavía no se toca nada en marcha) ---------------
+printf 'TEQUIO_VERSION=%s\n' "$NEW" > "$STATE/version.env.pull"
+say "descargando imágenes de $NEW"
+TEQUIO_VERSION="$NEW" docker compose \
+  --project-name "$PROJECT" --project-directory "$TEQUIO_HOME" \
+  -f "$TEQUIO_HOME/docker-compose.yaml" \
+  --env-file "$TEQUIO_HOME/tequio.env" --env-file "$STATE/version.env.pull" \
+  --profile tools pull -q || die "no pude descargar las imágenes de $NEW"
+
+# --- 5. Respaldo y migraciones ------------------------------------------------
+# Las imágenes ya están en disco: a partir de aquí el estado apunta a la nueva.
+mv "$STATE/version.env.pull" "$STATE/version.env"
+
+if [ -n "$CUR" ]; then
+  say "respaldando la base de datos"
+  DUMP="$TEQUIO_HOME/backups/tequio-$(date +%F-%H%M%S)-pre-$NEW.dump"
+  # PGHOST fuerza TCP dentro del contenedor, así que hace falta la contraseña;
+  # se toma del entorno del propio contenedor para no pasarla por la línea de
+  # comandos (queda en `ps`).
+  compose exec -T plane-db \
+    sh -c 'PGPASSWORD="$POSTGRES_PASSWORD" pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Fc' > "$DUMP" \
+    || die "el respaldo falló — no se migra nada"
+  [ -s "$DUMP" ] || die "el respaldo salió vacío — no se migra nada"
+  say "respaldo: $DUMP ($(du -h "$DUMP" | cut -f1))"
+  # Se conservan 10; el disco de un VPS pequeño no da para más histórico.
+  ls -1t "$TEQUIO_HOME/backups/"*.dump 2>/dev/null | tail -n +11 | xargs -r rm -f
+else
+  say "instalación nueva: no hay base que respaldar"
+  DUMP=""
+fi
+
+say "aplicando migraciones"
+if ! compose run --rm migrator; then
+  alert "error" "el migrator falló al pasar a $NEW"
+  cat >&2 <<MSG
+FATAL: el migrator falló. NO se ha recreado ningún servicio: la instancia sigue
+       corriendo la versión ${CUR:-anterior}.
+
+       La base puede haber quedado a medio migrar. Las migraciones de Tequio son
+       aditivas, así que lo normal es que la versión anterior siga funcionando.
+       Comprueba la instancia antes de restaurar nada.
+
+       Si hace falta restaurar el respaldo (DESTRUCTIVO, pierde lo escrito desde
+       $( [ -n "$DUMP" ] && date -r "$DUMP" '+%F %H:%M' || echo 'el respaldo' )):
+         tequio restore $DUMP
+MSG
+  # La versión de estado vuelve a la anterior: nada llegó a desplegarse.
+  if [ -n "$CUR" ]; then printf 'TEQUIO_VERSION=%s\n' "$CUR" > "$STATE/version.env"; fi
+  exit 1
+fi
+
+# El migrator saliendo con 0 mide que el proceso terminó, no que el esquema esté
+# al día. Esto mide el esquema.
+MIGSTATE="$(compose run --rm --no-deps --entrypoint "" api \
+              sh -c 'cd /code && python manage.py showmigrations --plan' 2>/dev/null || true)"
+APPLIED="$(printf '%s\n' "$MIGSTATE" | grep -c '^\[X\]' || true)"
+PENDING="$(printf '%s\n' "$MIGSTATE" | grep -c '^\[ \]' || true)"
+# Si el comando no llegó a correr, la salida es vacía y "0 pendientes" sería una
+# respuesta a una pregunta distinta de la que se está haciendo. Se exige ver
+# migraciones aplicadas para creerse el cero.
+[ "${APPLIED:-0}" -gt 0 ] \
+  || die "no pude leer el estado de las migraciones: la comprobación no midió nada"
+[ "${PENDING:-0}" -eq 0 ] || die "quedan $PENDING migraciones sin aplicar tras el migrator"
+
+# --- 6. Recrear servicios ------------------------------------------------------
+say "recreando servicios"
+compose up -d --remove-orphans || die "compose up falló"
+
+# Código fuente correspondiente (AGPL §13) de ESTA versión, sacado de la misma
+# imagen de release de la que salieron los binarios.
+say "publicando el código fuente correspondiente en /source/"
+CID="$(docker create "$RELEASE_IMAGE")"
+trap 'docker rm -f "$CID" >/dev/null 2>&1 || true' EXIT
+docker cp "$CID:/source/." "$TEQUIO_HOME/source/public/" || die "no pude extraer el tarball de fuente"
+docker rm -f "$CID" >/dev/null; trap - EXIT
+# Se guardan las tres últimas: quien usó una versión anterior conserva el
+# derecho a SU fuente correspondiente.
+ls -1t "$TEQUIO_HOME/source/public/"*.tar.gz 2>/dev/null | tail -n +4 | xargs -r rm -f
+ls -1 "$TEQUIO_HOME/source/public/" | grep -q "$NEW" \
+  || die "el tarball de fuente de $NEW no quedó publicado"
+
+# --- 7. ¿Responde? ------------------------------------------------------------
+health_ok() {
+  local body
+  body="$(curl -fsSL -m 15 "${WEB_URL%/}/api/instances/" 2>/dev/null)" || return 1
+  case "$body" in *is_activated*) return 0 ;; *) return 1 ;; esac
+}
+
+say "comprobando salud en ${WEB_URL%/}/api/instances/"
+OK=0
+for i in $(seq 1 30); do
+  if health_ok; then OK=1; break; fi
+  sleep 5
+done
+
+if [ "$OK" -ne 1 ]; then
+  say "la instancia no responde tras 150 s — volviendo a ${CUR:-la versión anterior}"
+  if [ -n "$CUR" ]; then
+    printf 'TEQUIO_VERSION=%s\n' "$CUR" > "$STATE/version.env"
+    compose up -d --force-recreate || true
+    for i in $(seq 1 24); do if health_ok; then break; fi; sleep 5; done
+    if health_ok; then
+      alert "revertido" "$NEW no arrancó; la instancia volvió a $CUR"
+      die "no arrancó $NEW. Revertido a $CUR y verificado. Log: $LOG"
+    fi
+    alert "caida" "$NEW no arrancó y la reversión a $CUR tampoco responde"
+    die "no arrancó $NEW y la reversión tampoco responde. Log: $LOG"
+  fi
+  die "la instancia no responde y no hay versión previa a la que volver"
+fi
+
+# Un servicio en bucle de reinicios puede convivir con un /api/ que responde:
+# el api vive y el worker se cae, por ejemplo. Se comprueban todos.
+BAD="$(docker ps -a --filter "label=com.docker.compose.project=$PROJECT" \
+        --format '{{.Label "com.docker.compose.service"}}|{{.Status}}' \
+      | awk -F'|' '$2 !~ /^Up/ {print $1}' | tr '\n' ' ')"
+[ -z "$BAD" ] || die "estos servicios no quedaron en marcha: $BAD"
+
+printf '%s %s\n' "$(date -Is)" "$NEW" >> "$STATE/history"
+
+# Cada versión pesa ~3 GB en imágenes. Se conservan las TRES últimas: la actual,
+# la anterior (a la que revierte `tequio rollback`) y una de margen. Sin esto un
+# VPS de 40 GB se llena en un par de meses de actualizaciones semanales, y el
+# síntoma —"no queda espacio"— aparece lejos de su causa.
+KEEP="$(awk '{print $2}' "$STATE/history" | awk '!seen[$0]++' | tail -3)"
+for old_v in $(awk '{print $2}' "$STATE/history" | awk '!seen[$0]++'); do
+  case " $KEEP " in *" $old_v "*) continue ;; esac
+  for img in backend web space admin live proxy release; do
+    docker image rm "$REGISTRY/$NAMESPACE/tequio-$img:$old_v" >/dev/null 2>&1 || true
+  done
+  rm -rf "${TEQUIO_HOME:?}/kit/$old_v"
+done
+
+say "OK: $NEW en marcha"
+alert "ok" "actualizado a $NEW"

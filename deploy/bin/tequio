@@ -1,0 +1,145 @@
+#!/bin/bash
+# Tequio · comandos de operación de la instancia. Todo lo que hay que hacer en
+# el servidor pasa por aquí, para no tener que recordar el compose, sus dos
+# ficheros de entorno y el nombre del proyecto.
+set -euo pipefail
+
+TEQUIO_HOME="${TEQUIO_HOME:-/opt/tequio}"
+STATE="$TEQUIO_HOME/state"
+[ -f "$TEQUIO_HOME/tequio.env" ] || { echo "No encuentro $TEQUIO_HOME/tequio.env"; exit 1; }
+# shellcheck disable=SC1090
+set -a; . "$TEQUIO_HOME/tequio.env"; set +a
+PROJECT="${COMPOSE_PROJECT_NAME:-tequio}"
+
+compose() {
+  docker compose \
+    --project-name "$PROJECT" \
+    --project-directory "$TEQUIO_HOME" \
+    -f "$TEQUIO_HOME/docker-compose.yaml" \
+    --env-file "$TEQUIO_HOME/tequio.env" \
+    --env-file "$STATE/version.env" \
+    "$@"
+}
+
+version() { sed -n 's/^TEQUIO_VERSION=//p' "$STATE/version.env" 2>/dev/null; }
+
+usage() {
+  cat <<'USAGE'
+Uso: tequio <comando>
+
+  status              versión, servicios, salud y próxima actualización
+  update [--force]    busca versión nueva y la aplica (respaldo + migración + reversión si falla)
+  rollback [versión]  vuelve a la versión anterior (o a la indicada)
+  backup              respalda la base de datos ahora
+  restore <fichero>   restaura un respaldo (DESTRUCTIVO)
+  logs [servicio]     sigue los registros
+  start | stop | restart [servicio]
+  source              qué código fuente se está ofreciendo en /source/
+  doctor              comprobaciones de la instalación
+  version             versión desplegada
+USAGE
+}
+
+case "${1:-}" in
+  status)
+    echo "Tequio $(version)   canal ${TEQUIO_CHANNEL:-stable}   ${WEB_URL:-}"
+    echo
+    docker ps -a --filter "label=com.docker.compose.project=$PROJECT" \
+      --format 'table {{.Label "com.docker.compose.service"}}\t{{.Status}}\t{{.Image}}'
+    echo
+    if curl -fsSL -m 15 "${WEB_URL%/}/api/instances/" 2>/dev/null | grep -q is_activated; then
+      echo "salud: OK ($WEB_URL responde)"
+    else
+      echo "salud: NO RESPONDE en $WEB_URL"
+    fi
+    echo
+    systemctl list-timers tequio-update.timer --no-pager 2>/dev/null | head -3 || true
+    ;;
+
+  update)  shift; exec "$TEQUIO_HOME/bin/tequio-update" "$@" ;;
+
+  rollback)
+    TARGET="${2:-}"
+    if [ -z "$TARGET" ]; then
+      # La penúltima versión distinta del historial.
+      TARGET="$(awk '{print $2}' "$STATE/history" 2>/dev/null | awk '!seen[$0]++' | tail -2 | head -1)"
+      [ -n "$TARGET" ] && [ "$TARGET" != "$(version)" ] \
+        || { echo "No hay versión anterior registrada. Indícala: tequio rollback <versión>"; exit 1; }
+    fi
+    echo "Volviendo a $TARGET (los datos NO se tocan; las migraciones ya aplicadas se quedan)."
+    printf 'TEQUIO_VERSION=%s\n' "$TARGET" > "$STATE/version.env"
+    compose up -d --force-recreate
+    printf '%s %s (rollback)\n' "$(date -Is)" "$TARGET" >> "$STATE/history"
+    ;;
+
+  backup)
+    mkdir -p "$TEQUIO_HOME/backups"
+    DUMP="$TEQUIO_HOME/backups/tequio-$(date +%F-%H%M%S)-manual.dump"
+    compose exec -T plane-db \
+      sh -c 'PGPASSWORD="$POSTGRES_PASSWORD" pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Fc' > "$DUMP"
+    [ -s "$DUMP" ] || { echo "FATAL: el respaldo salió vacío"; rm -f "$DUMP"; exit 1; }
+    echo "$DUMP ($(du -h "$DUMP" | cut -f1))"
+    ;;
+
+  restore)
+    DUMP="${2:?Uso: tequio restore <fichero.dump>}"
+    [ -s "$DUMP" ] || { echo "No existe o está vacío: $DUMP"; exit 1; }
+    echo "Esto SOBREESCRIBE la base de datos con $DUMP."
+    read -r -p "Escribe RESTAURAR para continuar: " ans
+    [ "$ans" = "RESTAURAR" ] || { echo "Cancelado."; exit 1; }
+    # Con la app parada: un restore bajo escrituras deja la base inconsistente.
+    compose stop api worker beat-worker live web space admin
+    docker exec -i "$(docker ps -q --filter "label=com.docker.compose.project=$PROJECT" \
+                       --filter "label=com.docker.compose.service=plane-db")" \
+      sh -c 'PGPASSWORD="$POSTGRES_PASSWORD" pg_restore -U "$POSTGRES_USER" -d "$POSTGRES_DB" --clean --if-exists' < "$DUMP"
+    compose up -d
+    echo "Restaurado. Comprueba con: tequio status"
+    ;;
+
+  logs)    shift; compose logs -f --tail=200 "$@" ;;
+  start)   shift; compose up -d "$@" ;;
+  stop)    shift; compose stop "$@" ;;
+  restart) shift; compose restart "$@" ;;
+
+  source)
+    echo "Se ofrece en ${WEB_URL%/}/source/ :"
+    ls -lh "$TEQUIO_HOME/source/public/" 2>/dev/null || echo "  (vacío)"
+    V="$(version)"
+    if ls "$TEQUIO_HOME/source/public/" 2>/dev/null | grep -q "$V"; then
+      echo "OK: el tarball de la versión desplegada ($V) está publicado."
+    else
+      echo "AVISO: NO hay tarball para la versión desplegada ($V)."
+      echo "       El aviso de licencia estaría ofreciendo código de otra versión."
+      echo "       Arréglalo con: tequio update --force"
+    fi
+    ;;
+
+  doctor)
+    FAIL=0
+    echo "== versión =="; version
+    echo "== claves obligatorias =="
+    REQ="$(grep -oE '\$\{[A-Z_][A-Z0-9_]*:\?' "$TEQUIO_HOME/docker-compose.yaml" | sed 's/^\${//; s/:?$//' | sort -u)"
+    for k in $REQ; do
+      if [ "$k" = "TEQUIO_VERSION" ]; then continue; fi
+      if [ -z "${!k:-}" ]; then echo "  FALTA $k"; FAIL=1; fi
+    done
+    if [ "$FAIL" -eq 0 ]; then echo "  todas presentes"; fi
+    echo "== migraciones pendientes =="
+    P="$(compose run --rm --no-deps --entrypoint "" api sh -c 'cd /code && python manage.py showmigrations --plan' 2>/dev/null | grep -c '^\[ \]' || true)"
+    if [ "${P:-0}" -eq 0 ]; then echo "  ninguna"; else echo "  $P SIN APLICAR — corre 'tequio update --force'"; FAIL=1; fi
+    echo "== disco =="; df -h "$TEQUIO_HOME" | tail -1
+    echo "== respaldos =="; ls -1t "$TEQUIO_HOME/backups"/*.dump 2>/dev/null | head -3 || echo "  ninguno"
+    echo "== temporizador =="
+    systemctl is-enabled tequio-update.timer >/dev/null 2>&1 \
+      && echo "  activo" || { echo "  NO ESTÁ ACTIVO — no habrá actualizaciones automáticas"; FAIL=1; }
+    echo "== fuente (AGPL) =="
+    V="$(version)"
+    ls "$TEQUIO_HOME/source/public/" 2>/dev/null | grep -q "$V" \
+      && echo "  publicado para $V" || { echo "  FALTA el tarball de $V"; FAIL=1; }
+    exit "$FAIL"
+    ;;
+
+  version) version ;;
+  ""|-h|--help|help) usage ;;
+  *) echo "Comando desconocido: $1"; echo; usage; exit 2 ;;
+esac

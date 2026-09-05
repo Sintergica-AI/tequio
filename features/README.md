@@ -265,6 +265,11 @@ tiene que partirla; mandarla entera como nombre de modelo es un 404.
 
 ## Desplegar
 
+> Esto es el despliegue **a la instancia propia**, que construye en el propio
+> servidor. Para el VPS de un cliente no se usa: ahí las imágenes vienen ya
+> construidas y la instancia se actualiza sola — ver [`deploy/`](../deploy/).
+
+
 ```bash
 bash scripts/deploy.sh          # (bash sintergica-features/deploy.sh en la copia local)
 ```

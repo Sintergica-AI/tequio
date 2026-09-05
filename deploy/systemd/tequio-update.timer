@@ -1,0 +1,14 @@
+[Unit]
+Description=Tequio · comprobación nocturna de actualizaciones
+
+[Timer]
+OnCalendar=*-*-* 03:00:00
+# Reparte la hora real dentro de la madrugada: si todas las instancias
+# preguntaran al registro en el mismo segundo, el primer fallo sería de todas a
+# la vez y por la misma causa.
+RandomizedDelaySec=3600
+# Si el servidor estaba apagado a esa hora, se ejecuta al arrancar.
+Persistent=true
+
+[Install]
+WantedBy=timers.target

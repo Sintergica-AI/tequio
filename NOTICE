@@ -20,6 +20,9 @@ Community Edition v1.4.2 (agosto de 2026):
   - Plantillas de correo transaccional con identidad Tequio
     (features/backend/emails/**) y español como idioma por defecto de la
     interfaz.
+  - Empaquetado y distribución: recetas de construcción de las imágenes
+    (build/**) y kit de instalación y actualización de una instancia
+    (deploy/**).
 
 "Plane" es una marca de Plane Software, Inc. Tequio no está afiliado a
 Plane Software, Inc. ni cuenta con su respaldo o patrocinio. El nombre y
@@ -34,7 +37,12 @@ Inc. en los archivos derivados.
 AGPL-3.0 §13 (interacción remota por red): toda persona que use una
 instancia de Tequio a través de la red tiene derecho a recibir el código
 fuente correspondiente de esa versión modificada. La aplicación ofrece
-ese código en el menú de ayuda, bajo "Código fuente"; la dirección se
-configura con la variable de entorno VITE_SOURCE_CODE_URL.
+ese código en el menú de ayuda, bajo "Código fuente", que apunta a /source/
+de la propia instancia (variable de compilación VITE_SOURCE_CODE_URL).
+
+Cada instancia sirve ahí el paquete de código fuente correspondiente a LA
+VERSIÓN QUE ESTÁ EJECUTANDO: se construye con las mismas entradas que las
+imágenes y se publica en la misma operación que las despliega, de modo que
+la correspondencia no depende de que nadie se acuerde de regenerarlo.
 
 Texto completo de la licencia: https://www.gnu.org/licenses/agpl-3.0.txt
