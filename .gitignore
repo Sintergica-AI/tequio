@@ -3,6 +3,12 @@ __pycache__/
 *.env
 plane.env
 variables.env
+# EXCEPCIÓN: release.env NO son datos de un servidor, son las entradas
+# fijadas de una versión (ref de upstream, imágenes base, valores que se
+# hornean en el web) y CI las necesita. Sin esta línea, `*.env` lo excluye
+# y `git add -A` lo salta en silencio: el workflow falla al arrancar con un
+# 'No such file or directory' que no dice nada de la causa.
+!release.env
 .DS_Store
 
 # Configuración de despliegue con datos del servidor (host, puerto, llave).

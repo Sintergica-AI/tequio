@@ -65,7 +65,14 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Cargar release.env
         # Solo las líneas KEY=valor: $GITHUB_ENV no admite comentarios.
-        run: grep -E '^[A-Z_]+=' release.env >> "$GITHUB_ENV"
+        run: |
+          test -f release.env || {
+            echo "FATAL: release.env no está en el repositorio."
+            echo "       Causa habitual: .gitignore lleva '*.env' y lo excluye."
+            echo "       Tiene que haber una línea '!release.env' que lo exceptúe."
+            exit 1
+          }
+          grep -E '^[A-Z_]+=' release.env >> "$GITHUB_ENV"
       - uses: docker/build-push-action@v6
         with:
           context: .
@@ -89,7 +96,14 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Cargar release.env
         # Solo las líneas KEY=valor: $GITHUB_ENV no admite comentarios.
-        run: grep -E '^[A-Z_]+=' release.env >> "$GITHUB_ENV"
+        run: |
+          test -f release.env || {
+            echo "FATAL: release.env no está en el repositorio."
+            echo "       Causa habitual: .gitignore lleva '*.env' y lo excluye."
+            echo "       Tiene que haber una línea '!release.env' que lo exceptúe."
+            exit 1
+          }
+          grep -E '^[A-Z_]+=' release.env >> "$GITHUB_ENV"
       - uses: docker/build-push-action@v6
         with:
           context: .
@@ -125,7 +139,14 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Cargar release.env
         # Solo las líneas KEY=valor: $GITHUB_ENV no admite comentarios.
-        run: grep -E '^[A-Z_]+=' release.env >> "$GITHUB_ENV"
+        run: |
+          test -f release.env || {
+            echo "FATAL: release.env no está en el repositorio."
+            echo "       Causa habitual: .gitignore lleva '*.env' y lo excluye."
+            echo "       Tiene que haber una línea '!release.env' que lo exceptúe."
+            exit 1
+          }
+          grep -E '^[A-Z_]+=' release.env >> "$GITHUB_ENV"
       - name: Preparar el árbol de upstream con el frontend de Tequio
         run: bash build/prepare-upstream.sh "$RUNNER_TEMP/upstream"
       # Las VITE_* se HORNEAN en el bundle: ponerlas en el entorno del
@@ -155,7 +176,14 @@ jobs:
       - uses: actions/checkout@v4
       - name: Cargar release.env
         # Solo las líneas KEY=valor: $GITHUB_ENV no admite comentarios.
-        run: grep -E '^[A-Z_]+=' release.env >> "$GITHUB_ENV"
+        run: |
+          test -f release.env || {
+            echo "FATAL: release.env no está en el repositorio."
+            echo "       Causa habitual: .gitignore lleva '*.env' y lo excluye."
+            echo "       Tiene que haber una línea '!release.env' que lo exceptúe."
+            exit 1
+          }
+          grep -E '^[A-Z_]+=' release.env >> "$GITHUB_ENV"
       - uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -198,7 +226,14 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Cargar release.env
         # Solo las líneas KEY=valor: $GITHUB_ENV no admite comentarios.
-        run: grep -E '^[A-Z_]+=' release.env >> "$GITHUB_ENV"
+        run: |
+          test -f release.env || {
+            echo "FATAL: release.env no está en el repositorio."
+            echo "       Causa habitual: .gitignore lleva '*.env' y lo excluye."
+            echo "       Tiene que haber una línea '!release.env' que lo exceptúe."
+            exit 1
+          }
+          grep -E '^[A-Z_]+=' release.env >> "$GITHUB_ENV"
       - name: Preparar el árbol de upstream
         run: bash build/prepare-upstream.sh "$RUNNER_TEMP/upstream"
       - name: Armar el contexto de la imagen de release
