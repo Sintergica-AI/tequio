@@ -47,10 +47,11 @@ case "${1:-}" in
     docker ps -a --filter "label=com.docker.compose.project=$PROJECT" \
       --format 'table {{.Label "com.docker.compose.service"}}\t{{.Status}}\t{{.Image}}'
     echo
-    if curl -fsSL -m 15 "${WEB_URL%/}/api/instances/" 2>/dev/null | grep -q is_activated; then
-      echo "salud: OK ($WEB_URL responde)"
+    HEALTH_URL="${TEQUIO_HEALTH_URL:-$WEB_URL}"
+    if curl -fsSL -m 15 "${HEALTH_URL%/}/api/instances/" 2>/dev/null | grep -q is_activated; then
+      echo "salud: OK ($HEALTH_URL responde)"
     else
-      echo "salud: NO RESPONDE en $WEB_URL"
+      echo "salud: NO RESPONDE en $HEALTH_URL"
     fi
     echo
     systemctl list-timers tequio-update.timer --no-pager 2>/dev/null | head -3 || true

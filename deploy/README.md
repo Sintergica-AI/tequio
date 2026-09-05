@@ -17,20 +17,45 @@ despliegue y quedarse en un estado mixto silencioso.
 - Linux con **systemd** y **Docker Engine + plugin `docker compose` v2**.
 - 4 vCPU y 8 GB de RAM como mínimo cómodo (arranca con 4 GB, va justo).
 - 40 GB de disco: las imágenes ocupan ~3 GB y los respaldos se acumulan.
-- Puertos **80 y 443** libres y abiertos.
-- Un **registro DNS A** apuntando a la IP del servidor **antes** de instalar:
-  Caddy pide el certificado en el primer arranque.
+- Un **registro DNS A** apuntando a la IP del servidor.
+- Puertos 80 y 443 libres — **o**, si el servidor ya sirve otras cosas, el modo
+  detrás de proxy de abajo, que no los toca.
 
 ## Instalar
+
+**Servidor dedicado** (Tequio toma 80/443 y emite su propio certificado):
 
 ```bash
 docker run --rm ghcr.io/sintergica-ai/tequio-release:stable cat /kit/install.sh > install.sh
 sudo bash install.sh --domain tequio.cliente.com --email admin@cliente.com
 ```
 
+**Servidor que ya tiene otras aplicaciones** — Tequio escucha en un puerto alto
+de `127.0.0.1` y el nginx/Caddy que ya atiende el servidor le reenvía el
+dominio; el TLS lo sigue emitiendo él:
+
+```bash
+sudo bash install.sh --domain tequio.cliente.com --behind-proxy
+```
+
+Al terminar imprime el bloque de configuración listo para pegar en tu proxy, con
+los dos ajustes que se olvidan y duelen después: el límite de tamaño del cuerpo
+(o las subidas del gestor de archivos mueren) y la cabecera `Upgrade` (o el chat
+y la edición en vivo se quedan reintentando para siempre).
+
 El instalador genera los secretos, escribe `/opt/tequio/tequio.env`, instala el
 temporizador de actualizaciones y hace el primer despliegue. Tarda lo que tarde
 la descarga de imágenes.
+
+### Qué toca y qué no
+
+Todo lo de Tequio vive en `/opt/tequio`, en contenedores del proyecto de compose
+`tequio` y en volúmenes con ese prefijo. **No usa la base de datos, el Redis ni
+el almacenamiento de nada que ya esté en el servidor**: levanta los suyos dentro
+de su propia red de Docker. Fuera de su directorio solo escribe tres cosas:
+`/usr/local/bin/tequio`, las dos unidades de systemd del temporizador y
+`/var/log/tequio`. Ni el actualizador ni el desinstalado tocan contenedores,
+imágenes o volúmenes ajenos: todo va filtrado por el nombre del proyecto.
 
 Al terminar:
 

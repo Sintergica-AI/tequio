@@ -254,13 +254,14 @@ ls -1 "$TEQUIO_HOME/source/public/" | grep -q "$NEW" \
   || die "el tarball de fuente de $NEW no quedó publicado"
 
 # --- 7. ¿Responde? ------------------------------------------------------------
+HEALTH_URL="${TEQUIO_HEALTH_URL:-$WEB_URL}"
 health_ok() {
   local body
-  body="$(curl -fsSL -m 15 "${WEB_URL%/}/api/instances/" 2>/dev/null)" || return 1
+  body="$(curl -fsSL -m 15 "${HEALTH_URL%/}/api/instances/" 2>/dev/null)" || return 1
   case "$body" in *is_activated*) return 0 ;; *) return 1 ;; esac
 }
 
-say "comprobando salud en ${WEB_URL%/}/api/instances/"
+say "comprobando salud en ${HEALTH_URL%/}/api/instances/"
 OK=0
 for i in $(seq 1 30); do
   if health_ok; then OK=1; break; fi
