@@ -258,7 +258,12 @@ HEALTH_URL="${TEQUIO_HEALTH_URL:-$WEB_URL}"
 health_ok() {
   local body
   body="$(curl -fsSL -m 15 "${HEALTH_URL%/}/api/instances/" 2>/dev/null)" || return 1
-  case "$body" in *is_activated*) return 0 ;; *) return 1 ;; esac
+  # Se busca instance_id, no is_activated: ese campo ya no viene en el
+  # cuerpo de /api/instances/ y el chequeo daba falso negativo SIEMPRE,
+  # con la instancia sana. Efecto: toda actualizacion nocturna se daba
+  # por fallida y revertia. instance_id sale del propio registro de la
+  # instancia, asi que su presencia prueba que la base responde.
+  case "$body" in *instance_id*) return 0 ;; *) return 1 ;; esac
 }
 
 say "comprobando salud en ${HEALTH_URL%/}/api/instances/"
