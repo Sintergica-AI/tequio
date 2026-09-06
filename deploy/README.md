@@ -201,6 +201,33 @@ porque los volúmenes se conservan si el proyecto de compose mantiene su nombre.
 5. Para los contenedores viejos (`docker compose stop`) y lanza `tequio update`.
 6. `tequio doctor`.
 
+### Si ya hay un proxy delante (lo normal en una instancia existente)
+
+Heredar `plane.env` **no basta**: hay que heredar también *la forma en que el
+compose anterior publicaba los puertos*. Una instalación hecha a mano suele tener
+un nginx o un Caddy del sistema con los puertos 80 y 443, y el proxy del compose
+publicando sólo su HTTP en `127.0.0.1:8080`. El compose del kit publica los dos
+puertos, así que al adoptarla el arranque falla con `address already in use`
+—y el sitio se queda sin frontal— aunque todas las variables se hayan copiado
+bien. Antes de adoptar, mira los puertos del compose viejo:
+
+```bash
+docker port <contenedor-del-proxy>
+```
+
+Si sólo publica el 80 en `127.0.0.1`, pon en `tequio.env`:
+
+```
+LISTEN_BIND_IP=127.0.0.1
+LISTEN_HTTP_PORT=8080
+LISTEN_HTTPS_PORT=8443        # un puerto libre: aquí no se termina TLS
+TEQUIO_HEALTH_URL=http://127.0.0.1:8080
+```
+
+`TEQUIO_HEALTH_URL` importa: la comprobación de salud corre en el servidor, y
+medirla por el dominio público mete el proxy de fuera y su TLS en una prueba que
+sólo pretende saber si Tequio arrancó.
+
 El paso que se salta la gente es el 4: con otro nombre de proyecto, compose crea
 volúmenes vacíos y la instancia arranca **perfectamente, sin datos**. Se ve como
 una instalación nueva, no como un error.

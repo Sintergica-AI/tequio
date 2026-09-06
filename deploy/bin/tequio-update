@@ -261,19 +261,35 @@ health_ok() {
   case "$body" in *is_activated*) return 0 ;; *) return 1 ;; esac
 }
 
-say "comprobando salud en ${HEALTH_URL%/}/api/instances/"
+# 15 minutos, no 150 segundos.
+#
+# El arranque en frío del api no es instantáneo: su entrypoint registra la
+# instancia, carga la configuración, crea el bucket, limpia caché y recolecta
+# estáticos ANTES de levantar gunicorn. Con la ventana de 150 s que había aquí,
+# una instancia perfectamente sana se declaraba caída y se revertía sola — lo
+# que además alarga el corte, porque la reversión vuelve a recrearlo todo y
+# falla por lo mismo. Pasó en tequio.sintergica.ai el 5 Sep 2026.
+#
+# Esperar de más no cuesta nada (la instancia ya está sirviendo); esperar de
+# menos convierte un arranque normal en una falsa alarma y en un rebote.
+HEALTH_ATTEMPTS=90
+HEALTH_INTERVAL=10
+say "comprobando salud en ${HEALTH_URL%/}/api/instances/ (hasta $((HEALTH_ATTEMPTS * HEALTH_INTERVAL / 60)) min)"
 OK=0
-for i in $(seq 1 30); do
+for i in $(seq 1 "$HEALTH_ATTEMPTS"); do
   if health_ok; then OK=1; break; fi
-  sleep 5
+  # Una señal por minuto: un log mudo durante un cuarto de hora no se distingue
+  # de un cuelgue.
+  if [ $((i % 6)) -eq 0 ]; then say "  aún arrancando… ($((i * HEALTH_INTERVAL)) s)"; fi
+  sleep "$HEALTH_INTERVAL"
 done
 
 if [ "$OK" -ne 1 ]; then
-  say "la instancia no responde tras 150 s — volviendo a ${CUR:-la versión anterior}"
+  say "la instancia no responde tras $((HEALTH_ATTEMPTS * HEALTH_INTERVAL)) s — volviendo a ${CUR:-la versión anterior}"
   if [ -n "$CUR" ]; then
     printf 'TEQUIO_VERSION=%s\n' "$CUR" > "$STATE/version.env"
     compose up -d --force-recreate || true
-    for i in $(seq 1 24); do if health_ok; then break; fi; sleep 5; done
+    for i in $(seq 1 "$HEALTH_ATTEMPTS"); do if health_ok; then break; fi; sleep "$HEALTH_INTERVAL"; done
     if health_ok; then
       alert "revertido" "$NEW no arrancó; la instancia volvió a $CUR"
       die "no arrancó $NEW. Revertido a $CUR y verificado. Log: $LOG"
