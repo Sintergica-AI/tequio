@@ -201368,7 +201368,7 @@ index 5aa7d2f..32afb6d 100644
        "fixed_schedule": "Pevný rozvrh",
        "schedule": {
 diff --git a/packages/i18n/src/locales/cs/common.json b/packages/i18n/src/locales/cs/common.json
-index c1e9372..ecc39f7 100644
+index c1e9372..5e3c823 100644
 --- a/packages/i18n/src/locales/cs/common.json
 +++ b/packages/i18n/src/locales/cs/common.json
 @@ -244,7 +244,7 @@
@@ -201380,7 +201380,18 @@ index c1e9372..ecc39f7 100644
    "please_select_at_least_one_invitation": "Vyberte alespoň jednu pozvánku.",
    "please_select_at_least_one_invitation_description": "Vyberte alespoň jednu pozvánku pro připojení k pracovnímu prostoru.",
    "we_see_that_someone_has_invited_you_to_join_a_workspace": "Vidíme, že vás někdo pozval do pracovního prostoru",
-@@ -820,7 +820,7 @@
+@@ -681,10 +681,6 @@
+     "member": "Člen",
+     "members": "Členové",
+     "you": "Vy",
+-    "upgrade_cta": {
+-      "higher_subscription": "Upgradovat na vyšší předplatné",
+-      "talk_to_sales": "Promluvte si s prodejem"
+-    },
+     "category": "Kategorie",
+     "categories": "Kategorie",
+     "saving": "Ukládání",
+@@ -820,7 +816,7 @@
      "edited_by": "Upraveno uživatelem"
    },
    "self_hosted_maintenance_message": {
@@ -201389,7 +201400,7 @@ index c1e9372..ecc39f7 100644
      "choose_view_logs_from_setup_sh_and_docker_logs_to_be_sure": "Vyberte View Logs z setup.sh a Docker logů, abyste si byli jisti."
    },
    "customize_navigation": "Přizpůsobit navigaci",
-@@ -832,7 +832,7 @@
+@@ -832,7 +828,7 @@
    "pin": "Připnout",
    "unpin": "Odepnout",
    "workspace_dashboards": "Dashboards",
@@ -201398,7 +201409,7 @@ index c1e9372..ecc39f7 100644
    "in_app": "V aplikaci",
    "forms": "Formuláře",
    "milestones": "Milníky",
-@@ -867,5 +867,494 @@
+@@ -867,5 +863,494 @@
        "description": "Exportujte položky do JSON.",
        "short_description": "Exportovat jako JSON"
      }
@@ -202785,7 +202796,7 @@ index 66379d4..2c778e6 100644
        "fixed_schedule": "Fester Zeitplan",
        "schedule": {
 diff --git a/packages/i18n/src/locales/de/common.json b/packages/i18n/src/locales/de/common.json
-index 1e18d4e..ce8482b 100644
+index 1e18d4e..77e2143 100644
 --- a/packages/i18n/src/locales/de/common.json
 +++ b/packages/i18n/src/locales/de/common.json
 @@ -244,7 +244,7 @@
@@ -202797,7 +202808,18 @@ index 1e18d4e..ce8482b 100644
    "please_select_at_least_one_invitation": "Bitte wählen Sie mindestens eine Einladung aus.",
    "please_select_at_least_one_invitation_description": "Wählen Sie mindestens eine Einladung aus, um dem Arbeitsbereich beizutreten.",
    "we_see_that_someone_has_invited_you_to_join_a_workspace": "Wir sehen, dass Sie jemand in einen Arbeitsbereich eingeladen hat",
-@@ -820,7 +820,7 @@
+@@ -681,10 +681,6 @@
+     "member": "Mitglied",
+     "members": "Mitglieder",
+     "you": "Sie",
+-    "upgrade_cta": {
+-      "higher_subscription": "Auf ein höheres Abonnement upgraden",
+-      "talk_to_sales": "Mit Vertrieb sprechen"
+-    },
+     "category": "Kategorie",
+     "categories": "Kategorien",
+     "saving": "Wird gespeichert",
+@@ -820,7 +816,7 @@
      "edited_by": "Bearbeitet von"
    },
    "self_hosted_maintenance_message": {
@@ -202806,7 +202828,7 @@ index 1e18d4e..ce8482b 100644
      "choose_view_logs_from_setup_sh_and_docker_logs_to_be_sure": "Wählen Sie View Logs aus setup.sh und Docker-Logs, um sicherzugehen."
    },
    "customize_navigation": "Navigation anpassen",
-@@ -867,5 +867,494 @@
+@@ -867,5 +863,494 @@
        "description": "Arbeitselemente in JSON exportieren.",
        "short_description": "Als JSON exportieren"
      }
@@ -204178,7 +204200,7 @@ index 64779c7..c549990 100644
        "fixed_schedule": "Fixed schedule",
        "schedule": {
 diff --git a/packages/i18n/src/locales/en/common.json b/packages/i18n/src/locales/en/common.json
-index a138304..2d32674 100644
+index a138304..888e124 100644
 --- a/packages/i18n/src/locales/en/common.json
 +++ b/packages/i18n/src/locales/en/common.json
 @@ -244,7 +244,7 @@
@@ -204190,7 +204212,18 @@ index a138304..2d32674 100644
    "please_select_at_least_one_invitation": "Please select at least one invitation.",
    "please_select_at_least_one_invitation_description": "Please select at least one invitation to join the workspace.",
    "we_see_that_someone_has_invited_you_to_join_a_workspace": "We see that someone has invited you to join a workspace",
-@@ -820,7 +820,7 @@
+@@ -681,10 +681,6 @@
+     "member": "Member",
+     "members": "Members",
+     "you": "You",
+-    "upgrade_cta": {
+-      "higher_subscription": "Upgrade to higher subscription",
+-      "talk_to_sales": "Talk to Sales"
+-    },
+     "category": "Category",
+     "categories": "Categories",
+     "saving": "Saving",
+@@ -820,7 +816,7 @@
      "edited_by": "Edited by"
    },
    "self_hosted_maintenance_message": {
@@ -204199,7 +204232,7 @@ index a138304..2d32674 100644
      "choose_view_logs_from_setup_sh_and_docker_logs_to_be_sure": "Choose View Logs from setup.sh and Docker logs to be sure."
    },
    "customize_navigation": "Customize navigation",
-@@ -832,7 +832,7 @@
+@@ -832,7 +828,7 @@
    "pin": "Pin",
    "unpin": "Unpin",
    "workspace_dashboards": "Dashboards",
@@ -204208,7 +204241,7 @@ index a138304..2d32674 100644
    "in_app": "In-app",
    "forms": "Forms",
    "milestones": "Milestones",
-@@ -867,5 +867,494 @@
+@@ -867,5 +863,494 @@
        "description": "Export work items to a JSON file.",
        "short_description": "Export as json"
      }
@@ -205652,7 +205685,7 @@ index f49d529..b042251 100644
        "fixed_schedule": "Horario fijo",
        "schedule": {
 diff --git a/packages/i18n/src/locales/es/common.json b/packages/i18n/src/locales/es/common.json
-index 64440c9..edd1fd6 100644
+index 64440c9..df79ac6 100644
 --- a/packages/i18n/src/locales/es/common.json
 +++ b/packages/i18n/src/locales/es/common.json
 @@ -145,7 +145,7 @@
@@ -205673,7 +205706,18 @@ index 64440c9..edd1fd6 100644
    "please_select_at_least_one_invitation": "Por favor selecciona al menos una invitación.",
    "please_select_at_least_one_invitation_description": "Por favor selecciona al menos una invitación para unirte al espacio de trabajo.",
    "we_see_that_someone_has_invited_you_to_join_a_workspace": "Vemos que alguien te ha invitado a unirte a un espacio de trabajo",
-@@ -820,7 +820,7 @@
+@@ -681,10 +681,6 @@
+     "member": "Miembro",
+     "members": "Miembros",
+     "you": "Tú",
+-    "upgrade_cta": {
+-      "higher_subscription": "Mejorar a una suscripción más alta",
+-      "talk_to_sales": "Hablar con ventas"
+-    },
+     "category": "Categoría",
+     "categories": "Categorías",
+     "saving": "Guardando",
+@@ -820,7 +816,7 @@
      "edited_by": "Editado por"
    },
    "self_hosted_maintenance_message": {
@@ -205682,7 +205726,7 @@ index 64440c9..edd1fd6 100644
      "choose_view_logs_from_setup_sh_and_docker_logs_to_be_sure": "Selecciona View Logs desde setup.sh y los logs de Docker para estar seguro."
    },
    "customize_navigation": "Personalizar navegación",
-@@ -832,7 +832,7 @@
+@@ -832,7 +828,7 @@
    "pin": "Fijar",
    "unpin": "Desfijar",
    "workspace_dashboards": "Tableros",
@@ -205691,7 +205735,7 @@ index 64440c9..edd1fd6 100644
    "in_app": "En la aplicación",
    "forms": "Formularios",
    "milestones": "Hitos",
-@@ -867,5 +867,494 @@
+@@ -867,5 +863,494 @@
        "description": "Exporta elementos de trabajo a un archivo JSON.",
        "short_description": "Exportar como json"
      }
@@ -207126,7 +207170,7 @@ index 5343f12..1a31636 100644
        "fixed_schedule": "Horaire fixe",
        "schedule": {
 diff --git a/packages/i18n/src/locales/fr/common.json b/packages/i18n/src/locales/fr/common.json
-index a94ab8a..d856e90 100644
+index a94ab8a..ac315e5 100644
 --- a/packages/i18n/src/locales/fr/common.json
 +++ b/packages/i18n/src/locales/fr/common.json
 @@ -244,7 +244,7 @@
@@ -207138,7 +207182,18 @@ index a94ab8a..d856e90 100644
    "please_select_at_least_one_invitation": "Veuillez sélectionner au moins une invitation.",
    "please_select_at_least_one_invitation_description": "Veuillez sélectionner au moins une invitation pour rejoindre l’espace de travail.",
    "we_see_that_someone_has_invited_you_to_join_a_workspace": "Nous voyons que quelqu’un vous a invité à rejoindre un espace de travail",
-@@ -820,7 +820,7 @@
+@@ -681,10 +681,6 @@
+     "member": "Membre",
+     "members": "Membres",
+     "you": "Vous",
+-    "upgrade_cta": {
+-      "higher_subscription": "Passer à un abonnement plus élevé",
+-      "talk_to_sales": "Contacter le service commercial"
+-    },
+     "category": "Catégorie",
+     "categories": "Catégories",
+     "saving": "Enregistrement",
+@@ -820,7 +816,7 @@
      "edited_by": "Modifié par"
    },
    "self_hosted_maintenance_message": {
@@ -207147,7 +207202,7 @@ index a94ab8a..d856e90 100644
      "choose_view_logs_from_setup_sh_and_docker_logs_to_be_sure": "Choisissez View Logs depuis setup.sh et les logs Docker pour en être sûr."
    },
    "customize_navigation": "Personnaliser la navigation",
-@@ -832,7 +832,7 @@
+@@ -832,7 +828,7 @@
    "pin": "Épingler",
    "unpin": "Désépingler",
    "workspace_dashboards": "Tableaux de bord",
@@ -207156,7 +207211,7 @@ index a94ab8a..d856e90 100644
    "in_app": "Dans l'application",
    "forms": "Formulaires",
    "milestones": "Jalons",
-@@ -867,5 +867,494 @@
+@@ -867,5 +863,494 @@
        "description": "Exportez les éléments de travail vers un fichier JSON.",
        "short_description": "Exporter en json"
      }
@@ -208591,7 +208646,7 @@ index 2fd8636..c6ce762 100644
        "fixed_schedule": "Jadwal tetap",
        "schedule": {
 diff --git a/packages/i18n/src/locales/id/common.json b/packages/i18n/src/locales/id/common.json
-index 7d26685..9b6a26a 100644
+index 7d26685..2f9d015 100644
 --- a/packages/i18n/src/locales/id/common.json
 +++ b/packages/i18n/src/locales/id/common.json
 @@ -244,7 +244,7 @@
@@ -208603,7 +208658,18 @@ index 7d26685..9b6a26a 100644
    "please_select_at_least_one_invitation": "Silakan pilih setidaknya satu undangan.",
    "please_select_at_least_one_invitation_description": "Silakan pilih setidaknya satu undangan untuk bergabung dengan ruang kerja.",
    "we_see_that_someone_has_invited_you_to_join_a_workspace": "Kami melihat bahwa seseorang telah mengundang Anda untuk bergabung dengan ruang kerja",
-@@ -820,7 +820,7 @@
+@@ -681,10 +681,6 @@
+     "member": "Anggota",
+     "members": "Anggota",
+     "you": "Anda",
+-    "upgrade_cta": {
+-      "higher_subscription": "Tingkatkan ke langganan yang lebih tinggi",
+-      "talk_to_sales": "Bicaralah dengan Penjualan"
+-    },
+     "category": "Kategori",
+     "categories": "Kategori",
+     "saving": "Menyimpan",
+@@ -820,7 +816,7 @@
      "edited_by": "Disunting oleh"
    },
    "self_hosted_maintenance_message": {
@@ -208612,7 +208678,7 @@ index 7d26685..9b6a26a 100644
      "choose_view_logs_from_setup_sh_and_docker_logs_to_be_sure": "Pilih View Logs dari setup.sh dan log Docker untuk memastikan."
    },
    "customize_navigation": "Sesuaikan navigasi",
-@@ -867,5 +867,494 @@
+@@ -867,5 +863,494 @@
        "description": "Ekspor item kerja ke file JSON.",
        "short_description": "Ekspor sebagai json"
      }
@@ -210048,7 +210114,7 @@ index f279366..b302f18 100644
        "fixed_schedule": "Pianificazione fissa",
        "schedule": {
 diff --git a/packages/i18n/src/locales/it/common.json b/packages/i18n/src/locales/it/common.json
-index 6fda1b0..ff0cd59 100644
+index 6fda1b0..d202f28 100644
 --- a/packages/i18n/src/locales/it/common.json
 +++ b/packages/i18n/src/locales/it/common.json
 @@ -244,7 +244,7 @@
@@ -210060,7 +210126,18 @@ index 6fda1b0..ff0cd59 100644
    "please_select_at_least_one_invitation": "Seleziona almeno un invito.",
    "please_select_at_least_one_invitation_description": "Seleziona almeno un invito per unirti allo spazio di lavoro.",
    "we_see_that_someone_has_invited_you_to_join_a_workspace": "Abbiamo notato che qualcuno ti ha invitato a unirti a uno spazio di lavoro",
-@@ -820,7 +820,7 @@
+@@ -681,10 +681,6 @@
+     "member": "Membro",
+     "members": "Membri",
+     "you": "Tu",
+-    "upgrade_cta": {
+-      "higher_subscription": "Passa a un abbonamento superiore",
+-      "talk_to_sales": "Parla con le vendite"
+-    },
+     "category": "Categoria",
+     "categories": "Categorie",
+     "saving": "Salvataggio in corso",
+@@ -820,7 +816,7 @@
      "edited_by": "Modificato da"
    },
    "self_hosted_maintenance_message": {
@@ -210069,7 +210146,7 @@ index 6fda1b0..ff0cd59 100644
      "choose_view_logs_from_setup_sh_and_docker_logs_to_be_sure": "Scegli View Logs da setup.sh e dai log Docker per essere sicuro."
    },
    "customize_navigation": "Personalizza la navigazione",
-@@ -832,7 +832,7 @@
+@@ -832,7 +828,7 @@
    "pin": "Fissa",
    "unpin": "Sblocca",
    "workspace_dashboards": "Dashboard",
@@ -210078,7 +210155,7 @@ index 6fda1b0..ff0cd59 100644
    "in_app": "In-app",
    "forms": "Moduli",
    "milestones": "Milestone",
-@@ -867,5 +867,494 @@
+@@ -867,5 +863,494 @@
        "description": "Esporta elementi di lavoro in un file JSON.",
        "short_description": "Esporta come JSON"
      }
@@ -211455,7 +211532,7 @@ index d3dd8d3..0f5426b 100644
            }
          }
 diff --git a/packages/i18n/src/locales/ja/common.json b/packages/i18n/src/locales/ja/common.json
-index 4899411..ad474f5 100644
+index 4899411..f4c683d 100644
 --- a/packages/i18n/src/locales/ja/common.json
 +++ b/packages/i18n/src/locales/ja/common.json
 @@ -244,7 +244,7 @@
@@ -211467,7 +211544,18 @@ index 4899411..ad474f5 100644
    "please_select_at_least_one_invitation": "少なくとも1つの招待を選択してください。",
    "please_select_at_least_one_invitation_description": "ワークスペースに参加するには少なくとも1つの招待を選択してください。",
    "we_see_that_someone_has_invited_you_to_join_a_workspace": "誰かがあなたをワークスペースに招待しています",
-@@ -867,5 +867,494 @@
+@@ -681,10 +681,6 @@
+     "member": "メンバー",
+     "members": "メンバー",
+     "you": "あなた",
+-    "upgrade_cta": {
+-      "higher_subscription": "高いサブスクリプションにアップグレード",
+-      "talk_to_sales": "トーク トゥ セールス"
+-    },
+     "category": "カテゴリー",
+     "categories": "カテゴリーズ",
+     "saving": "セービング",
+@@ -867,5 +863,494 @@
        "description": "作業項目をJSONファイルにエクスポートします。",
        "short_description": "JSONとしてエクスポート"
      }
@@ -212391,7 +212479,7 @@ index 8d77f70..279ae09 100644
        "fixed_schedule": "고정 일정",
        "schedule": {
 diff --git a/packages/i18n/src/locales/ko/common.json b/packages/i18n/src/locales/ko/common.json
-index 73eea6b..4dfaaa0 100644
+index 73eea6b..da8aa9a 100644
 --- a/packages/i18n/src/locales/ko/common.json
 +++ b/packages/i18n/src/locales/ko/common.json
 @@ -244,7 +244,7 @@
@@ -212403,7 +212491,18 @@ index 73eea6b..4dfaaa0 100644
    "please_select_at_least_one_invitation": "최소 하나의 초대를 선택하세요.",
    "please_select_at_least_one_invitation_description": "작업 공간에 참여하려면 최소 하나의 초대를 선택하세요.",
    "we_see_that_someone_has_invited_you_to_join_a_workspace": "누군가가 작업 공간에 참여하도록 초대했습니다",
-@@ -820,7 +820,7 @@
+@@ -681,10 +681,6 @@
+     "member": "멤버",
+     "members": "멤버",
+     "you": "나",
+-    "upgrade_cta": {
+-      "higher_subscription": "더 높은 구독으로 업그레이드",
+-      "talk_to_sales": "영업팀과 상담"
+-    },
+     "category": "카테고리",
+     "categories": "카테고리",
+     "saving": "저장 중",
+@@ -820,7 +816,7 @@
      "edited_by": "편집자"
    },
    "self_hosted_maintenance_message": {
@@ -212412,7 +212511,7 @@ index 73eea6b..4dfaaa0 100644
      "choose_view_logs_from_setup_sh_and_docker_logs_to_be_sure": "확실히 하려면 setup.sh와 Docker 로그에서 View Logs를 선택하세요."
    },
    "customize_navigation": "내비게이션 사용자 지정",
-@@ -867,5 +867,494 @@
+@@ -867,5 +863,494 @@
        "description": "작업 항목을 JSON 파일로 내보냅니다.",
        "short_description": "JSON으로 내보내기"
      }
@@ -213489,7 +213588,7 @@ index 0632d1f..6396693 100644
        "fixed_schedule": "Stały harmonogram",
        "schedule": {
 diff --git a/packages/i18n/src/locales/pl/common.json b/packages/i18n/src/locales/pl/common.json
-index 4c4850c..ccddb6b 100644
+index 4c4850c..6e2014e 100644
 --- a/packages/i18n/src/locales/pl/common.json
 +++ b/packages/i18n/src/locales/pl/common.json
 @@ -244,7 +244,7 @@
@@ -213501,7 +213600,18 @@ index 4c4850c..ccddb6b 100644
    "please_select_at_least_one_invitation": "Wybierz co najmniej jedno zaproszenie.",
    "please_select_at_least_one_invitation_description": "Wybierz co najmniej jedno zaproszenie, aby dołączyć do przestrzeni roboczej.",
    "we_see_that_someone_has_invited_you_to_join_a_workspace": "Ktoś zaprosił Cię do przestrzeni roboczej",
-@@ -820,7 +820,7 @@
+@@ -681,10 +681,6 @@
+     "member": "Członek",
+     "members": "Członkowie",
+     "you": "Ty",
+-    "upgrade_cta": {
+-      "higher_subscription": "Uaktualnij do wyższego abonamentu",
+-      "talk_to_sales": "Skontaktuj się z działem sprzedaży"
+-    },
+     "category": "Kategoria",
+     "categories": "Kategorie",
+     "saving": "Zapisywanie",
+@@ -820,7 +816,7 @@
      "edited_by": "Edytowane przez"
    },
    "self_hosted_maintenance_message": {
@@ -213510,7 +213620,7 @@ index 4c4850c..ccddb6b 100644
      "choose_view_logs_from_setup_sh_and_docker_logs_to_be_sure": "Wybierz View Logs z setup.sh i logów Docker, aby mieć pewność."
    },
    "customize_navigation": "Dostosuj nawigację",
-@@ -867,5 +867,494 @@
+@@ -867,5 +863,494 @@
        "description": "Eksportuj elementy do pliku JSON.",
        "short_description": "Eksportuj jako JSON"
      }
@@ -214891,7 +215001,7 @@ index 3eab73f..c2c7c08 100644
        "fixed_schedule": "Agendamento fixo",
        "schedule": {
 diff --git a/packages/i18n/src/locales/pt-BR/common.json b/packages/i18n/src/locales/pt-BR/common.json
-index 565e85d..49b3875 100644
+index 565e85d..6973c07 100644
 --- a/packages/i18n/src/locales/pt-BR/common.json
 +++ b/packages/i18n/src/locales/pt-BR/common.json
 @@ -244,7 +244,7 @@
@@ -214903,7 +215013,18 @@ index 565e85d..49b3875 100644
    "please_select_at_least_one_invitation": "Selecione pelo menos um convite.",
    "please_select_at_least_one_invitation_description": "Selecione pelo menos um convite para entrar no espaço de trabalho.",
    "we_see_that_someone_has_invited_you_to_join_a_workspace": "Vemos que alguém convidou você para entrar em um espaço de trabalho",
-@@ -820,7 +820,7 @@
+@@ -681,10 +681,6 @@
+     "member": "Membro",
+     "members": "Membros",
+     "you": "Você",
+-    "upgrade_cta": {
+-      "higher_subscription": "Faça upgrade para uma assinatura superior",
+-      "talk_to_sales": "Fale com o departamento de vendas"
+-    },
+     "category": "Categoria",
+     "categories": "Categorias",
+     "saving": "Salvando",
+@@ -820,7 +816,7 @@
      "edited_by": "Editado por"
    },
    "self_hosted_maintenance_message": {
@@ -214912,7 +215033,7 @@ index 565e85d..49b3875 100644
      "choose_view_logs_from_setup_sh_and_docker_logs_to_be_sure": "Escolha View Logs do setup.sh e logs do Docker para ter certeza."
    },
    "customize_navigation": "Personalizar navegação",
-@@ -867,5 +867,494 @@
+@@ -867,5 +863,494 @@
        "description": "Exporte itens de trabalho para um arquivo JSON.",
        "short_description": "Exportar como JSON"
      }
@@ -216343,7 +216464,7 @@ index 509bbb1..0c56d9c 100644
        "fixed_schedule": "Program fix",
        "schedule": {
 diff --git a/packages/i18n/src/locales/ro/common.json b/packages/i18n/src/locales/ro/common.json
-index e2b44ce..7d47499 100644
+index e2b44ce..c8cbc05 100644
 --- a/packages/i18n/src/locales/ro/common.json
 +++ b/packages/i18n/src/locales/ro/common.json
 @@ -244,7 +244,7 @@
@@ -216355,7 +216476,18 @@ index e2b44ce..7d47499 100644
    "please_select_at_least_one_invitation": "Te rugăm să selectezi cel puțin o invitație.",
    "please_select_at_least_one_invitation_description": "Te rugăm să selectezi cel puțin o invitație pentru a te alătura spațiului de lucru.",
    "we_see_that_someone_has_invited_you_to_join_a_workspace": "Se pare că cineva te-a invitat să te alături unui spațiu de lucru",
-@@ -820,7 +820,7 @@
+@@ -681,10 +681,6 @@
+     "member": "Membru",
+     "members": "Membri",
+     "you": "Tu",
+-    "upgrade_cta": {
+-      "higher_subscription": "Treci la un abonament superior",
+-      "talk_to_sales": "Discută cu vânzările"
+-    },
+     "category": "Categorie",
+     "categories": "Categorii",
+     "saving": "Se salvează",
+@@ -820,7 +816,7 @@
      "edited_by": "Editat de"
    },
    "self_hosted_maintenance_message": {
@@ -216364,7 +216496,7 @@ index e2b44ce..7d47499 100644
      "choose_view_logs_from_setup_sh_and_docker_logs_to_be_sure": "Alegeți View Logs din setup.sh și logurile Docker pentru a fi siguri."
    },
    "customize_navigation": "Personalizează navigarea",
-@@ -832,7 +832,7 @@
+@@ -832,7 +828,7 @@
    "pin": "Fixează",
    "unpin": "Anulează fixarea",
    "workspace_dashboards": "Dashboarduri",
@@ -216373,7 +216505,7 @@ index e2b44ce..7d47499 100644
    "in_app": "În-app",
    "forms": "Formulare",
    "milestones": "Jaloane",
-@@ -867,5 +867,494 @@
+@@ -867,5 +863,494 @@
        "description": "Exportă activitățile într-un fișier JSON.",
        "short_description": "Exportă ca JSON"
      }
@@ -217802,7 +217934,7 @@ index a97e9e6..7ce3fde 100644
        "fixed_schedule": "Фиксированное расписание",
        "schedule": {
 diff --git a/packages/i18n/src/locales/ru/common.json b/packages/i18n/src/locales/ru/common.json
-index c2881e5..e065d86 100644
+index c2881e5..5cfc90d 100644
 --- a/packages/i18n/src/locales/ru/common.json
 +++ b/packages/i18n/src/locales/ru/common.json
 @@ -244,7 +244,7 @@
@@ -217814,7 +217946,18 @@ index c2881e5..e065d86 100644
    "please_select_at_least_one_invitation": "Пожалуйста, выберите хотя бы одно приглашение.",
    "please_select_at_least_one_invitation_description": "Для присоединения к рабочему пространству выберите хотя бы одно приглашение.",
    "we_see_that_someone_has_invited_you_to_join_a_workspace": "Вы получили приглашение присоединиться к рабочему пространству",
-@@ -820,7 +820,7 @@
+@@ -681,10 +681,6 @@
+     "member": "Участник",
+     "members": "Участники",
+     "you": "Вы",
+-    "upgrade_cta": {
+-      "higher_subscription": "Перейти на подписку выше",
+-      "talk_to_sales": "Связаться с отделом продаж"
+-    },
+     "category": "Категория",
+     "categories": "Категории",
+     "saving": "Сохранение",
+@@ -820,7 +816,7 @@
      "edited_by": "Отредактировано"
    },
    "self_hosted_maintenance_message": {
@@ -217823,7 +217966,7 @@ index c2881e5..e065d86 100644
      "choose_view_logs_from_setup_sh_and_docker_logs_to_be_sure": "Выберите View Logs из setup.sh и логов Docker, чтобы убедиться."
    },
    "customize_navigation": "Настроить навигацию",
-@@ -867,5 +867,494 @@
+@@ -867,5 +863,494 @@
        "description": "Экспорт рабочих элементов в JSON-файл.",
        "short_description": "Экспорт в json"
      }
@@ -219241,7 +219384,7 @@ index 3e7dbc5..27f375f 100644
        "fixed_schedule": "Pevný rozvrh",
        "schedule": {
 diff --git a/packages/i18n/src/locales/sk/common.json b/packages/i18n/src/locales/sk/common.json
-index 4fc339c..5d3ed9e 100644
+index 4fc339c..815217d 100644
 --- a/packages/i18n/src/locales/sk/common.json
 +++ b/packages/i18n/src/locales/sk/common.json
 @@ -244,7 +244,7 @@
@@ -219253,7 +219396,18 @@ index 4fc339c..5d3ed9e 100644
    "please_select_at_least_one_invitation": "Vyberte aspoň jednu pozvánku.",
    "please_select_at_least_one_invitation_description": "Vyberte aspoň jednu pozvánku na pripojenie do pracovného priestoru.",
    "we_see_that_someone_has_invited_you_to_join_a_workspace": "Vidíme, že vás niekto pozval do pracovného priestoru",
-@@ -820,7 +820,7 @@
+@@ -681,10 +681,6 @@
+     "member": "Člen",
+     "members": "Členovia",
+     "you": "Vy",
+-    "upgrade_cta": {
+-      "higher_subscription": "Upgradovať na vyššie predplatné",
+-      "talk_to_sales": "Porozprávajte sa s predajom"
+-    },
+     "category": "Kategória",
+     "categories": "Kategórie",
+     "saving": "Ukladanie",
+@@ -820,7 +816,7 @@
      "edited_by": "Upravené používateľom"
    },
    "self_hosted_maintenance_message": {
@@ -219262,7 +219416,7 @@ index 4fc339c..5d3ed9e 100644
      "choose_view_logs_from_setup_sh_and_docker_logs_to_be_sure": "Vyberte View Logs z setup.sh a Docker logov, aby ste si boli istí."
    },
    "customize_navigation": "Prispôsobiť navigáciu",
-@@ -867,5 +867,494 @@
+@@ -867,5 +863,494 @@
        "description": "Exportujte položky do JSON.",
        "short_description": "Exportovať ako JSON"
      }
@@ -220632,7 +220786,7 @@ index 5d44f94..bd09842 100644
        "fixed_schedule": "Sabit zamanlama",
        "schedule": {
 diff --git a/packages/i18n/src/locales/tr-TR/common.json b/packages/i18n/src/locales/tr-TR/common.json
-index 74bd5cb..472c958 100644
+index 74bd5cb..df8979a 100644
 --- a/packages/i18n/src/locales/tr-TR/common.json
 +++ b/packages/i18n/src/locales/tr-TR/common.json
 @@ -244,7 +244,7 @@
@@ -220644,7 +220798,18 @@ index 74bd5cb..472c958 100644
    "please_select_at_least_one_invitation": "Lütfen en az bir davet seçin.",
    "please_select_at_least_one_invitation_description": "Çalışma alanına katılmak için lütfen en az bir davet seçin.",
    "we_see_that_someone_has_invited_you_to_join_a_workspace": "Birinin sizi bir çalışma alanına davet ettiğini görüyoruz",
-@@ -820,7 +820,7 @@
+@@ -681,10 +681,6 @@
+     "member": "Üye",
+     "members": "Üyeler",
+     "you": "Siz",
+-    "upgrade_cta": {
+-      "higher_subscription": "Daha yüksek aboneliğe yükselt",
+-      "talk_to_sales": "Satış Ekibiyle Görüş"
+-    },
+     "category": "Kategori",
+     "categories": "Kategoriler",
+     "saving": "Kaydediliyor",
+@@ -820,7 +816,7 @@
      "edited_by": "Tarafından düzenlendi"
    },
    "self_hosted_maintenance_message": {
@@ -220653,7 +220818,7 @@ index 74bd5cb..472c958 100644
      "choose_view_logs_from_setup_sh_and_docker_logs_to_be_sure": "Emin olmak için setup.sh ve Docker loglarından View Logs&apos;u seçin."
    },
    "customize_navigation": "Gezinmeyi özelleştir",
-@@ -832,7 +832,7 @@
+@@ -832,7 +828,7 @@
    "pin": "Sabitle",
    "unpin": "Sabitlemeyi kaldır",
    "workspace_dashboards": "Dashbordlar",
@@ -220662,7 +220827,7 @@ index 74bd5cb..472c958 100644
    "in_app": "Uygulama İçi",
    "forms": "Formlar",
    "milestones": "Kilometre taşları",
-@@ -867,5 +867,494 @@
+@@ -867,5 +863,494 @@
        "description": "İş öğelerini JSON dosyasına aktarın.",
        "short_description": "JSON olarak aktar"
      }
@@ -222064,7 +222229,7 @@ index 25a1f98..64286c8 100644
        "fixed_schedule": "Фіксований розклад",
        "schedule": {
 diff --git a/packages/i18n/src/locales/ua/common.json b/packages/i18n/src/locales/ua/common.json
-index 89bd906..b2d359d 100644
+index 89bd906..343db46 100644
 --- a/packages/i18n/src/locales/ua/common.json
 +++ b/packages/i18n/src/locales/ua/common.json
 @@ -244,7 +244,7 @@
@@ -222076,7 +222241,18 @@ index 89bd906..b2d359d 100644
    "please_select_at_least_one_invitation": "Виберіть принаймні одне запрошення.",
    "please_select_at_least_one_invitation_description": "Виберіть принаймні одне запрошення, щоб приєднатися до робочого простору.",
    "we_see_that_someone_has_invited_you_to_join_a_workspace": "Ми бачимо, що вас запросили приєднатися до робочого простору",
-@@ -820,7 +820,7 @@
+@@ -681,10 +681,6 @@
+     "member": "Учасник",
+     "members": "Учасники",
+     "you": "Ви",
+-    "upgrade_cta": {
+-      "higher_subscription": "Підвищити до вищого плану",
+-      "talk_to_sales": "Зв'язатися з відділом продажів"
+-    },
+     "category": "Категорія",
+     "categories": "Категорії",
+     "saving": "Збереження",
+@@ -820,7 +816,7 @@
      "edited_by": "Відредаговано"
    },
    "self_hosted_maintenance_message": {
@@ -222085,7 +222261,7 @@ index 89bd906..b2d359d 100644
      "choose_view_logs_from_setup_sh_and_docker_logs_to_be_sure": "Виберіть View Logs з setup.sh та логів Docker, щоб переконатися."
    },
    "customize_navigation": "Налаштувати навігацію",
-@@ -867,5 +867,494 @@
+@@ -867,5 +863,494 @@
        "description": "Експортуйте одиниці у формат JSON.",
        "short_description": "Експортувати як JSON"
      }
@@ -223318,7 +223494,7 @@ index 8dec0fb..fd3adb2 100644
        "fixed_schedule": "Lịch trình cố định",
        "schedule": {
 diff --git a/packages/i18n/src/locales/vi-VN/common.json b/packages/i18n/src/locales/vi-VN/common.json
-index f9aae43..2ead8ae 100644
+index f9aae43..6b8a032 100644
 --- a/packages/i18n/src/locales/vi-VN/common.json
 +++ b/packages/i18n/src/locales/vi-VN/common.json
 @@ -244,7 +244,7 @@
@@ -223330,7 +223506,18 @@ index f9aae43..2ead8ae 100644
    "please_select_at_least_one_invitation": "Vui lòng chọn ít nhất một lời mời.",
    "please_select_at_least_one_invitation_description": "Vui lòng chọn ít nhất một lời mời để tham gia không gian làm việc.",
    "we_see_that_someone_has_invited_you_to_join_a_workspace": "Chúng tôi thấy có người đã mời bạn tham gia không gian làm việc",
-@@ -820,7 +820,7 @@
+@@ -681,10 +681,6 @@
+     "member": "Thành viên",
+     "members": "Thành viên",
+     "you": "Bạn",
+-    "upgrade_cta": {
+-      "higher_subscription": "Nâng cấp lên gói cao hơn",
+-      "talk_to_sales": "Liên hệ bộ phận bán hàng"
+-    },
+     "category": "Danh mục",
+     "categories": "Danh mục",
+     "saving": "Đang lưu",
+@@ -820,7 +816,7 @@
      "edited_by": "Được chỉnh sửa bởi"
    },
    "self_hosted_maintenance_message": {
@@ -223339,7 +223526,7 @@ index f9aae43..2ead8ae 100644
      "choose_view_logs_from_setup_sh_and_docker_logs_to_be_sure": "Chọn View Logs từ setup.sh và log Docker để chắc chắn."
    },
    "customize_navigation": "Tùy chỉnh điều hướng",
-@@ -832,7 +832,7 @@
+@@ -832,7 +828,7 @@
    "pin": "Ghim",
    "unpin": "Bỏ ghim",
    "workspace_dashboards": "Bảng điều khiển",
@@ -223348,7 +223535,7 @@ index f9aae43..2ead8ae 100644
    "in_app": "Trong ứng dụng",
    "forms": "Biểu mẫu",
    "milestones": "Cột mốc",
-@@ -867,5 +867,494 @@
+@@ -867,5 +863,494 @@
        "description": "Xuất mục công việc thành tệp JSON.",
        "short_description": "Xuất sang JSON"
      }
@@ -224783,10 +224970,21 @@ index 3f057bd..9322b6f 100644
        "fixed_schedule": "固定计划",
        "schedule": {
 diff --git a/packages/i18n/src/locales/zh-CN/common.json b/packages/i18n/src/locales/zh-CN/common.json
-index dd67d92..afbb61b 100644
+index dd67d92..46aab55 100644
 --- a/packages/i18n/src/locales/zh-CN/common.json
 +++ b/packages/i18n/src/locales/zh-CN/common.json
-@@ -820,7 +820,7 @@
+@@ -681,10 +681,6 @@
+     "member": "成员",
+     "members": "成员",
+     "you": "你",
+-    "upgrade_cta": {
+-      "higher_subscription": "升级到更高订阅",
+-      "talk_to_sales": "联系销售"
+-    },
+     "category": "类别",
+     "categories": "类别",
+     "saving": "保存中",
+@@ -820,7 +816,7 @@
      "edited_by": "编辑者"
    },
    "self_hosted_maintenance_message": {
@@ -224795,7 +224993,7 @@ index dd67d92..afbb61b 100644
      "choose_view_logs_from_setup_sh_and_docker_logs_to_be_sure": "请选择“查看日志”来查看 setup.sh 和 Docker 日志，以确认问题。"
    },
    "customize_navigation": "自定义导航",
-@@ -867,5 +867,494 @@
+@@ -867,5 +863,494 @@
        "description": "将工作项导出为 JSON 文件。",
        "short_description": "导出为 JSON"
      }
@@ -226084,7 +226282,7 @@ index 27b9a4b..c71e752 100644
        "fixed_schedule": "固定排程",
        "schedule": {
 diff --git a/packages/i18n/src/locales/zh-TW/common.json b/packages/i18n/src/locales/zh-TW/common.json
-index 834a2d9..3f7d774 100644
+index 834a2d9..0c6f4ee 100644
 --- a/packages/i18n/src/locales/zh-TW/common.json
 +++ b/packages/i18n/src/locales/zh-TW/common.json
 @@ -244,7 +244,7 @@
@@ -226096,7 +226294,18 @@ index 834a2d9..3f7d774 100644
    "please_select_at_least_one_invitation": "請至少選擇一個邀請。",
    "please_select_at_least_one_invitation_description": "請至少選擇一個邀請加入工作區。",
    "we_see_that_someone_has_invited_you_to_join_a_workspace": "我們發現有人邀請您加入工作區",
-@@ -820,7 +820,7 @@
+@@ -681,10 +681,6 @@
+     "member": "成員",
+     "members": "成員",
+     "you": "您",
+-    "upgrade_cta": {
+-      "higher_subscription": "升級至更高等級的訂閱方案",
+-      "talk_to_sales": "聯絡業務"
+-    },
+     "category": "類別",
+     "categories": "類別",
+     "saving": "儲存中",
+@@ -820,7 +816,7 @@
      "edited_by": "編輯者"
    },
    "self_hosted_maintenance_message": {
@@ -226105,7 +226314,7 @@ index 834a2d9..3f7d774 100644
      "choose_view_logs_from_setup_sh_and_docker_logs_to_be_sure": "從 setup.sh 和 Docker 日誌中選擇 View Logs 來確認。"
    },
    "customize_navigation": "自訂導覽",
-@@ -867,5 +867,494 @@
+@@ -867,5 +863,494 @@
        "description": "將工作事項匯出為 JSON 檔案。",
        "short_description": "匯出為 JSON"
      }
