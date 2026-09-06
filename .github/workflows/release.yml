@@ -211,7 +211,21 @@ jobs:
             || { echo "FATAL: el bundle no lleva horneada VITE_SOURCE_CODE_URL=$VITE_SOURCE_CODE_URL"; exit 1; }
           grep -rqsE "VITE_SUPPORT_EMAIL:.{0,2}${VITE_SUPPORT_EMAIL}" "$OUT" \
             || { echo "FATAL: el bundle no lleva horneado VITE_SUPPORT_EMAIL"; exit 1; }
-          echo "OK: bundle verificado"
+          # La tienda de Plane no puede volver sin que nadie se entere.
+          #
+          # Estas cadenas han reaparecido más de una vez —la insignia Community
+          # con su modal de venta, las tarjetas de precios, las insignias Pro—
+          # y cada vez las descubrió Axel mirando la pantalla, no una prueba.
+          # Que las descubra el build.
+          COMERCIAL=("Talk to sales" "Upgrade to Pro" ">Community<" "Hablar con ventas")
+          for m in "${COMERCIAL[@]}"; do
+            if grep -rqsF -- "$m" "$OUT"; then
+              echo "FATAL: el bundle trae material comercial de Plane: $m"
+              grep -rlsF -- "$m" "$OUT" | head -3
+              exit 1
+            fi
+          done
+          echo "OK: bundle verificado (sin material comercial de Plane)"
 
   release:
     needs: [version, backend, proxy, frontend, verify-web]
