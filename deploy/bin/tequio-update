@@ -306,10 +306,16 @@ if [ "$OK" -ne 1 ]; then
 fi
 
 # Un servicio en bucle de reinicios puede convivir con un /api/ que responde:
-# el api vive y el worker se cae, por ejemplo. Se comprueban todos.
+# el api vive y el worker se cae, por ejemplo. Se comprueban todos los que
+# DEBEN estar en marcha.
+#
+# El migrator no es uno de ellos: es un trabajo de un solo uso que termina con
+# éxito y deja su contenedor en "Exited (0)". Contarlo como caído hacía fallar
+# un despliegue perfectamente sano — pasó el 5 Sep 2026, con el sitio
+# respondiendo 200 mientras el actualizador lo declaraba roto.
 BAD="$(docker ps -a --filter "label=com.docker.compose.project=$PROJECT" \
         --format '{{.Label "com.docker.compose.service"}}|{{.Status}}' \
-      | awk -F'|' '$2 !~ /^Up/ {print $1}' | tr '\n' ' ')"
+      | awk -F'|' '$1 != "migrator" && $2 !~ /^Up/ {print $1}' | sort -u | tr '\n' ' ')"
 [ -z "$BAD" ] || die "estos servicios no quedaron en marcha: $BAD"
 
 printf '%s %s\n' "$(date -Is)" "$NEW" >> "$STATE/history"
