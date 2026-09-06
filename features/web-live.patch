@@ -65636,6 +65636,26 @@ index d9c76f8..ec090ca 100644
  ENV NEXT_TELEMETRY_DISABLED=1
  ENV TURBO_TELEMETRY_DISABLED=1
  
+diff --git a/apps/web/app/(all)/[workspaceSlug]/(projects)/active-cycles/header.tsx b/apps/web/app/(all)/[workspaceSlug]/(projects)/active-cycles/header.tsx
+index baee20f..ae8b775 100644
+--- a/apps/web/app/(all)/[workspaceSlug]/(projects)/active-cycles/header.tsx
++++ b/apps/web/app/(all)/[workspaceSlug]/(projects)/active-cycles/header.tsx
+@@ -12,7 +12,6 @@ import { Breadcrumbs, Header } from "@plane/ui";
+ // components
+ import { BreadcrumbLink } from "@/components/common/breadcrumb-link";
+ // plane web components
+-import { UpgradeBadge } from "@/components/workspace/upgrade-badge";
+ 
+ export const WorkspaceActiveCycleHeader = observer(function WorkspaceActiveCycleHeader() {
+   const { t } = useTranslation();
+@@ -29,7 +28,6 @@ export const WorkspaceActiveCycleHeader = observer(function WorkspaceActiveCycle
+             }
+           />
+         </Breadcrumbs>
+-        <UpgradeBadge size="md" />
+       </Header.LeftItem>
+     </Header>
+   );
 diff --git a/apps/web/app/(all)/[workspaceSlug]/(projects)/assistant/header.tsx b/apps/web/app/(all)/[workspaceSlug]/(projects)/assistant/header.tsx
 new file mode 100644
 index 0000000..e8a43d8
@@ -112572,24 +112592,25 @@ index 0000000..523c079
 +}
 diff --git a/apps/web/core/components/assistant/agent-icon.tsx b/apps/web/core/components/assistant/agent-icon.tsx
 new file mode 100644
-index 0000000..a012ecf
+index 0000000..7e5aa1b
 --- /dev/null
 +++ b/apps/web/core/components/assistant/agent-icon.tsx
-@@ -0,0 +1,44 @@
+@@ -0,0 +1,28 @@
 +/**
-+ * Sintergica CE extension: the assistant's glyph for UI chrome — sidebar,
-+ * breadcrumb, panel header, topbar button.
++ * Sintergica CE extension: el glifo del asistente en el cromo de la interfaz —
++ * barra lateral, migas de pan, cabecera del panel y botón de la barra superior.
 + *
-+ * The brand character is a full-colour PNG (see agent-avatar.tsx); dropped
-+ * among the sidebar's monochrome line icons it reads as a sticker, not as a
-+ * nav item. This is the same face drawn as a stroke icon on lucide's grid
-+ * (24x24, stroke 2, currentColor) so it sits at the same visual weight as
-+ * Documentos / Canales / Finanzas. The colour character stays where it earns
-+ * its keep: inside the conversation.
++ * Es el logotipo de Tequio. Antes era un personaje dibujado a propósito para
++ * esto; se cambió porque el asistente es parte del producto, no una mascota
++ * aparte, y verlo con la marca lo dice sin necesidad de explicarlo.
++ *
++ * El personaje a color sigue existiendo donde se gana el sitio: dentro de la
++ * conversación (ver agent-avatar.tsx).
 + *
 + * Derived from Plane CE code (AGPL-3.0-only).
 + */
 +
++import { PlaneLogo } from "@plane/propel/icons";
 +import { cn } from "@plane/utils";
 +
 +type TAgentIconProps = {
@@ -112599,26 +112620,9 @@ index 0000000..a012ecf
 +export function AgentIcon(props: TAgentIconProps) {
 +  const { className } = props;
 +
-+  return (
-+    <svg
-+      viewBox="0 0 24 24"
-+      fill="none"
-+      stroke="currentColor"
-+      strokeWidth={2}
-+      strokeLinecap="round"
-+      strokeLinejoin="round"
-+      aria-hidden
-+      focusable="false"
-+      className={cn("size-4 shrink-0", className)}
-+    >
-+      <rect x="3" y="3" width="18" height="18" rx="4" />
-+      {/* the character's fringe: a shallow V hugging the top edge. Any deeper
-+          and the whole glyph reads as an envelope flap. */}
-+      <path d="M3.4 4.8 12 8.8l8.6-4" />
-+      <circle cx="9" cy="14" r="1.35" fill="currentColor" stroke="none" />
-+      <circle cx="15" cy="14" r="1.35" fill="currentColor" stroke="none" />
-+    </svg>
-+  );
++  // El logotipo hereda currentColor, así que pesa lo mismo que los iconos de
++  // línea que tiene al lado en la barra lateral.
++  return <PlaneLogo className={cn("size-4 shrink-0", className)} />;
 +}
 diff --git a/apps/web/core/components/assistant/composer.tsx b/apps/web/core/components/assistant/composer.tsx
 new file mode 100644
@@ -120036,6 +120040,26 @@ index 0000000..00482d1
 +    </div>
 +  );
 +}
+diff --git a/apps/web/core/components/estimates/create/stage-one.tsx b/apps/web/core/components/estimates/create/stage-one.tsx
+index d3988da..fd8b1c6 100644
+--- a/apps/web/core/components/estimates/create/stage-one.tsx
++++ b/apps/web/core/components/estimates/create/stage-one.tsx
+@@ -14,7 +14,6 @@ import type { TEstimateSystemKeys } from "@plane/types";
+ import { isEstimateSystemEnabled } from "./helper";
+ import { convertMinutesToHoursMinutesString } from "@plane/utils";
+ // components
+-import { UpgradeBadge } from "@/components/workspace/upgrade-badge";
+ import { RadioInput } from "../radio-select";
+ 
+ type TEstimateCreateStageOne = {
+@@ -52,7 +51,6 @@ export function EstimateCreateStageOne(props: TEstimateCreateStageOne) {
+                 ) : !isEnabled ? (
+                   <div className="relative flex cursor-no-drop items-center gap-2 text-tertiary">
+                     {t(ESTIMATE_SYSTEMS[currentSystem]?.i18n_name)}
+-                    <UpgradeBadge />
+                   </div>
+                 ) : (
+                   <div>{t(ESTIMATE_SYSTEMS[currentSystem]?.i18n_name)}</div>
 diff --git a/apps/web/core/components/finance/access-gate.tsx b/apps/web/core/components/finance/access-gate.tsx
 new file mode 100644
 index 0000000..9bb5753
@@ -124915,6 +124939,762 @@ index 8f35cc1..5e68916 100644
              </span>
            </SidebarPropertyListItem>
          )}
+diff --git a/apps/web/core/components/license/index.ts b/apps/web/core/components/license/index.ts
+deleted file mode 100644
+index dd65a9e..0000000
+--- a/apps/web/core/components/license/index.ts
++++ /dev/null
+@@ -1,7 +0,0 @@
+-/**
+- * Copyright (c) 2023-present Plane Software, Inc. and contributors
+- * SPDX-License-Identifier: AGPL-3.0-only
+- * See the LICENSE file for details.
+- */
+-
+-export * from "./modal";
+diff --git a/apps/web/core/components/license/modal/card/base-paid-plan-card.tsx b/apps/web/core/components/license/modal/card/base-paid-plan-card.tsx
+deleted file mode 100644
+index 986a554..0000000
+--- a/apps/web/core/components/license/modal/card/base-paid-plan-card.tsx
++++ /dev/null
+@@ -1,98 +0,0 @@
+-/**
+- * Copyright (c) 2023-present Plane Software, Inc. and contributors
+- * SPDX-License-Identifier: AGPL-3.0-only
+- * See the LICENSE file for details.
+- */
+-
+-import { useState } from "react";
+-import { observer } from "mobx-react";
+-import { CheckCircle } from "lucide-react";
+-import { Tab } from "@headlessui/react";
+-// plane imports
+-// helpers
+-import type { EProductSubscriptionEnum, TBillingFrequency, TSubscriptionPrice } from "@plane/types";
+-import { cn, getBaseSubscriptionName, getSubscriptionName } from "@plane/utils";
+-
+-export type TBasePaidPlanCardProps = {
+-  planVariant: EProductSubscriptionEnum;
+-  features: string[];
+-  prices: TSubscriptionPrice[];
+-  upgradeLoaderType: Omit<EProductSubscriptionEnum, "FREE"> | undefined;
+-  verticalFeatureList?: boolean;
+-  extraFeatures?: string | React.ReactNode;
+-  renderPriceContent: (price: TSubscriptionPrice) => React.ReactNode;
+-  renderActionButton: (price: TSubscriptionPrice) => React.ReactNode;
+-};
+-
+-export const BasePaidPlanCard = observer(function BasePaidPlanCard(props: TBasePaidPlanCardProps) {
+-  const {
+-    planVariant,
+-    features,
+-    prices,
+-    verticalFeatureList = false,
+-    extraFeatures,
+-    renderPriceContent,
+-    renderActionButton,
+-  } = props;
+-  // states
+-  const [selectedPlan, setSelectedPlan] = useState<TBillingFrequency>("month");
+-  const basePlan = getBaseSubscriptionName(planVariant);
+-  // Plane details
+-  const planeName = getSubscriptionName(planVariant);
+-
+-  return (
+-    <div className="flex flex-col rounded-xl border border-subtle bg-layer-2 px-3 py-6">
+-      <Tab.Group selectedIndex={selectedPlan === "month" ? 0 : 1}>
+-        <div className="flex h-9 w-full justify-center">
+-          <Tab.List className="flex w-60 space-x-1 rounded-md bg-layer-3 p-0.5">
+-            {prices.map((price: TSubscriptionPrice) => (
+-              <Tab
+-                key={price.key}
+-                className={({ selected }) =>
+-                  cn(
+-                    "w-full rounded-sm py-1 text-caption-md-medium leading-5",
+-                    selected
+-                      ? "border border-subtle-1 bg-layer-2 text-primary shadow-raised-100"
+-                      : "text-tertiary hover:text-secondary"
+-                  )
+-                }
+-                onClick={() => setSelectedPlan(price.recurring)}
+-              >
+-                {renderPriceContent(price)}
+-              </Tab>
+-            ))}
+-          </Tab.List>
+-        </div>
+-        <Tab.Panels>
+-          {prices.map((price: TSubscriptionPrice) => (
+-            <Tab.Panel key={price.key}>
+-              <div className="pt-6 text-center">
+-                <div className="text-h4-medium">Plane {planeName}</div>
+-                {renderActionButton(price)}
+-              </div>
+-              <div className="px-2 pt-6 pb-2">
+-                <div className="p-2 text-caption-md-semibold">{`Everything in ${basePlan} +`}</div>
+-                <ul className="grid grid-cols-12 gap-x-4">
+-                  {features.map((feature) => (
+-                    <li
+-                      key={feature}
+-                      className={cn("relative col-span-12 flex rounded-md p-2", {
+-                        "sm:col-span-6": !verticalFeatureList,
+-                      })}
+-                    >
+-                      <p className="line-clamp-1 flex w-full items-center text-caption-md-medium leading-5">
+-                        <CheckCircle className="mr-2 size-4 flex-shrink-0 text-tertiary" />
+-                        <span className="truncate text-secondary">{feature}</span>
+-                      </p>
+-                    </li>
+-                  ))}
+-                </ul>
+-                {extraFeatures && <div>{extraFeatures}</div>}
+-              </div>
+-            </Tab.Panel>
+-          ))}
+-        </Tab.Panels>
+-      </Tab.Group>
+-    </div>
+-  );
+-});
+diff --git a/apps/web/core/components/license/modal/card/checkout-button.tsx b/apps/web/core/components/license/modal/card/checkout-button.tsx
+deleted file mode 100644
+index 01de02c..0000000
+--- a/apps/web/core/components/license/modal/card/checkout-button.tsx
++++ /dev/null
+@@ -1,106 +0,0 @@
+-/**
+- * Copyright (c) 2023-present Plane Software, Inc. and contributors
+- * SPDX-License-Identifier: AGPL-3.0-only
+- * See the LICENSE file for details.
+- */
+-
+-import { observer } from "mobx-react";
+-// plane imports
+-import { Button } from "@plane/propel/button";
+-import type { EProductSubscriptionEnum, IPaymentProduct, TSubscriptionPrice } from "@plane/types";
+-import { Loader } from "@plane/ui";
+-// local imports
+-import { DiscountInfo } from "./discount-info";
+-
+-export type TCheckoutParams = {
+-  planVariant: EProductSubscriptionEnum;
+-  productId: string;
+-  priceId: string;
+-};
+-
+-type Props = {
+-  planeName: string;
+-  planVariant: EProductSubscriptionEnum;
+-  isLoading?: boolean;
+-  product: IPaymentProduct | undefined;
+-  price: TSubscriptionPrice;
+-  upgradeCTA?: string;
+-  upgradeLoaderType: Omit<EProductSubscriptionEnum, "FREE"> | undefined;
+-  renderTrialButton?: (props: { productId: string | undefined; priceId: string | undefined }) => React.ReactNode;
+-  handleCheckout: (params: TCheckoutParams) => void;
+-  isSelfHosted: boolean;
+-  isTrialAllowed: boolean;
+-};
+-
+-export const PlanCheckoutButton = observer(function PlanCheckoutButton(props: Props) {
+-  const {
+-    planeName,
+-    planVariant,
+-    isLoading,
+-    product,
+-    price,
+-    upgradeCTA,
+-    upgradeLoaderType,
+-    renderTrialButton,
+-    handleCheckout,
+-    isSelfHosted,
+-    isTrialAllowed,
+-  } = props;
+-
+-  return (
+-    <>
+-      <div className="pb-4 text-center">
+-        <div className="h-9 text-20 font-semibold">
+-          {isLoading ? (
+-            <Loader className="flex flex-col items-center justify-center">
+-              <Loader.Item height="36px" width="4rem" />
+-            </Loader>
+-          ) : (
+-            <DiscountInfo
+-              currency={price.currency}
+-              frequency={price.recurring}
+-              price={price.price}
+-              subscriptionType={planVariant}
+-              className="mr-1.5"
+-            />
+-          )}
+-        </div>
+-        <div className="text-caption-md-medium text-tertiary">per user per month</div>
+-      </div>
+-      {isLoading ? (
+-        <Loader className="flex flex-col items-center justify-center">
+-          <Loader.Item height="38px" width="14rem" />
+-        </Loader>
+-      ) : (
+-        <div className="flex w-full flex-col items-center justify-center space-y-4">
+-          <Button
+-            variant="primary"
+-            size="lg"
+-            className="w-56"
+-            onClick={() => {
+-              if (product && price.id) {
+-                handleCheckout({
+-                  planVariant,
+-                  productId: product.id,
+-                  priceId: price.id,
+-                });
+-              }
+-            }}
+-            disabled={!!upgradeLoaderType}
+-          >
+-            {upgradeLoaderType === planVariant ? "Redirecting to Stripe" : (upgradeCTA ?? `Upgrade to ${planeName}`)}
+-          </Button>
+-          {isTrialAllowed && !isSelfHosted && (
+-            <div className="mt-1 h-3">
+-              {renderTrialButton &&
+-                renderTrialButton({
+-                  productId: product?.id,
+-                  priceId: price.id,
+-                })}
+-            </div>
+-          )}
+-        </div>
+-      )}
+-    </>
+-  );
+-});
+diff --git a/apps/web/core/components/license/modal/card/discount-info.tsx b/apps/web/core/components/license/modal/card/discount-info.tsx
+deleted file mode 100644
+index 7f25a2a..0000000
+--- a/apps/web/core/components/license/modal/card/discount-info.tsx
++++ /dev/null
+@@ -1,66 +0,0 @@
+-/**
+- * Copyright (c) 2023-present Plane Software, Inc. and contributors
+- * SPDX-License-Identifier: AGPL-3.0-only
+- * See the LICENSE file for details.
+- */
+-
+-import { useTheme } from "next-themes";
+-// plane imports
+-import type { TBillingFrequency } from "@plane/types";
+-import { EProductSubscriptionEnum } from "@plane/types";
+-import { cn } from "@plane/utils";
+-
+-import ScribbleBlack from "@/app/assets/scribble/scribble-black.svg?url";
+-import ScribbleWhite from "@/app/assets/scribble/scribble-white.svg?url";
+-
+-type TDiscountInfoProps = {
+-  className?: string;
+-  currency: string;
+-  frequency: TBillingFrequency;
+-  price: number;
+-  subscriptionType: EProductSubscriptionEnum;
+-};
+-
+-const PLANS_WITH_DISCOUNT = [EProductSubscriptionEnum.PRO];
+-
+-const getActualPrice = (frequency: TBillingFrequency, subscriptionType: EProductSubscriptionEnum): number | null => {
+-  switch (subscriptionType) {
+-    case EProductSubscriptionEnum.PRO:
+-      return frequency === "month" ? 10 : 8;
+-    default:
+-      return null;
+-  }
+-};
+-
+-export function DiscountInfo({ className, currency, frequency, price, subscriptionType }: TDiscountInfoProps) {
+-  const { resolvedTheme } = useTheme();
+-  // derived values
+-  const actualPrice = getActualPrice(frequency, subscriptionType);
+-
+-  if (!PLANS_WITH_DISCOUNT.includes(subscriptionType)) {
+-    return (
+-      <>
+-        {currency}
+-        {price}
+-      </>
+-    );
+-  }
+-
+-  return (
+-    <>
+-      {actualPrice != price && (
+-        <span className={cn("relative", className)}>
+-          <img
+-            src={resolvedTheme === "dark" ? ScribbleWhite : ScribbleBlack}
+-            alt="scribble"
+-            className="absolute top-1/2 left-1/2 w-full -translate-x-1/2 -translate-y-1/2 scale-x-125"
+-          />
+-          {currency}
+-          {actualPrice}
+-        </span>
+-      )}
+-      {currency}
+-      {price}
+-    </>
+-  );
+-}
+diff --git a/apps/web/core/components/license/modal/card/free-plan.tsx b/apps/web/core/components/license/modal/card/free-plan.tsx
+deleted file mode 100644
+index f07ff51..0000000
+--- a/apps/web/core/components/license/modal/card/free-plan.tsx
++++ /dev/null
+@@ -1,47 +0,0 @@
+-/**
+- * Copyright (c) 2023-present Plane Software, Inc. and contributors
+- * SPDX-License-Identifier: AGPL-3.0-only
+- * See the LICENSE file for details.
+- */
+-
+-import { observer } from "mobx-react";
+-import { CircleX } from "lucide-react";
+-// plane constants
+-import { FREE_PLAN_UPGRADE_FEATURES } from "@plane/constants";
+-// helpers
+-import { cn } from "@plane/utils";
+-
+-type FreePlanCardProps = {
+-  isOnFreePlan: boolean;
+-};
+-
+-export const FreePlanCard = observer(function FreePlanCard(props: FreePlanCardProps) {
+-  const { isOnFreePlan } = props;
+-  return (
+-    <div className="rounded-xl bg-layer-1 px-2 py-4">
+-      {isOnFreePlan && (
+-        <div className="px-3 py-2">
+-          <span className="rounded-sm border border-subtle-1 bg-layer-2 px-2 py-1 text-caption-md-medium text-tertiary">
+-            Your plan
+-          </span>
+-        </div>
+-      )}
+-      <div className="px-4 py-2 font-semibold">
+-        <div className="text-20">Free</div>
+-        <div className="text-caption-md text-tertiary">$0 per user per month</div>
+-      </div>
+-      <div className="px-2 pt-2 pb-3">
+-        <ul className="grid w-full grid-cols-12 gap-x-4">
+-          {FREE_PLAN_UPGRADE_FEATURES.map((feature) => (
+-            <li key={feature} className={cn("relative col-span-12 flex rounded-md p-2")}>
+-              <p className="flex w-full items-center text-caption-md-medium leading-5">
+-                <CircleX className="mr-2 size-4 flex-shrink-0 text-danger-secondary" />
+-                <span className="truncate text-secondary">{feature}</span>
+-              </p>
+-            </li>
+-          ))}
+-        </ul>
+-      </div>
+-    </div>
+-  );
+-});
+diff --git a/apps/web/core/components/license/modal/card/index.ts b/apps/web/core/components/license/modal/card/index.ts
+deleted file mode 100644
+index 3ce3953..0000000
+--- a/apps/web/core/components/license/modal/card/index.ts
++++ /dev/null
+@@ -1,10 +0,0 @@
+-/**
+- * Copyright (c) 2023-present Plane Software, Inc. and contributors
+- * SPDX-License-Identifier: AGPL-3.0-only
+- * See the LICENSE file for details.
+- */
+-
+-export * from "./base-paid-plan-card";
+-export * from "./free-plan";
+-export * from "./talk-to-sales";
+-export * from "./plan-upgrade";
+diff --git a/apps/web/core/components/license/modal/card/plan-upgrade.tsx b/apps/web/core/components/license/modal/card/plan-upgrade.tsx
+deleted file mode 100644
+index e501b3b..0000000
+--- a/apps/web/core/components/license/modal/card/plan-upgrade.tsx
++++ /dev/null
+@@ -1,115 +0,0 @@
+-/**
+- * Copyright (c) 2023-present Plane Software, Inc. and contributors
+- * SPDX-License-Identifier: AGPL-3.0-only
+- * See the LICENSE file for details.
+- */
+-
+-import { observer } from "mobx-react";
+-// plane imports
+-import { TALK_TO_SALES_URL } from "@plane/constants";
+-import type { EProductSubscriptionEnum, IPaymentProduct, TSubscriptionPrice } from "@plane/types";
+-import { calculateYearlyDiscount, getSubscriptionName, getSubscriptionPriceDetails } from "@plane/utils";
+-// components
+-import { BasePaidPlanCard, TalkToSalesCard } from "@/components/license";
+-// local components
+-import type { TCheckoutParams } from "./checkout-button";
+-import { PlanCheckoutButton } from "./checkout-button";
+-
+-export type PlanUpgradeCardProps = {
+-  planVariant: EProductSubscriptionEnum;
+-  isLoading?: boolean;
+-  product: IPaymentProduct | undefined;
+-  features: string[];
+-  upgradeCTA?: string;
+-  upgradeLoaderType?: Omit<EProductSubscriptionEnum, "FREE"> | undefined;
+-  verticalFeatureList?: boolean;
+-  extraFeatures?: string | React.ReactNode;
+-  renderTrialButton?: (props: { productId: string | undefined; priceId: string | undefined }) => React.ReactNode;
+-  handleCheckout: (params: TCheckoutParams) => void;
+-  isSelfHosted: boolean;
+-  isTrialAllowed: boolean;
+-};
+-
+-export const PlanUpgradeCard = observer(function PlanUpgradeCard(props: PlanUpgradeCardProps) {
+-  const {
+-    planVariant,
+-    features,
+-    isLoading,
+-    product,
+-    upgradeCTA,
+-    verticalFeatureList = false,
+-    extraFeatures,
+-    upgradeLoaderType,
+-    renderTrialButton,
+-    handleCheckout,
+-    isSelfHosted,
+-    isTrialAllowed,
+-  } = props;
+-  // price details
+-  const planeName = getSubscriptionName(planVariant);
+-  const { monthlyPriceDetails, yearlyPriceDetails } = getSubscriptionPriceDetails(product);
+-  const yearlyDiscount = calculateYearlyDiscount(monthlyPriceDetails.price, yearlyPriceDetails.price);
+-  const prices = [monthlyPriceDetails, yearlyPriceDetails];
+-
+-  if (!product?.is_active) {
+-    return (
+-      <TalkToSalesCard
+-        planVariant={planVariant}
+-        href={TALK_TO_SALES_URL}
+-        isLoading={isLoading}
+-        features={features}
+-        product={product}
+-        prices={prices}
+-        upgradeLoaderType={upgradeLoaderType}
+-        verticalFeatureList={verticalFeatureList}
+-        extraFeatures={extraFeatures}
+-        isSelfHosted={isSelfHosted}
+-        isTrialAllowed={isTrialAllowed}
+-        renderTrialButton={renderTrialButton}
+-      />
+-    );
+-  }
+-
+-  const renderPriceContent = (price: TSubscriptionPrice) => (
+-    <>
+-      {price.recurring === "month" && "Monthly"}
+-      {price.recurring === "year" && (
+-        <>
+-          Yearly
+-          {yearlyDiscount > 0 && (
+-            <span className="text-caption-sm ml-1 rounded-full bg-accent-primary px-1.5 py-0.5 text-on-color">
+-              -{yearlyDiscount}%
+-            </span>
+-          )}
+-        </>
+-      )}
+-    </>
+-  );
+-
+-  return (
+-    <BasePaidPlanCard
+-      planVariant={planVariant}
+-      features={features}
+-      prices={prices}
+-      upgradeLoaderType={upgradeLoaderType}
+-      verticalFeatureList={verticalFeatureList}
+-      extraFeatures={extraFeatures}
+-      renderPriceContent={renderPriceContent}
+-      renderActionButton={(price) => (
+-        <PlanCheckoutButton
+-          planeName={planeName}
+-          planVariant={planVariant}
+-          isLoading={isLoading}
+-          product={product}
+-          price={price}
+-          upgradeCTA={upgradeCTA}
+-          upgradeLoaderType={upgradeLoaderType}
+-          renderTrialButton={renderTrialButton}
+-          handleCheckout={handleCheckout}
+-          isSelfHosted={isSelfHosted}
+-          isTrialAllowed={isTrialAllowed}
+-        />
+-      )}
+-    />
+-  );
+-});
+diff --git a/apps/web/core/components/license/modal/card/talk-to-sales.tsx b/apps/web/core/components/license/modal/card/talk-to-sales.tsx
+deleted file mode 100644
+index c12ee70..0000000
+--- a/apps/web/core/components/license/modal/card/talk-to-sales.tsx
++++ /dev/null
+@@ -1,104 +0,0 @@
+-/**
+- * Copyright (c) 2023-present Plane Software, Inc. and contributors
+- * SPDX-License-Identifier: AGPL-3.0-only
+- * See the LICENSE file for details.
+- */
+-
+-import { observer } from "mobx-react";
+-// types
+-// plane imports
+-import { getButtonStyling } from "@plane/propel/button";
+-import type { EProductSubscriptionEnum, IPaymentProduct, TSubscriptionPrice } from "@plane/types";
+-import { Loader } from "@plane/ui";
+-import { cn } from "@plane/utils";
+-// local imports
+-import { BasePaidPlanCard } from "./base-paid-plan-card";
+-
+-export type TalkToSalesCardProps = {
+-  planVariant: EProductSubscriptionEnum;
+-  href: string;
+-  isLoading?: boolean;
+-  features: string[];
+-  product: IPaymentProduct | undefined;
+-  prices: TSubscriptionPrice[];
+-  upgradeLoaderType: Omit<EProductSubscriptionEnum, "FREE"> | undefined;
+-  verticalFeatureList?: boolean;
+-  extraFeatures?: string | React.ReactNode;
+-  isSelfHosted: boolean;
+-  isTrialAllowed: boolean;
+-  renderTrialButton?: (props: { productId: string | undefined; priceId: string | undefined }) => React.ReactNode;
+-};
+-
+-export const TalkToSalesCard = observer(function TalkToSalesCard(props: TalkToSalesCardProps) {
+-  const {
+-    planVariant,
+-    href,
+-    features,
+-    product,
+-    prices,
+-    isLoading,
+-    verticalFeatureList = false,
+-    extraFeatures,
+-    upgradeLoaderType,
+-    isSelfHosted,
+-    isTrialAllowed,
+-    renderTrialButton,
+-  } = props;
+-
+-  const renderPriceContent = (price: TSubscriptionPrice) => (
+-    <>
+-      {price.recurring === "month" && "Monthly"}
+-      {price.recurring === "year" && "Yearly"}
+-    </>
+-  );
+-
+-  const renderActionButton = (price: TSubscriptionPrice) => (
+-    <>
+-      <div className="pb-4 text-center">
+-        <div className="flex h-9 items-center justify-center text-20 font-semibold">
+-          {isLoading ? (
+-            <Loader className="flex flex-col items-center justify-center">
+-              <Loader.Item height="36px" width="4rem" />
+-            </Loader>
+-          ) : (
+-            <>Quote on request</>
+-          )}
+-        </div>
+-        <div className="text-caption-md-medium text-tertiary">per user per month</div>
+-      </div>
+-      {isLoading ? (
+-        <Loader className="flex flex-col items-center justify-center">
+-          <Loader.Item height="38px" width="14rem" />
+-        </Loader>
+-      ) : (
+-        <div className="flex w-full flex-col items-center justify-center">
+-          <a href={href} target="_blank" className={cn(getButtonStyling("primary", "lg"), "w-56")} rel="noreferrer">
+-            Talk to Sales
+-          </a>
+-          {isTrialAllowed && !isSelfHosted && (
+-            <div className="mt-4 h-4">
+-              {renderTrialButton &&
+-                renderTrialButton({
+-                  productId: product?.id,
+-                  priceId: price.id,
+-                })}
+-            </div>
+-          )}
+-        </div>
+-      )}
+-    </>
+-  );
+-
+-  return (
+-    <BasePaidPlanCard
+-      planVariant={planVariant}
+-      features={features}
+-      prices={prices}
+-      upgradeLoaderType={upgradeLoaderType}
+-      verticalFeatureList={verticalFeatureList}
+-      extraFeatures={extraFeatures}
+-      renderPriceContent={renderPriceContent}
+-      renderActionButton={renderActionButton}
+-    />
+-  );
+-});
+diff --git a/apps/web/core/components/license/modal/index.ts b/apps/web/core/components/license/modal/index.ts
+deleted file mode 100644
+index 4260f85..0000000
+--- a/apps/web/core/components/license/modal/index.ts
++++ /dev/null
+@@ -1,7 +0,0 @@
+-/**
+- * Copyright (c) 2023-present Plane Software, Inc. and contributors
+- * SPDX-License-Identifier: AGPL-3.0-only
+- * See the LICENSE file for details.
+- */
+-
+-export * from "./card";
+diff --git a/apps/web/core/components/license/modal/upgrade-modal.tsx b/apps/web/core/components/license/modal/upgrade-modal.tsx
+deleted file mode 100644
+index 236d282..0000000
+--- a/apps/web/core/components/license/modal/upgrade-modal.tsx
++++ /dev/null
+@@ -1,136 +0,0 @@
+-/**
+- * Copyright (c) 2023-present Plane Software, Inc. and contributors
+- * SPDX-License-Identifier: AGPL-3.0-only
+- * See the LICENSE file for details.
+- */
+-
+-import { observer } from "mobx-react";
+-// plane imports
+-import {
+-  BUSINESS_PLAN_FEATURES,
+-  ENTERPRISE_PLAN_FEATURES,
+-  PLANE_COMMUNITY_PRODUCTS,
+-  PRO_PLAN_FEATURES,
+-  SUBSCRIPTION_REDIRECTION_URLS,
+-  SUBSCRIPTION_WEBPAGE_URLS,
+-  TALK_TO_SALES_URL,
+-} from "@plane/constants";
+-import { EProductSubscriptionEnum } from "@plane/types";
+-import { EModalWidth, ModalCore } from "@plane/ui";
+-import { cn } from "@plane/utils";
+-// components
+-import { FreePlanCard, PlanUpgradeCard } from "@/components/license";
+-import type { TCheckoutParams } from "@/components/license/modal/card/checkout-button";
+-
+-// Constants
+-const COMMON_CARD_CLASSNAME = "flex flex-col w-full h-full justify-end col-span-12 sm:col-span-6 xl:col-span-3";
+-const COMMON_EXTRA_FEATURES_CLASSNAME = "pt-2 text-center text-caption-md-medium text-accent-primary hover:underline";
+-
+-export type PaidPlanUpgradeModalProps = {
+-  isOpen: boolean;
+-  handleClose: () => void;
+-};
+-
+-export const PaidPlanUpgradeModal = observer(function PaidPlanUpgradeModal(props: PaidPlanUpgradeModalProps) {
+-  const { isOpen, handleClose } = props;
+-  // derived values
+-  const isSelfHosted = true;
+-  const isTrialAllowed = false;
+-
+-  const handleRedirection = ({ planVariant, priceId }: TCheckoutParams) => {
+-    // Get the product and price using plane community constants
+-    const product = PLANE_COMMUNITY_PRODUCTS[planVariant];
+-    // oxlint-disable-next-line no-shadow
+-    const price = product.prices.find((price) => price.id === priceId);
+-    const frequency = price?.recurring ?? "year";
+-    // Redirect to the appropriate URL
+-    const redirectUrl = SUBSCRIPTION_REDIRECTION_URLS[planVariant][frequency] ?? TALK_TO_SALES_URL;
+-    window.open(redirectUrl, "_blank");
+-  };
+-
+-  return (
+-    <ModalCore isOpen={isOpen} handleClose={handleClose} width={EModalWidth.VIIXL} className="rounded-2xl">
+-      <div className="max-h-[90vh] overflow-auto p-10">
+-        <div className="grid h-full grid-cols-12 gap-6">
+-          {/* Free Plan Section */}
+-          <div className={cn(COMMON_CARD_CLASSNAME)}>
+-            <div className="flex text-24 leading-8 font-bold">Upgrade to a paid plan and unlock missing features.</div>
+-            <div className="mt-4 mb-2">
+-              <p className="mb-4 pr-8 text-13 text-primary">
+-                Dashboards, Workflows, Approvals, Time Management, and other superpowers are just a click away. Upgrade
+-                today to unlock features your teams need yesterday.
+-              </p>
+-            </div>
+-
+-            {/* Free plan details */}
+-            <FreePlanCard isOnFreePlan />
+-          </div>
+-
+-          {/* Pro plan */}
+-          <div className={cn(COMMON_CARD_CLASSNAME)}>
+-            <PlanUpgradeCard
+-              planVariant={EProductSubscriptionEnum.PRO}
+-              product={PLANE_COMMUNITY_PRODUCTS[EProductSubscriptionEnum.PRO]}
+-              features={PRO_PLAN_FEATURES}
+-              verticalFeatureList
+-              extraFeatures={
+-                <p className={COMMON_EXTRA_FEATURES_CLASSNAME}>
+-                  <a href={SUBSCRIPTION_WEBPAGE_URLS[EProductSubscriptionEnum.PRO]} target="_blank" rel="noreferrer">
+-                    See full features list
+-                  </a>
+-                </p>
+-              }
+-              handleCheckout={handleRedirection}
+-              isSelfHosted={!!isSelfHosted}
+-              isTrialAllowed={!!isTrialAllowed}
+-            />
+-          </div>
+-          <div className={cn(COMMON_CARD_CLASSNAME)}>
+-            <PlanUpgradeCard
+-              planVariant={EProductSubscriptionEnum.BUSINESS}
+-              product={PLANE_COMMUNITY_PRODUCTS[EProductSubscriptionEnum.BUSINESS]}
+-              features={BUSINESS_PLAN_FEATURES}
+-              verticalFeatureList
+-              extraFeatures={
+-                <p className={COMMON_EXTRA_FEATURES_CLASSNAME}>
+-                  <a
+-                    href={SUBSCRIPTION_WEBPAGE_URLS[EProductSubscriptionEnum.BUSINESS]}
+-                    target="_blank"
+-                    rel="noreferrer"
+-                  >
+-                    See full features list
+-                  </a>
+-                </p>
+-              }
+-              handleCheckout={handleRedirection}
+-              isSelfHosted={!!isSelfHosted}
+-              isTrialAllowed={!!isTrialAllowed}
+-            />
+-          </div>
+-          <div className={cn(COMMON_CARD_CLASSNAME)}>
+-            <PlanUpgradeCard
+-              planVariant={EProductSubscriptionEnum.ENTERPRISE}
+-              product={PLANE_COMMUNITY_PRODUCTS[EProductSubscriptionEnum.ENTERPRISE]}
+-              features={ENTERPRISE_PLAN_FEATURES}
+-              verticalFeatureList
+-              extraFeatures={
+-                <p className={COMMON_EXTRA_FEATURES_CLASSNAME}>
+-                  <a
+-                    href={SUBSCRIPTION_WEBPAGE_URLS[EProductSubscriptionEnum.ENTERPRISE]}
+-                    target="_blank"
+-                    rel="noreferrer"
+-                  >
+-                    See full features list
+-                  </a>
+-                </p>
+-              }
+-              handleCheckout={handleRedirection}
+-              isSelfHosted={!!isSelfHosted}
+-              isTrialAllowed={!!isTrialAllowed}
+-            />
+-          </div>
+-        </div>
+-      </div>
+-    </ModalCore>
+-  );
+-});
 diff --git a/apps/web/core/components/navigation/top-navigation-root.tsx b/apps/web/core/components/navigation/top-navigation-root.tsx
 index 2571ece..7e244f3 100644
 --- a/apps/web/core/components/navigation/top-navigation-root.tsx
@@ -126068,6 +126848,58 @@ index 064270b..e564e9e 100644
                              ) : activityItem.actor_detail.is_bot ? (
                                <span className="text-gray font-medium">{activityItem.actor_detail.first_name} Bot</span>
                              ) : (
+diff --git a/apps/web/core/components/project/settings/features-list.tsx b/apps/web/core/components/project/settings/features-list.tsx
+index 46f6437..835c789 100644
+--- a/apps/web/core/components/project/settings/features-list.tsx
++++ b/apps/web/core/components/project/settings/features-list.tsx
+@@ -8,7 +8,6 @@ import { observer } from "mobx-react";
+ // plane imports
+ import { useTranslation } from "@plane/i18n";
+ import { setPromiseToast } from "@plane/propel/toast";
+-import { Tooltip } from "@plane/propel/tooltip";
+ import type { IProject } from "@plane/types";
+ import { CycleIcon, IntakeIcon, ModuleIcon, PageIcon, ViewsIcon } from "@plane/propel/icons";
+ // components
+@@ -17,7 +16,6 @@ import { SettingsHeading } from "@/components/settings/heading";
+ // hooks
+ import { useProject } from "@/hooks/store/use-project";
+ // plane web imports
+-import { UpgradeBadge } from "@/components/workspace/upgrade-badge";
+ // local imports
+ import { ProjectFeatureToggle } from "./helper";
+ 
+@@ -119,11 +117,6 @@ export const ProjectFeaturesList = observer(function ProjectFeaturesList(props:
+                 title={
+                   <span className="flex items-center gap-2">
+                     {t(featureItem.key)}
+-                    {featureItem.isPro && (
+-                      <Tooltip tooltipContent="Pro feature" position="top">
+-                        <UpgradeBadge className="rounded-sm" />
+-                      </Tooltip>
+-                    )}
+                   </span>
+                 }
+                 description={t(`${featureItem.key}_description`)}
+diff --git a/apps/web/core/components/sidebar/sidebar-wrapper.tsx b/apps/web/core/components/sidebar/sidebar-wrapper.tsx
+index b59983f..3ae604c 100644
+--- a/apps/web/core/components/sidebar/sidebar-wrapper.tsx
++++ b/apps/web/core/components/sidebar/sidebar-wrapper.tsx
+@@ -16,7 +16,6 @@ import { CustomizeNavigationDialog } from "@/components/navigation/customize-nav
+ import { useAppTheme } from "@/hooks/store/use-app-theme";
+ import useSize from "@/hooks/use-window-size";
+ // plane web components
+-import { WorkspaceEditionBadge } from "@/components/workspace/edition-badge";
+ import { AppSidebarToggleButton } from "./sidebar-toggle-button";
+ import { IconButton } from "@plane/propel/icon-button";
+ 
+@@ -83,7 +82,6 @@ export const SidebarWrapper = observer(function SidebarWrapper(props: TSidebarWr
+         </ScrollArea>
+         {/* Help Section */}
+         <div className="flex h-12 items-center justify-between border-t border-subtle bg-surface-1 p-3">
+-          <WorkspaceEditionBadge />
+           {/* TODO: To be checked if we need this */}
+           {/* <div className="flex items-center gap-2">
+           {!shouldRenderAppRail && <HelpMenu />}
 diff --git a/apps/web/core/components/user/user-greetings.tsx b/apps/web/core/components/user/user-greetings.tsx
 index ff00a23..78a34f4 100644
 --- a/apps/web/core/components/user/user-greetings.tsx
@@ -127975,6 +128807,58 @@ index 3d605d6..c085247 100644
        </div>
      </div>
    );
+diff --git a/apps/web/core/components/workspace/edition-badge.tsx b/apps/web/core/components/workspace/edition-badge.tsx
+deleted file mode 100644
+index b11e850..0000000
+--- a/apps/web/core/components/workspace/edition-badge.tsx
++++ /dev/null
+@@ -1,46 +0,0 @@
+-/**
+- * Copyright (c) 2023-present Plane Software, Inc. and contributors
+- * SPDX-License-Identifier: AGPL-3.0-only
+- * See the LICENSE file for details.
+- */
+-
+-import { useState } from "react";
+-import { observer } from "mobx-react";
+-// ui
+-import { useTranslation } from "@plane/i18n";
+-import { Tooltip } from "@plane/propel/tooltip";
+-// hooks
+-import { usePlatformOS } from "@/hooks/use-platform-os";
+-import packageJson from "package.json";
+-// local components
+-import { Button } from "@plane/propel/button";
+-import { PaidPlanUpgradeModal } from "@/components/license/modal/upgrade-modal";
+-
+-export const WorkspaceEditionBadge = observer(function WorkspaceEditionBadge() {
+-  // states
+-  const [isPaidPlanPurchaseModalOpen, setIsPaidPlanPurchaseModalOpen] = useState(false);
+-  // translation
+-  const { t } = useTranslation();
+-  // platform
+-  const { isMobile } = usePlatformOS();
+-
+-  return (
+-    <>
+-      <PaidPlanUpgradeModal
+-        isOpen={isPaidPlanPurchaseModalOpen}
+-        handleClose={() => setIsPaidPlanPurchaseModalOpen(false)}
+-      />
+-      <Tooltip tooltipContent={`Version: v${packageJson.version}`} isMobile={isMobile}>
+-        <Button
+-          variant="tertiary"
+-          size="lg"
+-          onClick={() => setIsPaidPlanPurchaseModalOpen(true)}
+-          aria-haspopup="dialog"
+-          aria-label={t("aria_labels.projects_sidebar.edition_badge")}
+-        >
+-          Community
+-        </Button>
+-      </Tooltip>
+-    </>
+-  );
+-});
 diff --git a/apps/web/core/components/workspace/settings/finance-role-column.tsx b/apps/web/core/components/workspace/settings/finance-role-column.tsx
 new file mode 100644
 index 0000000..cec1a67
@@ -128088,6 +128972,26 @@ index fc60ff5..00b3284 100644
      {
        key: "Authentication",
        content: t("workspace_settings.settings.members.details.authentication"),
+diff --git a/apps/web/core/components/workspace/sidebar/extended-sidebar-item.tsx b/apps/web/core/components/workspace/sidebar/extended-sidebar-item.tsx
+index 5ac67aa..b6be119 100644
+--- a/apps/web/core/components/workspace/sidebar/extended-sidebar-item.tsx
++++ b/apps/web/core/components/workspace/sidebar/extended-sidebar-item.tsx
+@@ -21,7 +21,6 @@ import { DragHandle, DropIndicator } from "@plane/ui";
+ import { cn } from "@plane/utils";
+ // components
+ import { SidebarNavItem } from "@/components/sidebar/sidebar-navigation";
+-import { UpgradeBadge } from "@/components/workspace/upgrade-badge";
+ // hooks
+ import { useAppTheme } from "@/hooks/store/use-app-theme";
+ import { useUser, useUserPermissions } from "@/hooks/store/user";
+@@ -203,7 +202,6 @@ export const ExtendedSidebarItem = observer(function ExtendedSidebarItem(props:
+           <div className="flex items-center gap-2">
+             {item.key === "active_cycles" && (
+               <div className="flex-shrink-0">
+-                <UpgradeBadge />
+               </div>
+             )}
+             {isPinned ? (
 diff --git a/apps/web/core/components/workspace/sidebar/help-section/root.tsx b/apps/web/core/components/workspace/sidebar/help-section/root.tsx
 index d19b860..48abc34 100644
 --- a/apps/web/core/components/workspace/sidebar/help-section/root.tsx
@@ -128319,6 +129223,67 @@ index 03d3015..20f56e6 100644
          </div>
          {additionalRender?.(item.key, slug)}
        </SidebarNavItem>
+diff --git a/apps/web/core/components/workspace/sidebar/workspace-menu-item.tsx b/apps/web/core/components/workspace/sidebar/workspace-menu-item.tsx
+index 1e297da..d42d872 100644
+--- a/apps/web/core/components/workspace/sidebar/workspace-menu-item.tsx
++++ b/apps/web/core/components/workspace/sidebar/workspace-menu-item.tsx
+@@ -18,7 +18,6 @@ import { SidebarNavItem } from "@/components/sidebar/sidebar-navigation";
+ import { useAppTheme } from "@/hooks/store/use-app-theme";
+ import { useUserPermissions } from "@/hooks/store/user";
+ // plane web imports
+-import { UpgradeBadge } from "@/components/workspace/upgrade-badge";
+ 
+ export type SidebarWorkspaceMenuItemProps = {
+   item: {
+@@ -67,7 +66,6 @@ export const SidebarWorkspaceMenuItem = observer(function SidebarWorkspaceMenuIt
+           <p className="text-13 leading-5 font-medium">{t(item.labelTranslationKey)}</p>
+         </div>
+         <div className="flex-shrink-0">
+-          <UpgradeBadge />
+         </div>
+       </SidebarNavItem>
+     </Link>
+diff --git a/apps/web/core/components/workspace/upgrade-badge.tsx b/apps/web/core/components/workspace/upgrade-badge.tsx
+deleted file mode 100644
+index 5bddd91..0000000
+--- a/apps/web/core/components/workspace/upgrade-badge.tsx
++++ /dev/null
+@@ -1,35 +0,0 @@
+-/**
+- * Copyright (c) 2023-present Plane Software, Inc. and contributors
+- * SPDX-License-Identifier: AGPL-3.0-only
+- * See the LICENSE file for details.
+- */
+-
+-// helpers
+-import { useTranslation } from "@plane/i18n";
+-import { cn } from "@plane/utils";
+-
+-type TUpgradeBadge = {
+-  className?: string;
+-  size?: "sm" | "md";
+-};
+-
+-export function UpgradeBadge(props: TUpgradeBadge) {
+-  const { className, size = "sm" } = props;
+-
+-  const { t } = useTranslation();
+-
+-  return (
+-    <div
+-      className={cn(
+-        "w-fit cursor-pointer rounded-2xl bg-accent-primary/20 text-center font-medium text-accent-secondary outline-none",
+-        {
+-          "px-3 text-13": size === "md",
+-          "px-2 text-11": size === "sm",
+-        },
+-        className
+-      )}
+-    >
+-      {t("sidebar.pro")}
+-    </div>
+-  );
+-}
 diff --git a/apps/web/core/hooks/store/use-assistant.ts b/apps/web/core/hooks/store/use-assistant.ts
 new file mode 100644
 index 0000000..da3f822
