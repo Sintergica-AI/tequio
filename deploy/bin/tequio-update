@@ -195,6 +195,11 @@ if [ -n "$CUR" ]; then
     sh -c 'PGPASSWORD="$POSTGRES_PASSWORD" pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Fc' > "$DUMP" \
     || die "el respaldo falló — no se migra nada"
   [ -s "$DUMP" ] || die "el respaldo salió vacío — no se migra nada"
+  # "No vacío" no es "restaurable": un pg_dump cortado a medias también pesa.
+  # Los volcados en formato custom empiezan por la marca PGDMP (comprobado
+  # contra un respaldo real, no supuesto).
+  [ "$(head -c 5 "$DUMP")" = "PGDMP" ] \
+    || die "el respaldo no tiene la cabecera de un volcado de Postgres — no se migra nada"
   say "respaldo: $DUMP ($(du -h "$DUMP" | cut -f1))"
   # Se conservan 10; el disco de un VPS pequeño no da para más histórico.
   ls -1t "$TEQUIO_HOME/backups/"*.dump 2>/dev/null | tail -n +11 | xargs -r rm -f
