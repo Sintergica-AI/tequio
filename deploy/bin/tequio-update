@@ -258,21 +258,26 @@ HEALTH_URL="${TEQUIO_HEALTH_URL:-$WEB_URL}"
 health_ok() {
   local body
   body="$(curl -fsSL -m 15 "${HEALTH_URL%/}/api/instances/" 2>/dev/null)" || return 1
-  case "$body" in *is_activated*) return 0 ;; *) return 1 ;; esac
+  # `current_version` sale de la fila Instance de la BASE DE DATOS, así que si
+  # aparece, la cadena entera está viva: proxy -> api -> base.
+  #
+  # Antes se buscaba "is_activated", que este endpoint NO devuelve: su respuesta
+  # es {"config": {...}, "instance": {...}}. La comprobación no podía pasar
+  # NUNCA, y como su forma de fallar es idéntica a la de una instancia caída,
+  # el actualizador revertía un despliegue sano y luego declaraba que la
+  # reversión tampoco respondía. Pasó dos veces el 5 Sep 2026 antes de que
+  # mirara la respuesta de verdad en vez de deducirla del código del endpoint.
+  case "$body" in *'"current_version"'*) return 0 ;; *) return 1 ;; esac
 }
 
-# 15 minutos, no 150 segundos.
+# Cinco minutos. El arranque en frío del api ronda los 15-30 s (su entrypoint
+# registra la instancia, carga configuración, crea el bucket, limpia caché y
+# recolecta estáticos antes de gunicorn), así que sobra margen.
 #
-# El arranque en frío del api no es instantáneo: su entrypoint registra la
-# instancia, carga la configuración, crea el bucket, limpia caché y recolecta
-# estáticos ANTES de levantar gunicorn. Con la ventana de 150 s que había aquí,
-# una instancia perfectamente sana se declaraba caída y se revertía sola — lo
-# que además alarga el corte, porque la reversión vuelve a recrearlo todo y
-# falla por lo mismo. Pasó en tequio.sintergica.ai el 5 Sep 2026.
-#
-# Esperar de más no cuesta nada (la instancia ya está sirviendo); esperar de
-# menos convierte un arranque normal en una falsa alarma y en un rebote.
-HEALTH_ATTEMPTS=90
+# No confundir esta holgura con el fallo del 5 Sep 2026: aquello NO era lentitud
+# de arranque —creí que sí y agrandé la ventana a 15 minutos sin arreglar nada—,
+# era que la comprobación buscaba un campo inexistente. Ver health_ok().
+HEALTH_ATTEMPTS=30
 HEALTH_INTERVAL=10
 say "comprobando salud en ${HEALTH_URL%/}/api/instances/ (hasta $((HEALTH_ATTEMPTS * HEALTH_INTERVAL / 60)) min)"
 OK=0
